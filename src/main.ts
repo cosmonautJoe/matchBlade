@@ -51,7 +51,7 @@ const GAME_W = GRID_W + PAD * 2; // 680
 const GAME_H = GRID_Y + GRID_H + PAD; // 824
 
 // lane geometry
-const FLOOR_H = 54; // grassy ground band the characters stand on
+const FLOOR_H = 40; // grassy ground band the characters stand on (lower surface = more world above)
 const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
 // Tiny RPG content sits mid-frame at slightly different heights per sheet,
 // so anchor each sprite by its own foot fraction to plant it on the floor.
