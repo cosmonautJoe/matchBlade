@@ -11,12 +11,29 @@
  * animated version lives in the game layer. This module stays pure logic.
  */
 
-export const W = 8; // columns
-export const H = 7; // rows  (dungeon-runner board is ~8 wide x 7 tall)
+export const W = 6; // columns
+export const H = 8; // rows  (dungeon-runner board is 6 wide x 8 tall)
 
 // Tile types: sword, staff, shield, key, treasure, wood, ore  (see DESIGN.md)
 export const TYPES = 7;
 export const EMPTY = -1;
+
+// Spawn weights per tile id (sword, staff, shield, key, treasure, wood, ore).
+// The board favours fighting: sword drops twice as often as a baseline tile and
+// raw resources (wood/ore) half as often, so matches lean toward damage over
+// stockpiling. Tweak these to retune the economy. Must have TYPES entries.
+export const SPAWN_WEIGHTS = [4, 2, 2, 2, 2, 1, 1];
+const WEIGHT_SUM = SPAWN_WEIGHTS.reduce((a, b) => a + b, 0);
+
+/** Pick a tile id weighted by SPAWN_WEIGHTS (not a uniform 1/TYPES draw). */
+export function randomType(rand: () => number = Math.random): number {
+  let x = rand() * WEIGHT_SUM;
+  for (let t = 0; t < TYPES; t++) {
+    x -= SPAWN_WEIGHTS[t];
+    if (x < 0) return t;
+  }
+  return TYPES - 1;
+}
 
 export interface Coord { c: number; r: number; }
 export interface Match { cells: Coord[]; type: number; len: number; dir: "h" | "v"; }
@@ -28,7 +45,7 @@ export function makeInitialGrid(rand: () => number = Math.random): number[][] {
     for (let c = 0; c < W; c++) {
       let t: number;
       do {
-        t = Math.floor(rand() * TYPES);
+        t = randomType(rand);
       } while (
         (c >= 2 && g[r][c - 1] === t && g[r][c - 2] === t) ||
         (r >= 2 && g[r - 1][c] === t && g[r - 2][c] === t)
@@ -116,7 +133,7 @@ export function collapseAndRefill(g: number[][], rand: () => number = Math.rando
     const survivors: number[] = [];
     for (let r = 0; r < H; r++) if (g[r][c] !== EMPTY) survivors.push(g[r][c]);
     const missing = H - survivors.length;
-    for (let r = 0; r < missing; r++) g[r][c] = Math.floor(rand() * TYPES);
+    for (let r = 0; r < missing; r++) g[r][c] = randomType(rand);
     for (let r = missing; r < H; r++) g[r][c] = survivors[r - missing];
   }
 }
