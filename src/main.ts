@@ -68,6 +68,7 @@ const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
 const STRIKE_MS = 4800; // enemy strike cadence
 const WALK_IN_MS = 850; // time for a new enemy to march into range
 const WORLD_SCROLL = 170; // px/sec the dungeon pans while the hero is running
+const TILE_SCALE = 3; // dungeon tiles are 16px pixel-art — scale up so their chunkiness matches the characters
 const TORCH_COUNT = 4;
 const TORCH_SPACING = 200; // px between torches in the scrolling wall
 
@@ -246,10 +247,12 @@ class GameScene extends Phaser.Scene {
       return g.createGeometryMask();
     };
 
-    this.wall = this.add.tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, "wall");
+    this.wall = this.add.tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, "wall").setTileScale(TILE_SCALE);
 
     // continuous ground band + a lit stone ledge along the top (no gaps)
-    this.floor = this.add.tileSprite(GAME_W / 2, GROUND_Y + FLOOR_H / 2, GRID_W, FLOOR_H, "floor");
+    this.floor = this.add
+      .tileSprite(GAME_W / 2, GROUND_Y + FLOOR_H / 2, GRID_W, FLOOR_H, "floor")
+      .setTileScale(TILE_SCALE);
     this.add.rectangle(GAME_W / 2, GROUND_Y - 1, GRID_W, 3, 0x6a5a7a); // lit stone lip
     this.add.rectangle(GAME_W / 2, GROUND_Y + 3, GRID_W, 2, 0x0b0808); // shadow under the lip
 
@@ -332,8 +335,8 @@ class GameScene extends Phaser.Scene {
     const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
     if (worldSpeed > 0) {
       const d = worldSpeed * (delta / 1000);
-      this.wall.tilePositionX += d;
-      this.floor.tilePositionX += d;
+      this.wall.tilePositionX += d / TILE_SCALE; // tilePositionX is texture-space; tileScale magnifies it
+      this.floor.tilePositionX += d / TILE_SCALE;
       const span = TORCH_COUNT * TORCH_SPACING;
       for (const t of this.torches) {
         t.x -= d;
