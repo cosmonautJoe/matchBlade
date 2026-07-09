@@ -5,10 +5,10 @@
  * Carried over from the Stellar Shards prototype. The match-finding and
  * initial-fill logic is engine-agnostic and reused as-is here.
  *
- * NOTE: matchBlade's INPUT differs from classic match-3 — instead of swapping
- * two adjacent tiles, the player SLIDES a whole row or column (with tiles
- * wrapping around off the edge). That slide logic lives in the game layer, not
- * here. This module only answers "what matches exist in a given grid?".
+ * INPUT is classic swap match-3 (Candy Crush / Bejeweled): the player drags a
+ * tile onto an orthogonally-adjacent neighbour to swap them, and the swap only
+ * "sticks" if it produces a match. `swap` / `swapMakesMatch` support that; the
+ * animated version lives in the game layer. This module stays pure logic.
  */
 
 export const W = 8; // columns
@@ -80,17 +80,43 @@ export function findMatches(g: number[][]): Match[] {
   return out;
 }
 
-/** Slide a row left/right (dir -1/+1) by one, wrapping around. Mutates g. */
-export function slideRow(g: number[][], r: number, dir: 1 | -1) {
-  const row = g[r];
-  if (dir === 1) row.unshift(row.pop()!);
-  else row.push(row.shift()!);
+/** Swap two cells in place. Mutates g. */
+export function swap(g: number[][], a: Coord, b: Coord) {
+  const t = g[a.r][a.c];
+  g[a.r][a.c] = g[b.r][b.c];
+  g[b.r][b.c] = t;
 }
 
-/** Slide a column up/down (dir -1/+1) by one, wrapping around. Mutates g. */
-export function slideCol(g: number[][], c: number, dir: 1 | -1) {
-  const col = g.map((row) => row[c]);
-  if (dir === 1) col.unshift(col.pop()!);
-  else col.push(col.shift()!);
-  for (let r = 0; r < H; r++) g[r][c] = col[r];
+/** True if swapping a<->b would create at least one match. Non-mutating. */
+export function swapMakesMatch(g: number[][], a: Coord, b: Coord): boolean {
+  swap(g, a, b);
+  const ok = findMatches(g).length > 0;
+  swap(g, a, b); // restore
+  return ok;
+}
+
+/** True if any single adjacent swap on the board would create a match. */
+export function hasPossibleMove(g: number[][]): boolean {
+  for (let r = 0; r < H; r++) {
+    for (let c = 0; c < W; c++) {
+      if (c + 1 < W && swapMakesMatch(g, { r, c }, { r, c: c + 1 })) return true;
+      if (r + 1 < H && swapMakesMatch(g, { r, c }, { r: r + 1, c })) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Pure gravity + refill: collapse surviving tiles down each column, then fill
+ * the vacated top cells with fresh random tiles. Mutates g. (The game layer has
+ * an animated equivalent; this headless version is handy for logic/tests.)
+ */
+export function collapseAndRefill(g: number[][], rand: () => number = Math.random) {
+  for (let c = 0; c < W; c++) {
+    const survivors: number[] = [];
+    for (let r = 0; r < H; r++) if (g[r][c] !== EMPTY) survivors.push(g[r][c]);
+    const missing = H - survivors.length;
+    for (let r = 0; r < missing; r++) g[r][c] = Math.floor(rand() * TYPES);
+    for (let r = missing; r < H; r++) g[r][c] = survivors[r - missing];
+  }
 }

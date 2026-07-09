@@ -21,15 +21,17 @@ code, and content**; we do not copy their assets.
 - **Goal:** reach a target score in a single run. Between runs, spend gathered
   resources on **permanent upgrades**.
 
-## 2. Grid & input  (!! different from classic match-3)
+## 2. Grid & input  (classic swap match-3)
 
 - Board is ~**8 columns x 7 rows** (`W=8, H=7` in `src/board.ts`).
-- **Input is a SLIDE, not a swap.** The player drags an entire **row or column**
-  any number of cells; tiles that fall off one edge **wrap around** to the other.
-  (`slideRow` / `slideCol` helpers exist in `board.ts`.)
-- After a slide, resolve matches: clear 3+ runs, collapse, refill from the top
-  (standard match-3 cascade). `findMatches()` already does detection; the
-  collapse/refill step is written in the game layer.
+- **Input is a SWAP** — Candy Crush / Bejeweled style. The player drags a tile
+  onto an **orthogonally-adjacent** neighbour to swap the two; the swap only
+  **sticks if it creates a match**, otherwise it animates back.
+  (`swap` / `swapMakesMatch` helpers in `board.ts`.)
+- After a valid swap, resolve matches: clear 3+ runs, collapse, refill from the
+  top (standard match-3 cascade), and repeat until stable. `findMatches()` does
+  detection; `collapseAndRefill()` is the pure gravity+refill (the game layer has
+  an animated equivalent). `hasPossibleMove()` guards against deadlocks.
 - Longer matches (4+, 5+) should hit harder / grant more — a natural upgrade hook.
 
 ## 3. Tile types -> effects  (7 types)
@@ -84,8 +86,8 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
 ## 7. Reused code
 
 - `src/board.ts` — pure match logic (`makeInitialGrid`, `findMatches`,
-  `hasPossibleMove`-style helpers) carried over from Stellar Shards, plus
-  `slideRow` / `slideCol` for the slide input. No rendering deps.
+  `hasPossibleMove`, `collapseAndRefill`) carried over from Stellar Shards, plus
+  `swap` / `swapMakesMatch` for the swap input. No rendering deps.
 
 ## 8. Current state (scaffold)
 
@@ -96,7 +98,8 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
 
 ## 9. Suggested build order
 
-1. **Grid interaction** — slide a row/column by drag; animate the slide + wrap.
+1. **Grid interaction** — drag a tile onto a neighbour to swap; animate the swap,
+   revert if it makes no match, else resolve the cascade.
 2. **Match resolution** — clear/collapse/refill with a little juice.
 3. **Runner lane** — hero auto-walk, scroll pressure, death on reaching skull.
 4. **Combat** — enemies with HP; sword/staff/shield tiles wired to attack/block.
