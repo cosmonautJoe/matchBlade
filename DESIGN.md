@@ -89,24 +89,35 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
   `hasPossibleMove`, `collapseAndRefill`) carried over from Stellar Shards, plus
   `swap` / `swapMakesMatch` for the swap input. No rendering deps.
 
-## 8. Current state (scaffold)
+## 8. Current state (playable core loop)
 
-- Vite + TS + Phaser project that boots to a **placeholder scene**: runner lane
-  (hero/enemy/skull blocks) on top, an 8x7 grid of colored placeholder tiles
-  below. Proves the toolchain; no gameplay yet.
-- `npm install` then `npm run dev` -> http://localhost:5173
+- Vite + TS + Phaser project with the core loop working end to end:
+  - **Swap match-3 board** (`src/main.ts` + `src/board.ts`): drag-to-swap,
+    illegal-swap revert, animated clear/gravity/refill cascade. Tiles use emoji
+    icons (⚔️🪄🛡️🔑💎🪵🪨) on a backing disc; real tile art still TODO.
+  - **Runner + combat** (`src/main.ts` + `src/run.ts`): animated hero (Soldier)
+    and enemies (Orc) marching in from the right. Constant leftward **scroll
+    pressure** + enemy strikes push the hero toward the skull; matching combat
+    tiles kills the enemy and surges the hero forward. Enemy HP bar, pressure
+    bar, score/resource HUD, game-over + tap-to-restart.
+  - Runner state is a pure, unit-tested module (`src/run.ts`); a single
+    `pressure` value in [0,1] is the fail axis (see §4).
+- `npm install` then `npm run dev` -> the harness picks a free port (see
+  `vite.config.ts` / `.claude/launch.json` `autoPort`).
+- **Still placeholder / TODO:** real tile-icon art, weapon-vs-enemy-type gating
+  (sword vs ground, staff vs flying), locks/chests, meta hub, audio.
 
 ## 9. Suggested build order
 
-1. **Grid interaction** — drag a tile onto a neighbour to swap; animate the swap,
-   revert if it makes no match, else resolve the cascade.
-2. **Match resolution** — clear/collapse/refill with a little juice.
-3. **Runner lane** — hero auto-walk, scroll pressure, death on reaching skull.
-4. **Combat** — enemies with HP; sword/staff/shield tiles wired to attack/block.
-5. **Keys & chests** — locks in the lane, key matches, loot.
-6. **Score + HUD** — score, resource counters, distance.
+1. ~~**Grid interaction** — drag a tile onto a neighbour to swap.~~ ✅ done
+2. ~~**Match resolution** — clear/collapse/refill with a little juice.~~ ✅ done
+3. ~~**Runner lane** — scroll pressure, death on reaching the skull.~~ ✅ done
+4. ~~**Combat** — enemies with HP; sword/staff -> damage, shield -> block.~~ ✅ done
+   (single ground enemy for now; weapon-vs-type gating still TODO)
+6. ~~**Score + HUD** — score, resource counters, depth.~~ ✅ done
+5. **Keys & chests** — locks/chests in the lane, key matches, loot. ← next
 7. **Meta hub** — spend resources on persistent upgrades (localStorage).
-8. **Art & audio** — pixel-art tiles/characters, SFX, music.
+8. **Art & audio** — real tile-icon art, SFX, music (character sprites done).
 9. **Ship** — `npm run build`, itch.io page, (later) Capacitor iOS wrap.
 
 ## 10. Open questions
