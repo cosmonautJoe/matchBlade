@@ -53,15 +53,15 @@ const GAME_H = GRID_Y + GRID_H + PAD; // 824
 // lane geometry
 const FLOOR_H = 32; // grassy ground band the characters stand on (lower surface = more world above)
 const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
-// Sprites stand with feet near the frame bottom.
-const HERO_ORIGIN = 0.92; // WarriorMan (100x64 frames)
-const SLIME_ORIGIN = 0.82; // slime (64x64 frames)
+// Foot fraction measured from each sheet (lowest opaque pixel) so they sit on the ground.
+const HERO_ORIGIN = 0.75; // WarriorMan feet at y47/64
+const SLIME_ORIGIN = 0.656; // slime base at y41/64
 const SKULL_X = GRID_X + 32; // death marker at the far left
 const SAFE_X = GRID_X + 300; // hero screen x at pressure 0
 const ENGAGE_GAP = 118; // enemy centre sits this far right of the hero when fighting
 const ENTER_X = GAME_W + 80; // enemies walk in from off-screen right
-const HERO_SCALE = 1.75; // WarriorMan art is near-native res
-const SLIME_SCALE = 1.65; // ground slime
+const HERO_SCALE = 2.0; // WarriorMan art is near-native res
+const SLIME_SCALE = 1.95; // ground slime
 const HP_W = 64;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
@@ -340,7 +340,7 @@ class GameScene extends Phaser.Scene {
     this.hero.x = heroX;
     if (this.orc && this.phase === "fight") this.orc.x = heroX + ENGAGE_GAP; // enemy pushes the hero toward the skull
     if (this.orc) {
-      const barY = GROUND_Y - 66; // above the slime's head
+      const barY = GROUND_Y - 56; // above the slime's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
       this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
     }
@@ -513,7 +513,7 @@ class GameScene extends Phaser.Scene {
 
   private floatDamage(n: number) {
     const t = this.add
-      .text(this.orc?.x ?? SAFE_X, GROUND_Y - 72, `-${n}`, {
+      .text(this.orc?.x ?? SAFE_X, GROUND_Y - 62, `-${n}`, {
         fontFamily: "monospace",
         fontStyle: "bold",
         fontSize: "24px",
