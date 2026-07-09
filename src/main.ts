@@ -50,7 +50,12 @@ const GAME_W = GRID_W + PAD * 2; // 680
 const GAME_H = GRID_Y + GRID_H + PAD; // 824
 
 // lane geometry
-const CHAR_Y = LANE_Y + 84; // vertical centre of the characters
+const FLOOR_H = 30; // ground band the characters stand on
+const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
+// The "Tiny RPG" content sits mid-frame at slightly different heights per sheet,
+// so anchor each sprite by its own foot fraction to plant it on the floor.
+const HERO_FOOT = 0.59;
+const ORC_FOOT = 0.56;
 const SKULL_X = GRID_X + 32; // death marker at the far left
 const SAFE_X = GRID_X + 300; // hero screen x at pressure 0
 const ENGAGE_GAP = 150; // enemy centre sits this far right of the hero when fighting
@@ -102,6 +107,7 @@ class GameScene extends Phaser.Scene {
   private run!: RunState;
   private phase: "advance" | "fight" = "advance";
   private wall!: Phaser.GameObjects.TileSprite;
+  private floor!: Phaser.GameObjects.TileSprite;
   private torches: Phaser.GameObjects.Sprite[] = [];
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
@@ -143,6 +149,7 @@ class GameScene extends Phaser.Scene {
 
     this.buildAnims();
     this.buildWallTexture();
+    this.buildFloorTexture();
     this.buildHud();
     this.buildLane();
     this.buildBoard();
@@ -188,6 +195,25 @@ class GameScene extends Phaser.Scene {
     g.destroy();
   }
 
+  /** Generate a seamless flagstone floor texture for the scrolling ground band. */
+  private buildFloorTexture() {
+    if (this.textures.exists("floor")) return;
+    const w = 120, h = FLOOR_H, sw = 30, sh = 15;
+    const g = this.make.graphics({}, false);
+    g.fillStyle(0x120d09, 1).fillRect(0, 0, w, h); // dark gaps
+    for (let row = 0; row * sh < h; row++) {
+      const oy = row * sh;
+      const off = row % 2 ? sw / 2 : 0;
+      for (let x = -sw; x < w + sw; x += sw) {
+        g.fillStyle(0x322619, 1).fillRect(x + off + 1, oy + 1, sw - 2, sh - 2);
+        g.fillStyle(0x3d2f1f, 1).fillRect(x + off + 1, oy + 1, sw - 2, 2); // stone top highlight
+      }
+    }
+    g.fillStyle(0x4a3826, 1).fillRect(0, 0, w, 2); // lit lip where wall meets floor
+    g.generateTexture("floor", w, h);
+    g.destroy();
+  }
+
   // --- tile coordinate helpers (container origin is its centre) ---
   private xFor(c: number) {
     return GRID_X + c * TILE + TILE / 2;
@@ -227,8 +253,9 @@ class GameScene extends Phaser.Scene {
 
   // --- runner lane ---
   private buildLane() {
-    // scrolling dungeon wall
+    // scrolling dungeon wall + ground band
     this.wall = this.add.tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, "wall");
+    this.floor = this.add.tileSprite(GAME_W / 2, GROUND_Y + FLOOR_H / 2, GRID_W, FLOOR_H, "floor");
 
     // torches ride the wall; a mask clips them to the lane as they wrap around
     const torchLayer = this.add.container(0, 0);
@@ -241,12 +268,12 @@ class GameScene extends Phaser.Scene {
     maskG.fillStyle(0xffffff).fillRect(GRID_X, LANE_Y, GRID_W, LANE_H);
     torchLayer.setMask(maskG.createGeometryMask());
 
-    this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H - 10, GRID_W, 4, 0x0d0a08); // floor line
     this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H).setStrokeStyle(2, 0x2a2d38); // border
-    this.add.text(SKULL_X, CHAR_Y, "☠", { fontSize: "44px", color: "#b23a3a" }).setOrigin(0.5);
+    this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "44px", color: "#b23a3a" }).setOrigin(0.5, 1);
 
     this.hero = this.add
-      .sprite(SAFE_X, CHAR_Y, "hero-idle")
+      .sprite(SAFE_X, GROUND_Y, "hero-idle")
+      .setOrigin(0.5, HERO_FOOT)
       .setScale(SPRITE_SCALE)
       .play("hero-idle");
 
@@ -310,6 +337,7 @@ class GameScene extends Phaser.Scene {
     if (worldSpeed > 0) {
       const d = worldSpeed * (delta / 1000);
       this.wall.tilePositionX += d;
+      this.floor.tilePositionX += d;
       const span = TORCH_COUNT * TORCH_SPACING;
       for (const t of this.torches) {
         t.x -= d;
@@ -321,7 +349,7 @@ class GameScene extends Phaser.Scene {
     this.hero.x = heroX;
     if (this.orc && this.phase === "fight") this.orc.x = heroX + ENGAGE_GAP; // enemy pushes the hero toward the skull
     if (this.orc) {
-      const barY = CHAR_Y - Math.round(21 * SPRITE_SCALE * 0.5) - 16;
+      const barY = GROUND_Y - 72; // above the orc's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
       this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
     }
@@ -343,7 +371,8 @@ class GameScene extends Phaser.Scene {
     this.hero.play("hero-walk", true); // stride forward while the foe approaches
 
     const orc = this.add
-      .sprite(ENTER_X, CHAR_Y, "orc-walk")
+      .sprite(ENTER_X, GROUND_Y, "orc-walk")
+      .setOrigin(0.5, ORC_FOOT)
       .setScale(SPRITE_SCALE)
       .setFlipX(true) // face left, toward the hero
       .play("orc-walk");
@@ -494,7 +523,7 @@ class GameScene extends Phaser.Scene {
 
   private floatDamage(n: number) {
     const t = this.add
-      .text(this.orc?.x ?? SAFE_X, CHAR_Y - 60, `-${n}`, {
+      .text(this.orc?.x ?? SAFE_X, GROUND_Y - 78, `-${n}`, {
         fontFamily: "monospace",
         fontStyle: "bold",
         fontSize: "24px",
