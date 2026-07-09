@@ -62,6 +62,9 @@ const HP_W = 92;
 const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
 const STRIKE_MS = 4800; // enemy strike cadence
 const WALK_IN_MS = 850; // time for a new enemy to march into range
+const WORLD_SCROLL = 170; // px/sec the dungeon pans while the hero is running
+const TORCH_COUNT = 4;
+const TORCH_SPACING = 190; // px between torches in the scrolling wall
 
 // ---- placeholder tile look (see DESIGN.md §3) -----------------------------
 const TILE_COLORS = [
@@ -98,6 +101,8 @@ class GameScene extends Phaser.Scene {
   // runner
   private run!: RunState;
   private phase: "advance" | "fight" = "advance";
+  private wall!: Phaser.GameObjects.TileSprite;
+  private torches: Phaser.GameObjects.Sprite[] = [];
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
   private orcDying = false;
@@ -123,7 +128,7 @@ class GameScene extends Phaser.Scene {
     sheet("orc-hurt", "orc_hurt.png");
     sheet("orc-death", "orc_death.png");
     sheet("orc-attack", "orc_attack.png");
-    sheet("torch", "torch.png", 28, 27);
+    sheet("torch", "torch.png", 21, 27); // 4 frames of 21px — flame stays centred (flickers in place)
   }
 
   create() {
@@ -134,8 +139,10 @@ class GameScene extends Phaser.Scene {
     this.orcDying = false;
     this.overShown = false;
     this.phase = "advance";
+    this.torches = [];
 
     this.buildAnims();
+    this.buildWallTexture();
     this.buildHud();
     this.buildLane();
     this.buildBoard();
@@ -161,6 +168,24 @@ class GameScene extends Phaser.Scene {
     mk("orc-death", 10, 0);
     mk("orc-attack", 12, 0);
     mk("torch", 8, -1);
+  }
+
+  /** Generate a seamless dungeon-brick texture for the scrolling wall. */
+  private buildWallTexture() {
+    if (this.textures.exists("wall")) return;
+    const w = 160, h = LANE_H, bw = 40, bh = 25;
+    const g = this.make.graphics({}, false);
+    g.fillStyle(0x140f0c, 1).fillRect(0, 0, w, h); // mortar base
+    for (let row = 0; row * bh < h; row++) {
+      const oy = row * bh;
+      const off = row % 2 ? bw / 2 : 0; // running-bond offset
+      for (let x = -bw; x < w + bw; x += bw) {
+        g.fillStyle(0x241c17, 1).fillRect(x + off + 1, oy + 1, bw - 2, bh - 2);
+        g.fillStyle(0x2f261f, 1).fillRect(x + off + 1, oy + 1, bw - 2, 2); // top highlight
+      }
+    }
+    g.generateTexture("wall", w, h);
+    g.destroy();
   }
 
   // --- tile coordinate helpers (container origin is its centre) ---
@@ -202,11 +227,22 @@ class GameScene extends Phaser.Scene {
 
   // --- runner lane ---
   private buildLane() {
-    this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, 0x1a1410).setStrokeStyle(2, 0x2a2d38);
-    this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H - 10, GRID_W, 4, 0x0d0a08); // floor line
-    for (const tx of [GRID_X + 70, GRID_X + GRID_W - 50]) {
-      this.add.sprite(tx, LANE_Y + 34, "torch").setScale(1.8).play("torch");
+    // scrolling dungeon wall
+    this.wall = this.add.tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, "wall");
+
+    // torches ride the wall; a mask clips them to the lane as they wrap around
+    const torchLayer = this.add.container(0, 0);
+    for (let i = 0; i < TORCH_COUNT; i++) {
+      const t = this.add.sprite(GRID_X + 40 + i * TORCH_SPACING, LANE_Y + 42, "torch").setScale(2).play("torch");
+      this.torches.push(t);
+      torchLayer.add(t);
     }
+    const maskG = this.make.graphics({}, false);
+    maskG.fillStyle(0xffffff).fillRect(GRID_X, LANE_Y, GRID_W, LANE_H);
+    torchLayer.setMask(maskG.createGeometryMask());
+
+    this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H - 10, GRID_W, 4, 0x0d0a08); // floor line
+    this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H).setStrokeStyle(2, 0x2a2d38); // border
     this.add.text(SKULL_X, CHAR_Y, "☠", { fontSize: "44px", color: "#b23a3a" }).setOrigin(0.5);
 
     this.hero = this.add
@@ -268,6 +304,18 @@ class GameScene extends Phaser.Scene {
   // --- per-frame: scroll pressure (only while engaged) + sprite placement ---
   update(_time: number, delta: number) {
     if (this.phase === "fight" && !this.run.over) scroll(this.run, SCROLL_PER_SEC * (delta / 1000));
+
+    // pan the dungeon while the hero runs to the next foe; hold still in a fight
+    const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
+    if (worldSpeed > 0) {
+      const d = worldSpeed * (delta / 1000);
+      this.wall.tilePositionX += d;
+      const span = TORCH_COUNT * TORCH_SPACING;
+      for (const t of this.torches) {
+        t.x -= d;
+        while (t.x < GRID_X - 40) t.x += span; // wrap off-left back to the right
+      }
+    }
 
     const heroX = this.heroXForPressure();
     this.hero.x = heroX;

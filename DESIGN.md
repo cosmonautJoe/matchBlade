@@ -96,10 +96,12 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
     illegal-swap revert, animated clear/gravity/refill cascade. Tiles use emoji
     icons (⚔️🪄🛡️🔑💎🪵🪨) on a backing disc; real tile art still TODO.
   - **Runner + combat** (`src/main.ts` + `src/run.ts`): animated hero (Soldier)
-    and enemies (Orc) marching in from the right. Constant leftward **scroll
-    pressure** + enemy strikes push the hero toward the skull; matching combat
-    tiles kills the enemy and surges the hero forward. Enemy HP bar, pressure
-    bar, score/resource HUD, game-over + tap-to-restart.
+    and enemies (Orc) marching in from the right, over a **scrolling dungeon
+    wall** (generated brick TileSprite + torches that pan while the hero runs and
+    hold still in a fight). Constant leftward **scroll pressure** + enemy strikes
+    push the hero toward the skull; matching combat tiles kills the enemy and
+    surges the hero forward. Enemy HP bar, pressure bar, score/resource HUD,
+    game-over + tap-to-restart.
   - Runner state is a pure, unit-tested module (`src/run.ts`); a single
     `pressure` value in [0,1] is the fail axis (see §4).
 - `npm install` then `npm run dev` -> the harness picks a free port (see
