@@ -53,16 +53,16 @@ const GAME_H = GRID_Y + GRID_H + PAD; // 824
 // lane geometry
 const FLOOR_H = 32; // grassy ground band the characters stand on (lower surface = more world above)
 const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
-// Tiny RPG content sits mid-frame at slightly different heights per sheet,
-// so anchor each sprite by its own foot fraction to plant it on the floor.
-const HERO_FOOT = 0.59;
-const ORC_FOOT = 0.56;
+// Sprites stand with feet near the frame bottom.
+const HERO_ORIGIN = 0.92; // WarriorMan (100x64 frames)
+const SLIME_ORIGIN = 0.82; // slime (64x64 frames)
 const SKULL_X = GRID_X + 32; // death marker at the far left
 const SAFE_X = GRID_X + 300; // hero screen x at pressure 0
-const ENGAGE_GAP = 130; // enemy centre sits this far right of the hero when fighting
+const ENGAGE_GAP = 118; // enemy centre sits this far right of the hero when fighting
 const ENTER_X = GAME_W + 80; // enemies walk in from off-screen right
-const SPRITE_SCALE = 3.2; // Tiny RPG art in 100x100 frames (4 was a touch big)
-const HP_W = 88;
+const HERO_SCALE = 1.35; // WarriorMan art is near-native res
+const SLIME_SCALE = 1.15; // small ground slime
+const HP_W = 60;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
 const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
@@ -133,16 +133,15 @@ class GameScene extends Phaser.Scene {
   }
 
   preload() {
-    const sheet = (key: string, file: string, fw = 100, fh = 100) =>
+    const sheet = (key: string, file: string, fw: number, fh: number) =>
       this.load.spritesheet(key, `sprites/${file}`, { frameWidth: fw, frameHeight: fh });
-    sheet("hero-idle", "hero_idle.png");
-    sheet("hero-walk", "hero_walk.png");
-    sheet("hero-attack", "hero_attack.png");
-    sheet("orc-idle", "orc_idle.png");
-    sheet("orc-walk", "orc_walk.png");
-    sheet("orc-hurt", "orc_hurt.png");
-    sheet("orc-death", "orc_death.png");
-    sheet("orc-attack", "orc_attack.png");
+    // hero: WarriorMan — one 8x3 sheet of 100x64 frames (row0 idle, row1 attack)
+    sheet("warrior", "warrior.png", 100, 64);
+    // enemy: slime — top-down pack, 64x64 frames; we use the front-facing row 0
+    sheet("slime-idle", "slime_idle.png", 64, 64);
+    sheet("slime-walk", "slime_run.png", 64, 64);
+    sheet("slime-hurt", "slime_hurt.png", 64, 64);
+    sheet("slime-death", "slime_death.png", 64, 64);
     // grass world backdrop: vnitti parallax layers + GandalfHardcore floor atlas
     this.load.image("grass-sky", "worlds/grass/sky.png");
     this.load.image("grass-mtn-far", "worlds/grass/mountains_far.png");
@@ -177,18 +176,20 @@ class GameScene extends Phaser.Scene {
   }
 
   private buildAnims() {
-    const mk = (key: string, fps: number, repeat: number) => {
+    const mk = (key: string, tex: string, start: number, end: number, fps: number, repeat: number) => {
       if (this.anims.exists(key)) return;
-      this.anims.create({ key, frames: this.anims.generateFrameNumbers(key, {}), frameRate: fps, repeat });
+      this.anims.create({ key, frames: this.anims.generateFrameNumbers(tex, { start, end }), frameRate: fps, repeat });
     };
-    mk("hero-idle", 8, -1);
-    mk("hero-walk", 12, -1);
-    mk("hero-attack", 16, 0);
-    mk("orc-idle", 7, -1);
-    mk("orc-walk", 10, -1);
-    mk("orc-hurt", 12, 0);
-    mk("orc-death", 10, 0);
-    mk("orc-attack", 12, 0);
+    // hero (WarriorMan 100x64, 8 cols): row0 idle/run 0-5, row1 attack 8-15
+    mk("hero-idle", "warrior", 0, 5, 8, -1);
+    mk("hero-walk", "warrior", 0, 5, 14, -1);
+    mk("hero-attack", "warrior", 8, 15, 18, 0);
+    // enemy slime — front-facing row 0 of each 64x64 sheet (keep orc-* keys)
+    mk("orc-idle", "slime-idle", 0, 5, 6, -1);
+    mk("orc-walk", "slime-walk", 0, 7, 10, -1);
+    mk("orc-hurt", "slime-hurt", 0, 4, 12, 0);
+    mk("orc-death", "slime-death", 0, 9, 12, 0);
+    mk("orc-attack", "slime-walk", 0, 7, 12, 0); // slime lunges (reuse run)
   }
 
   /** Crop a seamless middle slice (grass top + dirt, no rocky side edges) from the floor atlas. */
@@ -266,9 +267,9 @@ class GameScene extends Phaser.Scene {
     this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "40px", color: "#c0424a" }).setOrigin(0.5, 1);
 
     this.hero = this.add
-      .sprite(SAFE_X, GROUND_Y, "hero-idle")
-      .setOrigin(0.5, HERO_FOOT)
-      .setScale(SPRITE_SCALE)
+      .sprite(SAFE_X, GROUND_Y, "warrior")
+      .setOrigin(0.5, HERO_ORIGIN)
+      .setScale(HERO_SCALE)
       .play("hero-idle");
 
     this.enemyHpBg = this.add.rectangle(0, 0, HP_W, 9, 0x000000, 0.55).setOrigin(0.5).setVisible(false);
@@ -339,7 +340,7 @@ class GameScene extends Phaser.Scene {
     this.hero.x = heroX;
     if (this.orc && this.phase === "fight") this.orc.x = heroX + ENGAGE_GAP; // enemy pushes the hero toward the skull
     if (this.orc) {
-      const barY = GROUND_Y - 62; // above the orc's head
+      const barY = GROUND_Y - 50; // above the slime's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
       this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
     }
@@ -361,10 +362,9 @@ class GameScene extends Phaser.Scene {
     this.hero.play("hero-walk", true); // stride forward while the foe approaches
 
     const orc = this.add
-      .sprite(ENTER_X, GROUND_Y, "orc-walk")
-      .setOrigin(0.5, ORC_FOOT)
-      .setScale(SPRITE_SCALE)
-      .setFlipX(true) // face left, toward the hero
+      .sprite(ENTER_X, GROUND_Y, "slime-idle")
+      .setOrigin(0.5, SLIME_ORIGIN)
+      .setScale(SLIME_SCALE)
       .play("orc-walk");
     this.orc = orc;
     this.enemyHpBg.setVisible(true);
@@ -513,7 +513,7 @@ class GameScene extends Phaser.Scene {
 
   private floatDamage(n: number) {
     const t = this.add
-      .text(this.orc?.x ?? SAFE_X, GROUND_Y - 78, `-${n}`, {
+      .text(this.orc?.x ?? SAFE_X, GROUND_Y - 54, `-${n}`, {
         fontFamily: "monospace",
         fontStyle: "bold",
         fontSize: "24px",
