@@ -22,10 +22,10 @@ import Phaser from "phaser";
 import {
   W,
   H,
-  TYPES,
   EMPTY,
   type Coord,
   makeInitialGrid,
+  randomType,
   findMatches,
   swap,
   hasPossibleMove,
@@ -54,14 +54,14 @@ const GAME_H = GRID_Y + GRID_H + PAD; // 824
 const FLOOR_H = 32; // grassy ground band the characters stand on (lower surface = more world above)
 const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
 // Foot fraction measured from each sheet (lowest opaque pixel) so they sit on the ground.
-const HERO_ORIGIN = 0.75; // WarriorMan feet at y47/64
+const HERO_ORIGIN = 0.734; // WarriorMan feet at y47/64
 const SLIME_ORIGIN = 0.656; // slime base at y41/64
 const SKULL_X = GRID_X + 32; // death marker at the far left
 const SAFE_X = GRID_X + 300; // hero screen x at pressure 0
 const ENGAGE_GAP = 118; // enemy centre sits this far right of the hero when fighting
 const ENTER_X = GAME_W + 80; // enemies walk in from off-screen right
-const HERO_SCALE = 2.0; // WarriorMan art is near-native res
-const SLIME_SCALE = 1.95; // ground slime
+const HERO_SCALE = 2.3; // WarriorMan art is near-native res
+const SLIME_SCALE = 2.25; // ground slime
 const HP_W = 64;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
@@ -121,6 +121,7 @@ class GameScene extends Phaser.Scene {
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
   private orcDying = false;
+  private heroLockX = false; // freeze hero x while a killing swing lands, then surge
   private enemyHpBar!: Phaser.GameObjects.Rectangle;
   private enemyHpBg!: Phaser.GameObjects.Rectangle;
   private pressureFill!: Phaser.GameObjects.Rectangle;
@@ -158,6 +159,7 @@ class GameScene extends Phaser.Scene {
     this.down = null;
     this.orc = null;
     this.orcDying = false;
+    this.heroLockX = false;
     this.overShown = false;
     this.phase = "advance";
     this.parallax = [];
@@ -180,10 +182,13 @@ class GameScene extends Phaser.Scene {
       if (this.anims.exists(key)) return;
       this.anims.create({ key, frames: this.anims.generateFrameNumbers(tex, { start, end }), frameRate: fps, repeat });
     };
-    // hero (WarriorMan 80x64, 10 cols): row0 idle/run 0-5, row1 attack 10-19
-    mk("hero-idle", "warrior", 0, 5, 8, -1);
-    mk("hero-walk", "warrior", 0, 5, 14, -1);
-    mk("hero-attack", "warrior", 10, 19, 22, 0);
+    // hero (WarriorMan full sheet 80x64, 16 cols x 25 rows) — official row order:
+    // row0 Idle (0-7), row2 Walk (32-39), row3 Run (48-55), row9 Attack (144-150).
+    // Advance on the Run (row3 — forward-lean sprint, feet stay planted) and strike
+    // with the grounded Attack. NB: row4 is Jump, row6 Jump-Attack — not for ground play.
+    mk("hero-idle", "warrior", 0, 7, 8, -1);
+    mk("hero-walk", "warrior", 48, 55, 15, -1);
+    mk("hero-attack", "warrior", 144, 150, 16, 0);
     // enemy slime — front-facing row 0 of each 64x64 sheet (keep orc-* keys)
     mk("orc-idle", "slime-idle", 0, 5, 6, -1);
     mk("orc-walk", "slime-walk", 0, 7, 10, -1);
@@ -233,17 +238,17 @@ class GameScene extends Phaser.Scene {
   private buildHud() {
     this.add.rectangle(GAME_W / 2, HUD_Y + HUD_H / 2, GRID_W, HUD_H, 0x14171f).setStrokeStyle(2, 0x2a2d38);
     this.resourceText = this.add
-      .text(GRID_X + 10, HUD_Y + HUD_H / 2, "", { fontFamily: "monospace", fontSize: "15px", color: "#c7ccd6" })
+      .text(GRID_X + 8, HUD_Y + HUD_H / 2, "", { fontFamily: "monospace", fontSize: "12px", color: "#c7ccd6" })
       .setOrigin(0, 0.5);
     this.scoreText = this.add
-      .text(GRID_X + GRID_W - 10, HUD_Y + HUD_H / 2, "", { fontFamily: "monospace", fontSize: "16px", color: "#ffe08a" })
+      .text(GRID_X + GRID_W - 8, HUD_Y + HUD_H / 2, "", { fontFamily: "monospace", fontSize: "13px", color: "#ffe08a" })
       .setOrigin(1, 0.5);
     this.refreshHud();
   }
   private refreshHud() {
     const r = this.run.resources;
-    this.resourceText.setText(`Wood ${r.wood}   Ore ${r.ore}   Treasure ${r.treasure}   Keys ${r.keys}`);
-    this.scoreText.setText(`Depth ${this.run.killed}    Score ${this.run.score}`);
+    this.resourceText.setText(`Wood ${r.wood}  Ore ${r.ore}  Treasure ${r.treasure}  Keys ${r.keys}`);
+    this.scoreText.setText(`Depth ${this.run.killed}   Score ${this.run.score}`);
   }
 
   // --- runner lane ---
@@ -337,7 +342,7 @@ class GameScene extends Phaser.Scene {
     }
 
     const heroX = this.heroXForPressure();
-    this.hero.x = heroX;
+    if (!this.heroLockX) this.hero.x = heroX; // held put while a killing swing lands
     if (this.orc && this.phase === "fight") this.orc.x = heroX + ENGAGE_GAP; // enemy pushes the hero toward the skull
     if (this.orc) {
       const barY = GROUND_Y - 56; // above the slime's head
@@ -454,19 +459,38 @@ class GameScene extends Phaser.Scene {
   }
 
   private onCombat(damage: number, killed: boolean) {
-    if (damage > 0 && this.orc && !this.orcDying) {
+    if (damage <= 0 || !this.orc || this.orcDying) return;
+
+    this.floatDamage(damage);
+    this.updateEnemyBar();
+
+    if (killed) {
+      // Land the swing IN PLACE, THEN surge forward. Freeze the hero's x so the
+      // kill's pressure drop doesn't yank him away before the swing even renders.
+      this.heroLockX = true;
+      this.hero.play("hero-attack").once("animationcomplete", () => {
+        if (this.run.over) {
+          this.heroLockX = false;
+          return;
+        }
+        this.hero.play("hero-walk", true);
+        this.tweens.add({
+          targets: this.hero,
+          x: this.heroXForPressure(),
+          duration: 320,
+          ease: "Quad.easeOut",
+          onComplete: () => (this.heroLockX = false),
+        });
+      });
+      this.killOrc();
+    } else {
       this.hero.play("hero-attack").once("animationcomplete", () => {
         if (!this.run.over) this.hero.play(this.heroBaseAnim(), true);
       });
-      this.floatDamage(damage);
-      this.updateEnemyBar();
-      if (!killed) {
-        this.orc.play("orc-hurt").once("animationcomplete", () => {
-          if (this.orc && !this.orcDying) this.orc.play(this.phase === "fight" ? "orc-idle" : "orc-walk");
-        });
-      }
+      this.orc.play("orc-hurt").once("animationcomplete", () => {
+        if (this.orc && !this.orcDying) this.orc.play(this.phase === "fight" ? "orc-idle" : "orc-walk");
+      });
     }
-    if (killed) this.killOrc();
   }
 
   private killOrc() {
@@ -475,10 +499,7 @@ class GameScene extends Phaser.Scene {
     this.updateEnemyBar();
     this.enemyHpBg.setVisible(false);
     this.enemyHpBar.setVisible(false);
-    this.hero.play("hero-walk", true); // surge forward
-    this.time.delayedCall(600, () => {
-      if (!this.run.over) this.hero.play("hero-idle", true);
-    });
+    // NB: the hero's swing-then-surge is sequenced in onCombat so the attack plays.
 
     const dying = this.orc;
     this.orc = null;
@@ -569,7 +590,7 @@ class GameScene extends Phaser.Scene {
       }
       const spawned = write + 1;
       for (let r = write; r >= 0; r--) {
-        const type = Math.floor(Math.random() * TYPES);
+        const type = randomType();
         this.grid[r][c] = type;
         const t = this.makeTile(r, c, type);
         t.y = this.yFor(r - spawned);
