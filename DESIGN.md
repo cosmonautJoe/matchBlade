@@ -97,9 +97,10 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
     icons (⚔️🪄🛡️🔑💎🪵🪨) on a backing disc; real tile art still TODO.
   - **Runner + combat** (`src/main.ts` + `src/run.ts`): animated hero (Soldier)
     and enemies (Orc) marching in from the right, over a **scrolling dungeon
-    wall + flagstone floor** (generated seamless TileSprites + torches that pan
-    while the hero runs and hold still in a fight; characters foot-anchored to the
-    floor). Constant leftward **scroll pressure** + enemy strikes
+    wall + floor** (stone tiles cropped from the `dark-dungeon` tileset into
+    seamless scrolling TileSprites + torches that pan while the hero runs and hold
+    still in a fight; characters foot-anchored to the floor). Constant leftward
+    **scroll pressure** + enemy strikes
     push the hero toward the skull; matching combat tiles kills the enemy and
     surges the hero forward. Enemy HP bar, pressure bar, score/resource HUD,
     game-over + tap-to-restart.

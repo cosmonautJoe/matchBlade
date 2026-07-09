@@ -135,6 +135,7 @@ class GameScene extends Phaser.Scene {
     sheet("orc-death", "orc_death.png");
     sheet("orc-attack", "orc_attack.png");
     sheet("torch", "torch.png", 21, 27); // 4 frames of 21px — flame stays centred (flickers in place)
+    this.load.image("tileset", "sprites/tileset.png"); // dark-dungeon environment art
   }
 
   create() {
@@ -177,41 +178,26 @@ class GameScene extends Phaser.Scene {
     mk("torch", 8, -1);
   }
 
-  /** Generate a seamless dungeon-brick texture for the scrolling wall. */
+  /** Crop a clean stone tile from the dungeon tileset for the scrolling wall. */
   private buildWallTexture() {
-    if (this.textures.exists("wall")) return;
-    const w = 160, h = LANE_H, bw = 40, bh = 25;
-    const g = this.make.graphics({}, false);
-    g.fillStyle(0x140f0c, 1).fillRect(0, 0, w, h); // mortar base
-    for (let row = 0; row * bh < h; row++) {
-      const oy = row * bh;
-      const off = row % 2 ? bw / 2 : 0; // running-bond offset
-      for (let x = -bw; x < w + bw; x += bw) {
-        g.fillStyle(0x241c17, 1).fillRect(x + off + 1, oy + 1, bw - 2, bh - 2);
-        g.fillStyle(0x2f261f, 1).fillRect(x + off + 1, oy + 1, bw - 2, 2); // top highlight
-      }
-    }
-    g.generateTexture("wall", w, h);
-    g.destroy();
+    if (!this.textures.exists("wall")) this.cropTile("wall", 176, 448, 32, 32);
   }
 
-  /** Generate a seamless flagstone floor texture for the scrolling ground band. */
+  /** Crop a floor tile from the dungeon tileset for the scrolling ground band. */
   private buildFloorTexture() {
-    if (this.textures.exists("floor")) return;
-    const w = 120, h = FLOOR_H, sw = 30, sh = 15;
-    const g = this.make.graphics({}, false);
-    g.fillStyle(0x120d09, 1).fillRect(0, 0, w, h); // dark gaps
-    for (let row = 0; row * sh < h; row++) {
-      const oy = row * sh;
-      const off = row % 2 ? sw / 2 : 0;
-      for (let x = -sw; x < w + sw; x += sw) {
-        g.fillStyle(0x322619, 1).fillRect(x + off + 1, oy + 1, sw - 2, sh - 2);
-        g.fillStyle(0x3d2f1f, 1).fillRect(x + off + 1, oy + 1, sw - 2, 2); // stone top highlight
-      }
-    }
-    g.fillStyle(0x4a3826, 1).fillRect(0, 0, w, 2); // lit lip where wall meets floor
-    g.generateTexture("floor", w, h);
-    g.destroy();
+    if (!this.textures.exists("floor")) this.cropTile("floor", 176, 464, 32, 16);
+  }
+
+  /** Copy a region of the loaded tileset into its own texture, for TileSprite tiling. */
+  private cropTile(key: string, sx: number, sy: number, w: number, h: number) {
+    const src = this.textures.get("tileset").getSourceImage() as HTMLImageElement;
+    const cv = document.createElement("canvas");
+    cv.width = w;
+    cv.height = h;
+    const cx = cv.getContext("2d")!;
+    cx.imageSmoothingEnabled = false;
+    cx.drawImage(src, sx, sy, w, h, 0, 0, w, h);
+    this.textures.addCanvas(key, cv);
   }
 
   // --- tile coordinate helpers (container origin is its centre) ---
@@ -256,6 +242,7 @@ class GameScene extends Phaser.Scene {
     // scrolling dungeon wall + ground band
     this.wall = this.add.tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, "wall");
     this.floor = this.add.tileSprite(GAME_W / 2, GROUND_Y + FLOOR_H / 2, GRID_W, FLOOR_H, "floor");
+    this.add.rectangle(GAME_W / 2, GROUND_Y, GRID_W, 2, 0x5a4632); // lit ground edge (wall meets floor)
 
     // torches ride the wall; a mask clips them to the lane as they wrap around
     const torchLayer = this.add.container(0, 0);
