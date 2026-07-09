@@ -69,7 +69,7 @@ const STRIKE_MS = 4800; // enemy strike cadence
 const WALK_IN_MS = 850; // time for a new enemy to march into range
 const WORLD_SCROLL = 170; // px/sec the dungeon pans while the hero is running
 const TORCH_COUNT = 4;
-const TORCH_SPACING = 190; // px between torches in the scrolling wall
+const TORCH_SPACING = 200; // px between torches in the scrolling wall
 
 // ---- placeholder tile look (see DESIGN.md §3) -----------------------------
 const TILE_COLORS = [
@@ -239,21 +239,30 @@ class GameScene extends Phaser.Scene {
 
   // --- runner lane ---
   private buildLane() {
-    // scrolling dungeon wall + ground band
+    // --- scrolling dungeon backdrop, drawn back-to-front ---
+    const laneMask = () => {
+      const g = this.make.graphics({}, false);
+      g.fillStyle(0xffffff).fillRect(GRID_X, LANE_Y, GRID_W, LANE_H);
+      return g.createGeometryMask();
+    };
+
     this.wall = this.add.tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, "wall");
+
+    // continuous ground band + a lit stone ledge along the top (no gaps)
     this.floor = this.add.tileSprite(GAME_W / 2, GROUND_Y + FLOOR_H / 2, GRID_W, FLOOR_H, "floor");
-    this.add.rectangle(GAME_W / 2, GROUND_Y, GRID_W, 2, 0x5a4632); // lit ground edge (wall meets floor)
+    this.add.rectangle(GAME_W / 2, GROUND_Y - 1, GRID_W, 3, 0x6a5a7a); // lit stone lip
+    this.add.rectangle(GAME_W / 2, GROUND_Y + 3, GRID_W, 2, 0x0b0808); // shadow under the lip
 
     // torches ride the wall; a mask clips them to the lane as they wrap around
-    const torchLayer = this.add.container(0, 0);
+    const torchLayer = this.add.container(0, 0).setMask(laneMask());
     for (let i = 0; i < TORCH_COUNT; i++) {
-      const t = this.add.sprite(GRID_X + 40 + i * TORCH_SPACING, LANE_Y + 42, "torch").setScale(2).play("torch");
+      const t = this.add
+        .sprite(GRID_X + 60 + i * TORCH_SPACING, LANE_Y + 50, "torch")
+        .setScale(2)
+        .play("torch");
       this.torches.push(t);
       torchLayer.add(t);
     }
-    const maskG = this.make.graphics({}, false);
-    maskG.fillStyle(0xffffff).fillRect(GRID_X, LANE_Y, GRID_W, LANE_H);
-    torchLayer.setMask(maskG.createGeometryMask());
 
     this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H).setStrokeStyle(2, 0x2a2d38); // border
     this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "44px", color: "#b23a3a" }).setOrigin(0.5, 1);
@@ -328,7 +337,7 @@ class GameScene extends Phaser.Scene {
       const span = TORCH_COUNT * TORCH_SPACING;
       for (const t of this.torches) {
         t.x -= d;
-        while (t.x < GRID_X - 40) t.x += span; // wrap off-left back to the right
+        while (t.x < GRID_X - 60) t.x += span; // wrap off-left back to the right
       }
     }
 
