@@ -3,7 +3,8 @@
  *
  * Two coupled systems:
  *   1. A classic swap match-3 board (bottom) — model in board.ts.
- *   2. A dungeon runner (top) — pure state in run.ts.
+ *   2. a side-scrolling world runner (top) — pure state in run.ts. The backdrop
+ *      is a swappable "world" (grass first); the runner/combat logic is shared.
  *
  * Runner feel (DESIGN.md §4): the hero holds the line on the left; enemies march
  * in from the right. While an enemy is engaged, a constant leftward scroll drags
@@ -50,27 +51,35 @@ const GAME_W = GRID_W + PAD * 2; // 680
 const GAME_H = GRID_Y + GRID_H + PAD; // 824
 
 // lane geometry
-const FLOOR_H = 30; // ground band the characters stand on
+const FLOOR_H = 54; // grassy ground band the characters stand on
 const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
-// The "Tiny RPG" content sits mid-frame at slightly different heights per sheet,
+// Tiny RPG content sits mid-frame at slightly different heights per sheet,
 // so anchor each sprite by its own foot fraction to plant it on the floor.
 const HERO_FOOT = 0.59;
 const ORC_FOOT = 0.56;
 const SKULL_X = GRID_X + 32; // death marker at the far left
 const SAFE_X = GRID_X + 300; // hero screen x at pressure 0
-const ENGAGE_GAP = 150; // enemy centre sits this far right of the hero when fighting
+const ENGAGE_GAP = 130; // enemy centre sits this far right of the hero when fighting
 const ENTER_X = GAME_W + 80; // enemies walk in from off-screen right
-const SPRITE_SCALE = 4; // "Tiny RPG" art is small inside 100x100 frames
-const HP_W = 92;
+const SPRITE_SCALE = 3.2; // Tiny RPG art in 100x100 frames (4 was a touch big)
+const HP_W = 88;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
 const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
 const STRIKE_MS = 4800; // enemy strike cadence
 const WALK_IN_MS = 850; // time for a new enemy to march into range
-const WORLD_SCROLL = 170; // px/sec the dungeon pans while the hero is running
-const TILE_SCALE = 3; // dungeon tiles are 16px pixel-art — scale up so their chunkiness matches the characters
-const TORCH_COUNT = 4;
-const TORCH_SPACING = 200; // px between torches in the scrolling wall
+const WORLD_SCROLL = 170; // px/sec the world pans while the hero is running
+const FLOOR_SCALE = 1.6; // show the grass chunk chunky so the blades read like the reference
+const PARALLAX_SRC_H = 216; // source height of the vnitti parallax layers
+// parallax layers, back-to-front, with scroll factors (0 = static .. 1 = foreground)
+const PARALLAX: { key: string; scroll: number }[] = [
+  { key: "grass-sky", scroll: 0.04 },
+  { key: "grass-clouds-mid", scroll: 0.1 },
+  { key: "grass-mtn-far", scroll: 0.16 },
+  { key: "grass-mtn", scroll: 0.3 },
+  { key: "grass-clouds-front", scroll: 0.24 },
+  { key: "grass-hill", scroll: 0.5 },
+];
 
 // ---- placeholder tile look (see DESIGN.md §3) -----------------------------
 const TILE_COLORS = [
@@ -107,9 +116,8 @@ class GameScene extends Phaser.Scene {
   // runner
   private run!: RunState;
   private phase: "advance" | "fight" = "advance";
-  private wall!: Phaser.GameObjects.TileSprite;
+  private parallax: { sprite: Phaser.GameObjects.TileSprite; scroll: number }[] = [];
   private floor!: Phaser.GameObjects.TileSprite;
-  private torches: Phaser.GameObjects.Sprite[] = [];
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
   private orcDying = false;
@@ -135,8 +143,14 @@ class GameScene extends Phaser.Scene {
     sheet("orc-hurt", "orc_hurt.png");
     sheet("orc-death", "orc_death.png");
     sheet("orc-attack", "orc_attack.png");
-    sheet("torch", "torch.png", 21, 27); // 4 frames of 21px — flame stays centred (flickers in place)
-    this.load.image("tileset", "sprites/tileset.png"); // dark-dungeon environment art
+    // grass world backdrop: vnitti parallax layers + GandalfHardcore floor atlas
+    this.load.image("grass-sky", "worlds/grass/sky.png");
+    this.load.image("grass-mtn-far", "worlds/grass/mountains_far.png");
+    this.load.image("grass-mtn", "worlds/grass/mountains.png");
+    this.load.image("grass-hill", "worlds/grass/hill.png");
+    this.load.image("grass-clouds-mid", "worlds/grass/clouds_mid.png");
+    this.load.image("grass-clouds-front", "worlds/grass/clouds_front.png");
+    this.load.image("grass-floor", "worlds/grass/floor.png");
   }
 
   create() {
@@ -147,11 +161,10 @@ class GameScene extends Phaser.Scene {
     this.orcDying = false;
     this.overShown = false;
     this.phase = "advance";
-    this.torches = [];
+    this.parallax = [];
 
     this.buildAnims();
-    this.buildWallTexture();
-    this.buildFloorTexture();
+    this.buildGrassGround();
     this.buildHud();
     this.buildLane();
     this.buildBoard();
@@ -176,28 +189,22 @@ class GameScene extends Phaser.Scene {
     mk("orc-hurt", 12, 0);
     mk("orc-death", 10, 0);
     mk("orc-attack", 12, 0);
-    mk("torch", 8, -1);
   }
 
-  /** Crop a clean stone tile from the dungeon tileset for the scrolling wall. */
-  private buildWallTexture() {
-    if (!this.textures.exists("wall")) this.cropTile("wall", 176, 448, 32, 32);
+  /** Crop a seamless middle slice (grass top + dirt, no rocky side edges) from the floor atlas. */
+  private buildGrassGround() {
+    if (!this.textures.exists("grass-ground")) this.cropTile("grass-ground", "grass-floor", 16, 0, 64, 96);
   }
 
-  /** Crop a floor tile from the dungeon tileset for the scrolling ground band. */
-  private buildFloorTexture() {
-    if (!this.textures.exists("floor")) this.cropTile("floor", 176, 464, 32, 16);
-  }
-
-  /** Copy a region of the loaded tileset into its own texture, for TileSprite tiling. */
-  private cropTile(key: string, sx: number, sy: number, w: number, h: number) {
-    const src = this.textures.get("tileset").getSourceImage() as HTMLImageElement;
+  /** Copy a region of a loaded image into its own texture, for TileSprite tiling. */
+  private cropTile(key: string, src: string, sx: number, sy: number, w: number, h: number) {
+    const img = this.textures.get(src).getSourceImage() as HTMLImageElement;
     const cv = document.createElement("canvas");
     cv.width = w;
     cv.height = h;
     const cx = cv.getContext("2d")!;
     cx.imageSmoothingEnabled = false;
-    cx.drawImage(src, sx, sy, w, h, 0, 0, w, h);
+    cx.drawImage(img, sx, sy, w, h, 0, 0, w, h);
     this.textures.addCanvas(key, cv);
   }
 
@@ -240,35 +247,23 @@ class GameScene extends Phaser.Scene {
 
   // --- runner lane ---
   private buildLane() {
-    // --- scrolling dungeon backdrop, drawn back-to-front ---
-    const laneMask = () => {
-      const g = this.make.graphics({}, false);
-      g.fillStyle(0xffffff).fillRect(GRID_X, LANE_Y, GRID_W, LANE_H);
-      return g.createGeometryMask();
-    };
-
-    this.wall = this.add.tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, "wall").setTileScale(TILE_SCALE);
-
-    // continuous ground band + a lit stone ledge along the top (no gaps)
-    this.floor = this.add
-      .tileSprite(GAME_W / 2, GROUND_Y + FLOOR_H / 2, GRID_W, FLOOR_H, "floor")
-      .setTileScale(TILE_SCALE);
-    this.add.rectangle(GAME_W / 2, GROUND_Y - 1, GRID_W, 3, 0x6a5a7a); // lit stone lip
-    this.add.rectangle(GAME_W / 2, GROUND_Y + 3, GRID_W, 2, 0x0b0808); // shadow under the lip
-
-    // torches ride the wall; a mask clips them to the lane as they wrap around
-    const torchLayer = this.add.container(0, 0).setMask(laneMask());
-    for (let i = 0; i < TORCH_COUNT; i++) {
-      const t = this.add
-        .sprite(GRID_X + 60 + i * TORCH_SPACING, LANE_Y + 50, "torch")
-        .setScale(2)
-        .play("torch");
-      this.torches.push(t);
-      torchLayer.add(t);
+    // --- parallax world backdrop, back-to-front (each layer fills the lane) ---
+    const pscale = LANE_H / PARALLAX_SRC_H; // fit the 216-tall layers into the lane
+    this.parallax = [];
+    for (const { key, scroll: s } of PARALLAX) {
+      const ts = this.add
+        .tileSprite(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H, key)
+        .setTileScale(pscale);
+      this.parallax.push({ sprite: ts, scroll: s });
     }
 
+    // grass ground band the hero runs along
+    this.floor = this.add
+      .tileSprite(GAME_W / 2, GROUND_Y + FLOOR_H / 2, GRID_W, FLOOR_H, "grass-ground")
+      .setTileScale(FLOOR_SCALE);
+
     this.add.rectangle(GAME_W / 2, LANE_Y + LANE_H / 2, GRID_W, LANE_H).setStrokeStyle(2, 0x2a2d38); // border
-    this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "44px", color: "#b23a3a" }).setOrigin(0.5, 1);
+    this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "40px", color: "#c0424a" }).setOrigin(0.5, 1);
 
     this.hero = this.add
       .sprite(SAFE_X, GROUND_Y, "hero-idle")
@@ -331,24 +326,20 @@ class GameScene extends Phaser.Scene {
   update(_time: number, delta: number) {
     if (this.phase === "fight" && !this.run.over) scroll(this.run, SCROLL_PER_SEC * (delta / 1000));
 
-    // pan the dungeon while the hero runs to the next foe; hold still in a fight
+    // pan the world while the hero runs to the next foe; hold still in a fight
     const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
     if (worldSpeed > 0) {
       const d = worldSpeed * (delta / 1000);
-      this.wall.tilePositionX += d / TILE_SCALE; // tilePositionX is texture-space; tileScale magnifies it
-      this.floor.tilePositionX += d / TILE_SCALE;
-      const span = TORCH_COUNT * TORCH_SPACING;
-      for (const t of this.torches) {
-        t.x -= d;
-        while (t.x < GRID_X - 60) t.x += span; // wrap off-left back to the right
-      }
+      // each layer moves at its depth factor; tilePositionX is texture-space (magnified by tileScale)
+      for (const p of this.parallax) p.sprite.tilePositionX += (d * p.scroll) / p.sprite.tileScaleX;
+      this.floor.tilePositionX += d / this.floor.tileScaleX;
     }
 
     const heroX = this.heroXForPressure();
     this.hero.x = heroX;
     if (this.orc && this.phase === "fight") this.orc.x = heroX + ENGAGE_GAP; // enemy pushes the hero toward the skull
     if (this.orc) {
-      const barY = GROUND_Y - 72; // above the orc's head
+      const barY = GROUND_Y - 62; // above the orc's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
       this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
     }
