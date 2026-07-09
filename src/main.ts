@@ -60,9 +60,9 @@ const SKULL_X = GRID_X + 32; // death marker at the far left
 const SAFE_X = GRID_X + 300; // hero screen x at pressure 0
 const ENGAGE_GAP = 118; // enemy centre sits this far right of the hero when fighting
 const ENTER_X = GAME_W + 80; // enemies walk in from off-screen right
-const HERO_SCALE = 1.35; // WarriorMan art is near-native res
-const SLIME_SCALE = 1.15; // small ground slime
-const HP_W = 60;
+const HERO_SCALE = 1.75; // WarriorMan art is near-native res
+const SLIME_SCALE = 1.65; // ground slime
+const HP_W = 64;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
 const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
@@ -135,8 +135,8 @@ class GameScene extends Phaser.Scene {
   preload() {
     const sheet = (key: string, file: string, fw: number, fh: number) =>
       this.load.spritesheet(key, `sprites/${file}`, { frameWidth: fw, frameHeight: fh });
-    // hero: WarriorMan — one 8x3 sheet of 100x64 frames (row0 idle, row1 attack)
-    sheet("warrior", "warrior.png", 100, 64);
+    // hero: WarriorMan — one 10x3 sheet of 80x64 frames (row0 idle, row1 attack)
+    sheet("warrior", "warrior.png", 80, 64);
     // enemy: slime — top-down pack, 64x64 frames; we use the front-facing row 0
     sheet("slime-idle", "slime_idle.png", 64, 64);
     sheet("slime-walk", "slime_run.png", 64, 64);
@@ -180,10 +180,10 @@ class GameScene extends Phaser.Scene {
       if (this.anims.exists(key)) return;
       this.anims.create({ key, frames: this.anims.generateFrameNumbers(tex, { start, end }), frameRate: fps, repeat });
     };
-    // hero (WarriorMan 100x64, 8 cols): row0 idle/run 0-5, row1 attack 8-15
+    // hero (WarriorMan 80x64, 10 cols): row0 idle/run 0-5, row1 attack 10-19
     mk("hero-idle", "warrior", 0, 5, 8, -1);
     mk("hero-walk", "warrior", 0, 5, 14, -1);
-    mk("hero-attack", "warrior", 8, 15, 18, 0);
+    mk("hero-attack", "warrior", 10, 19, 22, 0);
     // enemy slime — front-facing row 0 of each 64x64 sheet (keep orc-* keys)
     mk("orc-idle", "slime-idle", 0, 5, 6, -1);
     mk("orc-walk", "slime-walk", 0, 7, 10, -1);
@@ -340,7 +340,7 @@ class GameScene extends Phaser.Scene {
     this.hero.x = heroX;
     if (this.orc && this.phase === "fight") this.orc.x = heroX + ENGAGE_GAP; // enemy pushes the hero toward the skull
     if (this.orc) {
-      const barY = GROUND_Y - 50; // above the slime's head
+      const barY = GROUND_Y - 66; // above the slime's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
       this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
     }
@@ -513,7 +513,7 @@ class GameScene extends Phaser.Scene {
 
   private floatDamage(n: number) {
     const t = this.add
-      .text(this.orc?.x ?? SAFE_X, GROUND_Y - 54, `-${n}`, {
+      .text(this.orc?.x ?? SAFE_X, GROUND_Y - 72, `-${n}`, {
         fontFamily: "monospace",
         fontStyle: "bold",
         fontSize: "24px",
