@@ -44,10 +44,10 @@ facing an enemy; keys only when at a lock; resources always stockpile.
 | 0  | sword     | melee attack vs. adjacent (ground) enemies                    |
 | 1  | staff     | magic attack vs. flying/ranged enemies                        |
 | 2  | shield    | block / reduce incoming damage                                |
-| 3  | key       | open locked doors & chests in the lane                        |
-| 4  | treasure  | one-use item / loot                                           |
-| 5  | wood      | crafting resource (stockpiled for upgrades)                   |
-| 6  | ore       | crafting resource (stockpiled for upgrades)                   |
+| 3  | key       | free caged recruits (and open chests) in the lane             |
+| 4  | treasure  | diamonds — rare currency: hire certain recruits, premium tiers |
+| 5  | wood      | crafting resource (spent at the caravan camp)                 |
+| 6  | ore       | crafting resource (spent at the caravan camp)                 |
 
 Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLYPH`).
 
@@ -57,17 +57,50 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
 - **Enemy encounter:** hero stops at the enemy; matched combat tiles deal damage
   (melee vs. ground, magic vs. flying). Enemy has an HP bar. Shields mitigate the
   enemy's counterattack. Defeat the enemy -> hero proceeds.
-- **Locks/chests:** require key matches to open (chests give treasure/resources).
+- **Cages & chests:** a caged prisoner (or chest) scrolls into view; key matches
+  while it's on screen free the recruit / pop the loot — scroll pressure keeps
+  ticking, so keys suddenly jump the priority queue. Miss it and it scrolls past.
+- **Chest opening = the dopamine blast (Vampire Survivors style).** Not floating
+  text — a full takeover sequence: hitstop + dark veil → chest center-stage,
+  rattling, light leaking → POP: radial light rays, loot erupting with physics
+  (reuse the tile-shard tumble system) → rewards revealed **one at a time**
+  (hidden count = slot-machine tension; mostly resources, sometimes diamonds,
+  rare **item that flies up into one of the 5 HUD item slots**) → fast tick-up
+  tally → tap to collect, world resumes. Escalating sting per extra reward.
 - **Scroll pressure:** the world scrolls left at a steady (increasing) rate;
   progress from matches/kills moves the hero right relative to it. Fall behind to
   the skull -> death.
 
-## 5. Meta progression (between runs)
+## 5. Meta progression — THE CARAVAN (between runs)
 
-- Gather **wood/ore/treasure/keys** during runs.
-- Spend them in a hub screen on **permanent upgrades**: better weapons/armor,
-  and **match modifiers** (e.g. "4+ matches deal bonus damage", more starting
-  HP). Persist across runs (localStorage).
+**Fantasy:** you are the scout for a traveling caravan, running ahead to clear
+the road. Each run carves a path through the next stretch of wilderness; the
+caravan follows, world by world (grass → forest → jungle → snow → dungeon).
+
+- **Recruits, not upgrades-in-a-menu.** The visible-progression hook (YMBAB's
+  growing boat): each recruit adds a **wagon** to the caravan lineup at camp.
+- **Keys free people.** Recruits are rescued from **cages in the lane** (§4) by
+  matching keys under scroll pressure. Some later recruits are *hired* with
+  **diamonds** instead (the mercenary wants gems, not gratitude).
+- **Recruits are craftspeople, not combat buddies.** Each one owns an upgrade
+  track that maps onto an exported `run.ts` tuning knob:
+
+  | recruit     | wants     | upgrades                                   |
+  |-------------|-----------|--------------------------------------------|
+  | Blacksmith  | ore       | sword damage (`SWORD_MAIN` / `SWORD_EXTRA`) |
+  | Carpenter   | wood      | shield block (`BLOCK_PER_SHIELD`)          |
+  | Hedge-witch | wood+ore  | spell power (`STAFF_DMG`)                  |
+  | Cook        | wood      | steadier pace (scroll rate / surge per kill) |
+
+- **Camp scene** between runs: wagons in a line, campfire, tap a recruit to
+  spend wood/ore on their track. Persist via localStorage.
+- **Character budget:** one portrait, a name, and a single line of dialogue per
+  recruit (on rescue + at camp). No dialogue trees, no cutscenes, and recruits
+  never fight beside you — that's sequel scope.
+- **Win condition:** the caravan completes the journey — clear the last world,
+  everyone home. Endless mode unlocks after. (Closes the §10 open question.)
+- **v1 slice:** cages in the lane → camp scene with ~3 recruits → done.
+  First rescue can be **WarriorWoman** (already in the character pack, unused).
 
 ## 6. Tech stack & decisions
 
@@ -103,7 +136,10 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
     pans while the hero runs and holds still in a fight. Constant leftward
     **scroll pressure** + enemy strikes push the hero toward the skull; matching
     combat tiles kills the enemy and surges the hero forward. Enemy HP bar,
-    pressure bar, score/resource HUD, game-over + tap-to-restart.
+    score/resource HUD, a row of **5 placeholder item slots** along the top
+    (future run consumables — filled by chest drops, see §4), game-over +
+    tap-to-restart. (The pressure bar was removed: the hero's distance from
+    the skull IS the pressure readout.)
   - **Worlds** (planned): the backdrop is swappable — grass first, then
     icy/autumn (the floor atlas already has all three biomes) and dungeon. New
     enemy art (boar/bee/snail) is staged for later.
@@ -122,14 +158,23 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
 4. ~~**Combat** — enemies with HP; sword/staff -> damage, shield -> block.~~ ✅ done
    (single ground enemy for now; weapon-vs-type gating still TODO)
 6. ~~**Score + HUD** — score, resource counters, depth.~~ ✅ done
-5. **Keys & chests** — locks/chests in the lane, key matches, loot. ← next
-7. **Meta hub** — spend resources on persistent upgrades (localStorage).
+5. **Chests** — ✅ done. A chest rolls into the lane every Nth kill; a banked
+   key pops it into the full VS-style takeover blast (§4). Placeholder pixel
+   chest + baked god-rays/coins/sparks; real chest art TBD.
+   **Cages & rescues** — cages in the lane, key matches free recruits under
+   pressure (reuses the chest's walk-in + key-gate). ← next
+7. **Caravan camp** — wagon lineup between runs; recruits' upgrade tracks
+   spend wood/ore (localStorage). See §5.
 8. **Art & audio** — real tile-icon art, SFX, music (character sprites done).
 9. **Ship** — `npm run build`, itch.io page, (later) Capacitor iOS wrap.
 
 ## 10. Open questions
 
-- Final win condition / score target and difficulty curve.
+- ~~Final win condition~~ → the caravan completes the journey (§5). Difficulty
+  curve per world still open.
 - Exact enemy roster & lane obstacle set.
+- Recruit roster beyond the first four (§5) + where recruit/NPC art comes from
+  (user is sourcing a pack).
+- Cage tuning: how often, how many keys, how long on screen.
 - Art direction specifics (pixel style, palette, hero/enemy designs).
 - Do slides cost anything / are they free (reference game: free)?

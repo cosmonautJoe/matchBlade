@@ -44,14 +44,17 @@ export interface RunState {
 }
 
 // --- tuning knobs (easy to expose as upgrades later, DESIGN.md §5) ---
-export const SWORD_DMG = 3;
-export const STAFF_DMG = 3;
+// Sword damage is split into swings so a bigger match reads as a combo: a 3-match
+// is one solid hit; each extra sword (up to 2) tacks on a small follow-up hit.
+export const SWORD_MAIN = 5; // first swing — a 3-match
+export const SWORD_EXTRA = 2; // each extra sword beyond 3 (max 2 follow-ups)
+export const STAFF_DMG = 3; // magic, folded into the first swing
 export const BLOCK_PER_SHIELD = 0.05; // pressure absorbed per shield tile
 export const ADVANCE_PER_KILL = 0.3; // pressure removed (hero surge) per kill
-// Matches are always >=3 tiles, so a small sword match deals 3*SWORD_DMG = 9.
-// Base HP sits above one match so early foes take ~2 matches (or one big cascade).
-export const ENEMY_BASE_HP = 12;
-export const ENEMY_HP_GROWTH = 4; // +hp per prior kill
+// Damage per match now runs 5 / 7 / 9 (for 3 / 4 / 5+ swords). Base HP sits ~one
+// strong combo so early foes fall fast; a couple of small matches also do it.
+export const ENEMY_BASE_HP = 9;
+export const ENEMY_HP_GROWTH = 3; // +hp per prior kill
 export const ENEMY_BASE_POWER = 0.075;
 export const ENEMY_POWER_GROWTH = 0.015;
 
@@ -74,8 +77,16 @@ export function newRun(): RunState {
 
 export interface MatchOutcome {
   damage: number;
+  hits: number[]; // per-swing damage, matching the combo animation (for floating numbers)
   killed: boolean;
   gained: Resources;
+}
+
+/** Split a sword match into per-swing damage: 3 -> [5], 4 -> [5,2], 5+ -> [5,2,2]. */
+export function swordHits(swords: number): number[] {
+  if (swords < 3) return [];
+  const extras = Math.min(2, swords - 3);
+  return [SWORD_MAIN, ...Array<number>(extras).fill(SWORD_EXTRA)];
 }
 
 function clampPressure(s: RunState) {
@@ -98,7 +109,13 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   s.resources.keys += gained.keys;
   s.score += (gained.wood + gained.ore + gained.treasure + gained.keys) * 2;
 
-  const damage = n(SWORD) * SWORD_DMG + n(STAFF) * STAFF_DMG;
+  const hits = swordHits(n(SWORD));
+  const staffDmg = n(STAFF) * STAFF_DMG;
+  if (staffDmg > 0) {
+    if (hits.length) hits[0] += staffDmg;
+    else hits.push(staffDmg); // staff-only: one magic hit
+  }
+  const damage = hits.reduce((a, b) => a + b, 0);
   let killed = false;
   if (s.enemy && damage > 0) {
     s.enemy.hp -= damage;
@@ -113,7 +130,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
     }
   }
 
-  return { damage, killed, gained };
+  return { damage, hits, killed, gained };
 }
 
 /** Spawn the next enemy — the scene calls this after the death animation. */

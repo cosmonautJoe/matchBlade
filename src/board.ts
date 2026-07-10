@@ -11,8 +11,8 @@
  * animated version lives in the game layer. This module stays pure logic.
  */
 
-export const W = 6; // columns
-export const H = 8; // rows  (dungeon-runner board is 6 wide x 8 tall)
+export const W = 11; // columns
+export const H = 5; // rows  (landscape dungeon-runner board is 11 wide x 5 tall)
 
 // Tile types: sword, staff, shield, key, treasure, wood, ore  (see DESIGN.md)
 export const TYPES = 7;
