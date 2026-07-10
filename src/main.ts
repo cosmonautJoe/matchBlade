@@ -32,6 +32,7 @@ import {
   hasPossibleMove,
 } from "./board";
 import { type RunState, type MatchOutcome, SWORD, newRun, applyMatches, enemyStrike, spawnNext, scroll } from "./run";
+import { CampScene } from "./camp";
 
 // ---- layout ---------------------------------------------------------------
 // The centre column (runner lane over the match board) is authored in these fixed
@@ -113,6 +114,29 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
+// --- haptics ---------------------------------------------------------------
+// navigator.vibrate covers Android & most browsers. iOS Safari has NO Vibration
+// API, but (17.4+) fires a light haptic when an <input switch> toggles, so we
+// keep a hidden one and click it as a fallback. Native-app haptics (Capacitor)
+// would be the reliable iPhone route later.
+let hapticSwitch: HTMLElement | null = null;
+function initHaptics() {
+  if (hapticSwitch || typeof document === "undefined") return;
+  const label = document.createElement("label");
+  label.setAttribute("aria-hidden", "true");
+  label.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;opacity:0;pointer-events:none;overflow:hidden";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.setAttribute("switch", ""); // Safari 17.4+ switch control
+  label.appendChild(input);
+  document.body.appendChild(label);
+  hapticSwitch = label;
+}
+function buzz(ms = 14) {
+  if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") navigator.vibrate(ms);
+  else hapticSwitch?.click(); // iOS 17.4+ fallback (fixed light tap)
+}
+
 class GameScene extends Phaser.Scene {
   // board
   private grid: number[][] = [];
@@ -159,8 +183,11 @@ class GameScene extends Phaser.Scene {
   }
 
   preload() {
-    const sheet = (key: string, file: string, fw: number, fh: number) =>
-      this.load.spritesheet(key, `sprites/${file}`, { frameWidth: fw, frameHeight: fh });
+    // CampScene boots first and shares several keys (hero, parallax, floor) —
+    // guard every load so re-entering the run never re-queues existing assets.
+    const sheet = (key: string, file: string, fw: number, fh: number) => {
+      if (!this.textures.exists(key)) this.load.spritesheet(key, `sprites/${file}`, { frameWidth: fw, frameHeight: fh });
+    };
     // hero: WarriorMan — one 10x3 sheet of 80x64 frames (row0 idle, row1 attack)
     sheet("warrior", "warrior.png", 80, 64);
     // enemy: slime — top-down pack, 64x64 frames; we use the front-facing row 0
@@ -169,13 +196,16 @@ class GameScene extends Phaser.Scene {
     sheet("slime-hurt", "slime_hurt.png", 64, 64);
     sheet("slime-death", "slime_death.png", 64, 64);
     // grass world backdrop: vnitti parallax layers + GandalfHardcore floor atlas
-    this.load.image("grass-sky", "worlds/grass/sky.png");
-    this.load.image("grass-mtn-far", "worlds/grass/mountains_far.png");
-    this.load.image("grass-mtn", "worlds/grass/mountains.png");
-    this.load.image("grass-hill", "worlds/grass/hill.png");
-    this.load.image("grass-clouds-mid", "worlds/grass/clouds_mid.png");
-    this.load.image("grass-clouds-front", "worlds/grass/clouds_front.png");
-    this.load.image("grass-floor", "worlds/grass/floor.png");
+    const img = (key: string, file: string) => {
+      if (!this.textures.exists(key)) this.load.image(key, file);
+    };
+    img("grass-sky", "worlds/grass/sky.png");
+    img("grass-mtn-far", "worlds/grass/mountains_far.png");
+    img("grass-mtn", "worlds/grass/mountains.png");
+    img("grass-hill", "worlds/grass/hill.png");
+    img("grass-clouds-mid", "worlds/grass/clouds_mid.png");
+    img("grass-clouds-front", "worlds/grass/clouds_front.png");
+    img("grass-floor", "worlds/grass/floor.png");
     // sfx — combat is dedicated WAVs; swap/gameover are the foley pack
     const audio: Record<string, string> = {
       swing1: "swing1.wav", swing2: "swing2.wav", swing3: "swing3.wav",
@@ -191,8 +221,9 @@ class GameScene extends Phaser.Scene {
       chest_unlock: "chest_unlock.wav", chest_creak: "chest_creak.wav", coin_pour: "coin_pour.mp3",
       coin1: "coin1.mp3", coin2: "coin2.mp3", coin3: "coin3.mp3", pouch: "pouch.mp3", pickup: "pickup.mp3",
     };
-    for (const [k, f] of Object.entries(audio)) this.load.audio(k, `sounds/${f}`);
-    for (let i = 1; i <= TILE_SFX; i++) this.load.audio(`tile${i}`, `sounds/tile${i}.wav`); // random tile-match sfx
+    for (const [k, f] of Object.entries(audio)) if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
+    for (let i = 1; i <= TILE_SFX; i++)
+      if (!this.cache.audio.exists(`tile${i}`)) this.load.audio(`tile${i}`, `sounds/tile${i}.wav`); // random tile-match sfx
   }
 
   create() {
@@ -225,6 +256,9 @@ class GameScene extends Phaser.Scene {
     this.layout();
     this.scale.off("resize", this.layout, this);
     this.scale.on("resize", this.layout, this);
+    // the ScaleManager is global — drop our handler when the camp takes over
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", this.layout, this));
+    this.cameras.main.fadeIn(300, 5, 6, 10);
     // intro: the hero jogs in from off the left edge to meet the first foe.
     // Slow both approaches together so the hero's run reads at a natural pace.
     const INTRO_MS = 1550;
@@ -416,6 +450,7 @@ class GameScene extends Phaser.Scene {
       .text(0, 0, "", { fontFamily: "monospace", fontSize: "15px", color: "#ffe08a", lineSpacing: 8 })
       .setOrigin(0, 0);
     this.gearText = this.add.text(0, 0, "⚙", { fontFamily: EMOJI_FONT, fontSize: "26px", color: "#c7ccd6" }).setOrigin(0, 1);
+    this.gearText.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.debugCombo()); // TEMP: tap gear = force a combo
     this.rotateHint = this.add
       .text(0, 0, "↻ rotate to landscape", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
       .setOrigin(0.5, 0)
@@ -633,6 +668,7 @@ class GameScene extends Phaser.Scene {
           counts[this.grid[cell.r][cell.c]] = (counts[this.grid[cell.r][cell.c]] ?? 0) + 1;
         }
 
+      buzz(depth > 1 ? 22 : 14); // haptic tick as the tiles shatter (deeper cascade = longer buzz on Android)
       const fades: Promise<void>[] = [];
       cleared.forEach((key) => {
         const [r, c] = key.split(",").map(Number);
@@ -1066,6 +1102,37 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Dev: rig a clean 2-step cascade (clear 3 -> a tile drops to make the next 3) to preview combo pacing. */
+  public debugCombo() {
+    if (this.busy || this.run.over || this.chestActive) return;
+    this.busy = true;
+    const P = SWORD; // 0
+    const Q = 2; // shield
+    const b = H - 1; // bottom row
+    // Column 0: a vertical P-triple at the bottom with Q directly above (spacer over that).
+    this.grid[b][0] = P;
+    this.grid[b - 1][0] = P;
+    this.grid[b - 2][0] = P;
+    this.grid[b - 3][0] = Q;
+    this.grid[b - 4][0] = 4; // spacer (treasure) — won't chain further
+    // Columns 1 & 2: Q waiting at the bottom. It only completes a horizontal triple once
+    // column 0's P's clear and its Q drops down — that's the second cascade. Offset fillers above.
+    for (const c of [1, 2]) {
+      this.grid[b][c] = Q;
+      for (let r = b - 1; r >= 0; r--) this.grid[r][c] = (r + c) % 2 === 0 ? 5 : 6; // never pre-match
+    }
+    if (this.grid[b][3] === Q) this.grid[b][3] = 4; // keep the Q match width 3
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++) {
+        this.tiles[r][c]?.destroy();
+        this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
+      }
+    void this.resolve().then(() => {
+      if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+      this.busy = false;
+    });
+  }
+
   /** Float one damage number per swing, timed so it pops as each hit lands. */
   private showHits(hits: number[], combo: string[]) {
     if (combo[0] === "hero-spell") {
@@ -1114,7 +1181,7 @@ class GameScene extends Phaser.Scene {
     const d = Math.min(depth, 5);
     this.showCombo(depth);
     // combo stingers removed for now (files still load; re-add this.sfx(`combo${…}`) to bring back)
-    await new Promise<void>((res) => this.time.delayedCall(190 + d * 35, res)); // the slow-down beat
+    await new Promise<void>((res) => this.time.delayedCall(300 + d * 60, res)); // the slow-down beat
     this.cameras.main.shake(140, 0.003 + 0.0015 * d);
     this.boardFlash(0.14 + 0.05 * d);
   }
@@ -1163,7 +1230,7 @@ class GameScene extends Phaser.Scene {
         .setDepth(81)
         .setAlpha(0);
       const hint = this.add
-        .text(w / 2, h / 2 + 54, "tap to descend again", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
+        .text(w / 2, h / 2 + 54, "tap to return to camp", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
         .setOrigin(0.5)
         .setDepth(81)
         .setAlpha(0);
@@ -1171,7 +1238,7 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: [title, stats], alpha: 1, duration: 400 });
       this.tweens.add({ targets: hint, alpha: 1, duration: 350 });
       this.tweens.add({ targets: hint, alpha: 0.3, duration: 700, yoyo: true, repeat: -1, delay: 400 });
-      this.time.delayedCall(500, () => this.input.once("pointerdown", () => this.scene.restart()));
+      this.time.delayedCall(500, () => this.input.once("pointerdown", () => this.scene.start("camp"))); // lick your wounds, spend, retry
     });
   }
 
@@ -1426,7 +1493,7 @@ const game = new Phaser.Game({
   pixelArt: true,
   // RESIZE: canvas fills the #game element (100vw x 100vh); the scene re-lays-out on resize
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
-  scene: [GameScene],
+  scene: [CampScene, GameScene], // boot into camp; DEPART starts the run, death returns
 });
 
 // Mobile browsers resize the visible viewport when the toolbar shows/hides (and on
@@ -1434,6 +1501,8 @@ const game = new Phaser.Game({
 const refit = () => game.scale.refresh();
 window.visualViewport?.addEventListener("resize", refit);
 window.addEventListener("orientationchange", () => setTimeout(refit, 120));
+
+initHaptics(); // set up the iOS haptic fallback element
 
 // Dev-only handle for debugging; stripped from production builds.
 if (import.meta.env.DEV) (globalThis as unknown as { __mbGame: Phaser.Game }).__mbGame = game;
