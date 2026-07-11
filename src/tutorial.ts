@@ -137,6 +137,7 @@ export class Tutorial {
     }
     const step = this.step;
     this.waitType = null; // board locks again while the beat plays out
+    this.clearVisuals(); // drop every overlay — the hero's answer plays out unobstructed
     if (step === 2) {
       // let the hero's combo land, then move to the knockback lesson
       this.g.time.delayedCall(1250, () => {
@@ -258,9 +259,16 @@ export class Tutorial {
           this.card(BLOCKED_COPY, hole, true);
           break;
         }
-        const hole = boardHole();
+        // hands-on: keep BOTH the lane and the board bright — the player must
+        // see the swap AND the hero act on it. A slim banner up in the sky
+        // carries the instruction instead of a lane-covering card.
+        const hole = this.union(laneHole(), boardHole());
         this.dim(hole);
-        this.card(COPY[this.step], hole, false);
+        this.banner(
+          this.step === 2
+            ? "⚔️ Match 3 swords to strike the foe — make the highlighted swap"
+            : "🛡️ Match 3 shields to raise your guard — make the highlighted swap",
+        );
         this.pointAtRig();
         break;
       }
@@ -359,6 +367,33 @@ export class Tutorial {
     }
     cont.setScale(0.94).setAlpha(0);
     this.g.tweens.add({ targets: cont, scale: 1, alpha: 1, duration: 240, ease: "Back.easeOut" });
+  }
+
+  /** Slim one-line strip pinned to the top of the screen (over the lane's sky,
+   *  clear of the action at ground level) — used by the hands-on steps. */
+  private banner(text: string) {
+    const vw = this.g.scale.width;
+    const w = Math.min(700, vw - 270); // stay clear of the skip button top-right
+    const t = this.g.add
+      .text(0, 0, text, {
+        fontFamily: EMOJI_FONT,
+        fontSize: "16px",
+        color: "#ffe08a",
+        align: "center",
+        wordWrap: { width: w - 32 },
+      })
+      .setOrigin(0.5);
+    const bw = t.width + 36;
+    const bh = t.height + 20;
+    const cont = this.keep(this.g.add.container(vw / 2, 10 + bh / 2).setDepth(94));
+    const gfx = this.g.add.graphics();
+    gfx.fillStyle(0x0e1015, 0.92);
+    gfx.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 10);
+    gfx.lineStyle(2, 0x8a6d3a, 0.9);
+    gfx.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 10);
+    cont.add([gfx, t]);
+    cont.setAlpha(0);
+    this.g.tweens.add({ targets: cont, alpha: 1, duration: 240 });
   }
 
   /** White pulse ring around the planted swap + a hand miming the drag. */

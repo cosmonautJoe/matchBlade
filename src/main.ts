@@ -324,8 +324,10 @@ class GameScene extends Phaser.Scene {
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
     // first time into the puzzle: the guided tutorial runs over the live scene
-    // (it gates strikes / scroll / board input itself; see src/tutorial.ts)
-    if (!this.meta.tutorialSeen) {
+    // (it gates strikes / scroll / board input itself; see src/tutorial.ts).
+    // ?tutorial on the URL force-replays it — handy for testing on devices.
+    const replay = new URLSearchParams(location.search).has("tutorial");
+    if (!this.meta.tutorialSeen || replay) {
       this.tutorial = new Tutorial(this);
       this.tutorial.start();
     }
