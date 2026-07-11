@@ -15,12 +15,35 @@
  */
 
 import Phaser from "phaser";
+import {
+  type MetaState,
+  loadMeta,
+  saveMeta,
+  canAfford,
+  spend,
+  BLACKSMITH_COST,
+  forgeCost,
+  questById,
+  questProgress,
+  offeredQuests,
+  acceptQuest,
+  collectQuestRewards,
+  allQuestsDone,
+  roadOpen,
+  advanceBiome,
+  nextBiome,
+  MAX_ACTIVE,
+} from "./meta";
 
-const DH = 560; // design height for the prop layer (smaller = more zoomed in)
-const DW = 1080; // full design width of the camp spread (smaller = more zoomed in; clamps vw/DW)
-const CONTENT_CX = -55; // horizontal centre of the visible window — keeps the DEPART portal fully in frame
+const DH = 480; // design height for the prop layer (smaller = more zoomed in)
+const DW = 940; // full design width of the camp spread (smaller = more zoomed in; clamps vw/DW)
+const CONTENT_CX = 30; // horizontal centre of the visible window — keeps the DEPART portal (design x≈445) fully in frame at the tighter zoom
 const GROUND_FRAC = 0.8; // ground line as a fraction of viewport height
 const PARALLAX_SRC_H = 216; // vnitti layer source height
+// Text-FIRST stack: real fonts draw digits/letters, emoji fall back per-glyph to the
+// system emoji font. Leading with an emoji font (as before) made iOS Safari render bare
+// ASCII digits with the emoji font's keycap glyphs — the garbled numbers in the quest UI.
+const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
 
 type EditableProp = { obj: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject; key: string; frame?: number };
 type LayerDef = { key: string; file: string; drift: number }; // drift px/s (clouds)
@@ -44,10 +67,25 @@ const CAMP_BIOMES: Record<string, BiomeDef> = {
     ],
     floor: { key: "grass-floor", file: "worlds/grass/floor.png", sx: 16, sy: 0, w: 64, h: 96 },
   },
+  forest: {
+    label: "HIGH FOREST",
+    // layered jungle parallax (plx1 flat sky .. plx5 foreground trees); high clouds still drift on top.
+    parallax: [
+      { key: "forest-sky", file: "worlds/forest/plx1.png", drift: 0 },
+      { key: "forest-far", file: "worlds/forest/plx2.png", drift: 0 },
+      { key: "forest-mid", file: "worlds/forest/plx3.png", drift: 0 },
+      { key: "forest-near", file: "worlds/forest/plx4.png", drift: 0 },
+      { key: "forest-front", file: "worlds/forest/plx5.png", drift: 0 },
+    ],
+    floor: { key: "forest-floor", file: "worlds/forest/floor.png", sx: 0, sy: 0, w: 112, h: 96 },
+  },
   // autumn / winter: same shape — GandalfHardcore floor atlas rows + Glacial/Autumn parallax sets.
 };
 
-const BIOME = "plains"; // the caravan's current stop (meta progression will drive this)
+/** The biome def for a saved biome key, defaulting to plains for unknown values. */
+function biomeDef(key: string): BiomeDef {
+  return CAMP_BIOMES[key] ?? CAMP_BIOMES.plains;
+}
 
 // Static camp dressing, baked from the in-camp editor (positions are FINAL — no squeeze).
 type Prop = { key: string; x: number; y: number; s: number; depth: number; frame?: number; flip?: boolean };
@@ -87,6 +125,14 @@ export class CampScene extends Phaser.Scene {
   private fireSnd: Phaser.Sound.BaseSound | null = null;
   private departing = false;
 
+  // meta progression (persistent across runs)
+  private meta!: MetaState;
+  private resText!: Phaser.GameObjects.Text;
+  private smith: Phaser.GameObjects.Sprite | null = null;
+  private tentMark: Phaser.GameObjects.GameObject[] = []; // gold "?" over the unhired smith's tent
+  private panelOpen = false;
+  private panelBox: Phaser.GameObjects.Container | null = null;
+
   // dev layout editor: drag props around, then copy the layout as JSON
   private campScale = 1;
   private editMode = false;
@@ -100,7 +146,7 @@ export class CampScene extends Phaser.Scene {
   }
 
   preload() {
-    const biome = CAMP_BIOMES[BIOME];
+    const biome = biomeDef(loadMeta().biome);
     const img = (key: string, file: string) => {
       if (!this.textures.exists(key)) this.load.image(key, file);
     };
@@ -109,6 +155,9 @@ export class CampScene extends Phaser.Scene {
 
     // hero (shared with GameScene — whoever loads first wins)
     if (!this.textures.exists("warrior")) this.load.spritesheet("warrior", "sprites/warrior.png", { frameWidth: 80, frameHeight: 64 });
+    // NPCs: the blacksmith (WarriorWoman sheet, same layout as the hero) + the quest-giving Wayfarer
+    if (!this.textures.exists("smith")) this.load.spritesheet("smith", "sprites/smith.png", { frameWidth: 80, frameHeight: 64 });
+    if (!this.textures.exists("goddess")) this.load.spritesheet("goddess", "camp/goddess.png", { frameWidth: 64, frameHeight: 64 });
 
     // camp props
     const P = "camp/";
@@ -129,6 +178,8 @@ export class CampScene extends Phaser.Scene {
     for (const n of [3, 4, 5, 6]) img(`cloud${n}`, `${P}cloud${n}.png`);
 
     if (!this.cache.audio.exists("camp_fire")) this.load.audio("camp_fire", "sounds/camp_fire.mp3");
+    for (const [k, f] of [["pickup", "pickup.mp3"], ["coin3", "coin3.mp3"], ["pouch", "pouch.mp3"]] as const)
+      if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
   }
 
   create() {
@@ -137,10 +188,15 @@ export class CampScene extends Phaser.Scene {
     this.clouds = [];
     this.editable = [];
     this.editMode = false;
-    const biome = CAMP_BIOMES[BIOME];
+    this.panelOpen = false;
+    this.panelBox = null;
+    this.smith = null;
+    this.meta = loadMeta();
+    const biome = biomeDef(this.meta.biome);
+    const groundKey = `camp-ground-${this.meta.biome}`; // per-biome so a road-onward rebuilds it
 
     // ground texture: seamless grass-top slice cropped from the biome's floor atlas
-    if (!this.textures.exists("camp-ground")) {
+    if (!this.textures.exists(groundKey)) {
       const src = this.textures.get(biome.floor.key).getSourceImage() as HTMLImageElement;
       const cv = document.createElement("canvas");
       cv.width = biome.floor.w;
@@ -148,7 +204,7 @@ export class CampScene extends Phaser.Scene {
       const cx = cv.getContext("2d")!;
       cx.imageSmoothingEnabled = false;
       cx.drawImage(src, biome.floor.sx, biome.floor.sy, biome.floor.w, biome.floor.h, 0, 0, biome.floor.w, biome.floor.h);
-      this.textures.addCanvas("camp-ground", cv);
+      this.textures.addCanvas(groundKey, cv);
     }
     // soft radial glow for fire/torch light
     if (!this.textures.exists("camp-glow")) {
@@ -171,16 +227,35 @@ export class CampScene extends Phaser.Scene {
       this.parallax.push({ sprite: ts, drift: l.drift });
     }
     this.buildClouds(); // high clouds drift above the mountains, below the props
-    this.ground = this.add.tileSprite(0, 0, 8, 8, "camp-ground").setOrigin(0, 0);
+    this.ground = this.add.tileSprite(0, 0, 8, 8, groundKey).setOrigin(0, 0);
 
     // --- the camp itself (design coords, anchored to the ground line) ---
     this.propBox = this.add.container(0, 0);
     this.buildCamp();
 
-    // biome tag, top-left
+    // biome tag + banked resources, top-left
     this.biomeLabel = this.add
       .text(14, 10, `⛺ CAMP — ${biome.label}`, { fontFamily: "monospace", fontStyle: "bold", fontSize: "15px", color: "#dfe3ea", stroke: "#0a0b0f", strokeThickness: 4 })
       .setDepth(50);
+    // TEMP debug: tap the biome tag to flip plains<->forest instantly (preview both worlds; remove before release)
+    this.biomeLabel.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+      if (this.editMode || this.panelOpen || this.departing) return;
+      this.meta.biome = this.meta.biome === "forest" ? "plains" : "forest";
+      saveMeta(this.meta);
+      this.scene.restart();
+    });
+    this.resText = this.add
+      .text(14, 34, "", { fontFamily: EMOJI_FONT, fontSize: "17px", color: "#dfe3ea", stroke: "#0a0b0f", strokeThickness: 4 })
+      .setDepth(50);
+    this.refreshResources();
+
+    // pay out any quests completed during the last run
+    const rewarded = collectQuestRewards(this.meta);
+    rewarded.forEach((q, i) => this.time.delayedCall(600 + i * 1300, () => {
+      this.sfx("coin3", 0.5);
+      this.toast(`quest complete: ${q.label}  +${q.reward} 💎`);
+      this.refreshResources();
+    }));
 
     if (import.meta.env.DEV) this.buildEditor();
 
@@ -207,6 +282,10 @@ export class CampScene extends Phaser.Scene {
     };
     mk("hero-idle", "warrior", 0, 7, 8);
     mk("hero-walk", "warrior", 48, 55, 15);
+    mk("smith-idle", "smith", 0, 7, 8);
+    mk("smith-walk", "smith", 48, 55, 12);
+    // NB: the goddess sheet is a walk cycle (no idle) — the Wayfarer holds a static
+    // frame + a gentle float instead (see buildCamp), so she doesn't march in place.
     mk("campfire-burn", "campfire", 0, 9, 10);
     mk("furnace-burn", "furnace", 0, 5, 8);
     mk("torch-burn", "torch", 6, 17, 12); // the lit mounted torch (rows 1-2), no unlit head
@@ -256,19 +335,59 @@ export class CampScene extends Phaser.Scene {
       this.tweens.add({ targets: g, alpha: a * 0.55, scale: scale * 0.92, duration: 380, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     };
 
-    for (const p of PROPS) put(p);
+    for (const p of PROPS) {
+      const im = put(p);
+      // the tarp tent hides the reluctant blacksmith until she's hired
+      if (p.key === "tarp_tent") {
+        im.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.tentTapped());
+        if (!this.meta.blacksmithHired) {
+          // gold glowing "?" — someone's in there
+          const qGlow = this.add
+            .image(p.x, -104, "camp-glow")
+            .setBlendMode(Phaser.BlendModes.ADD)
+            .setTint(0xffd24a)
+            .setScale(1.6)
+            .setAlpha(0.55)
+            .setDepth(9);
+          const qMark = this.add
+            .text(p.x, -104, "?", { fontFamily: "monospace", fontStyle: "bold", fontSize: "34px", color: "#ffd94a", stroke: "#5a3a08", strokeThickness: 6 })
+            .setOrigin(0.5)
+            .setDepth(10);
+          this.propBox.add(qGlow);
+          this.propBox.add(qMark);
+          this.tweens.add({ targets: qMark, y: -114, duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+          this.tweens.add({ targets: qGlow, alpha: 0.25, scale: 1.35, duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+          this.tentMark = [qGlow, qMark];
+        }
+      }
+    }
 
     // hero stands in the middle of camp
     this.hero = this.add.sprite(-47, 2, "warrior").setOrigin(0.5, 0.734).setScale(2.1).setDepth(7).play("hero-idle");
     this.propBox.add(this.hero);
 
-    // blacksmith placeholder: glowing furnace + plaque (tap -> coming soon)
+    // the Wayfarer — quest giver waiting by the road out (static frame + gentle float)
+    const goddess = this.add.sprite(300, 2, "goddess").setOrigin(0.5, 1).setScale(1.9).setDepth(6).setFrame(0);
+    this.propBox.add(goddess);
+    this.tweens.add({ targets: goddess, y: -5, duration: 1600, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    goddess.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.goddessTapped());
+    const mark = this.add
+      .text(300, -132, "❗", { fontFamily: EMOJI_FONT, fontSize: "20px" })
+      .setOrigin(0.5)
+      .setDepth(10);
+    this.propBox.add(mark);
+    this.tweens.add({ targets: mark, y: -140, duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+
+    // blacksmith's furnace (Wren stands here once hired; tap for hints / the forge)
     const furnace = sprite("furnace", "furnace-burn", 138, 0, 2.1, 5);
     glow(138, -46, 2.4, 0.26);
     this.plaque(138, -152, "⚒ BLACKSMITH");
-    furnace.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-      if (!this.editMode) this.toast("The blacksmith joins the caravan soon…");
-    });
+    furnace.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
+    if (this.meta.blacksmithHired) {
+      this.smith = this.add.sprite(85, 2, "smith").setOrigin(0.5, 0.734).setScale(2.1).setDepth(6).play("smith-idle");
+      this.propBox.add(this.smith);
+      this.smith.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
+    }
 
     // DEPART: humming portal (right side of camp)
     const portal = sprite("portal", "portal-spin", 445, 9, 2.6, 5);
@@ -308,15 +427,277 @@ export class CampScene extends Phaser.Scene {
     this.tweens.add({ targets: t, alpha: 0, duration: 400, delay: 1400, onComplete: () => t.destroy() });
   }
 
+  // ===== meta: resources / blacksmith / forge / quests =====
+
+  private sfx(key: string, volume = 0.5) {
+    if (this.cache.audio.exists(key)) this.sound.play(key, { volume });
+  }
+
+  private refreshResources() {
+    this.resText.setText(`🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`);
+  }
+
+  /** Simple modal panel: dim veil + title + lines + buttons. One at a time. */
+  private panel(title: string, lines: string[], buttons: { label: string; enabled?: boolean; cb?: () => void }[]) {
+    this.closePanel();
+    this.panelOpen = true;
+    const vw = this.scale.width;
+    const vh = this.scale.height;
+    const box = this.add.container(0, 0).setDepth(90);
+    const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive(); // swallow taps
+    const H = 150 + lines.length * 26 + 54;
+    const W = 470;
+    const bg = this.add.rectangle(vw / 2, vh / 2, W, H, 0x14171f).setStrokeStyle(3, 0x2a2d38);
+    const titleT = this.add
+      .text(vw / 2, vh / 2 - H / 2 + 34, title, { fontFamily: "monospace", fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
+      .setOrigin(0.5);
+    box.add([veil, bg, titleT]);
+    lines.forEach((ln, i) => {
+      box.add(
+        this.add
+          .text(vw / 2, vh / 2 - H / 2 + 74 + i * 26, ln, { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#dfe3ea" })
+          .setOrigin(0.5),
+      );
+    });
+    // buttons along the bottom
+    const bw = Math.min(190, (W - 40) / buttons.length - 10);
+    const totalW = buttons.length * bw + (buttons.length - 1) * 12;
+    buttons.forEach((b, i) => {
+      const bx = vw / 2 - totalW / 2 + bw / 2 + i * (bw + 12);
+      const by = vh / 2 + H / 2 - 38;
+      const enabled = b.enabled !== false;
+      const rect = this.add.rectangle(bx, by, bw, 40, enabled ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, enabled ? 0x54c26e : 0x3a3f4b);
+      const txt = this.add
+        .text(bx, by, b.label, { fontFamily: EMOJI_FONT, fontSize: "15px", color: enabled ? "#dff5df" : "#6a707c" })
+        .setOrigin(0.5);
+      if (enabled)
+        rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+          this.closePanel();
+          b.cb?.();
+        });
+      box.add([rect, txt]);
+    });
+    this.panelBox = box;
+  }
+
+  private closePanel() {
+    this.panelBox?.destroy();
+    this.panelBox = null;
+    this.panelOpen = false;
+  }
+
+  /** The reluctant smith, hiding in the tarp tent until paid. */
+  private tentTapped() {
+    if (this.editMode || this.panelOpen) return;
+    if (this.meta.blacksmithHired) {
+      this.toast("the tent is empty — Wren works the forge now");
+      return;
+    }
+    const afford = canAfford(this.meta, BLACKSMITH_COST);
+    this.panel(
+      "A VOICE FROM THE TENT",
+      [
+        `"Hmph. The road took my tools and my nerve."`,
+        `"Bring me 🪵 ${BLACKSMITH_COST.wood} and 🪨 ${BLACKSMITH_COST.ore} and I'll light that furnace."`,
+        ``,
+        `your bank:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}`,
+      ],
+      [
+        { label: `HIRE  🪵${BLACKSMITH_COST.wood} 🪨${BLACKSMITH_COST.ore}`, enabled: afford, cb: () => this.hireSmith() },
+        { label: "maybe later" },
+      ],
+    );
+  }
+
+  private hireSmith() {
+    spend(this.meta, BLACKSMITH_COST);
+    this.meta.blacksmithHired = true;
+    saveMeta(this.meta);
+    this.refreshResources();
+    this.sfx("pouch", 0.6);
+    for (const m of this.tentMark) m.destroy(); // the "?" is answered
+    this.tentMark = [];
+    // Wren steps out of the tent and walks to her forge
+    const smith = this.add.sprite(-297, 2, "smith").setOrigin(0.5, 0.734).setScale(2.1).setDepth(6).play("smith-walk");
+    this.propBox.add(smith);
+    this.smith = smith;
+    this.tweens.add({
+      targets: smith,
+      x: 85,
+      duration: 2600,
+      ease: "Sine.easeInOut",
+      onComplete: () => {
+        smith.play("smith-idle");
+        this.sfx("pickup", 0.6);
+        this.toast("Wren the blacksmith joins the caravan! ⚒");
+        const rewarded = collectQuestRewards(this.meta);
+        if (rewarded.length) this.time.delayedCall(1500, () => {
+          this.sfx("coin3", 0.5);
+          this.toast(`quest complete: ${rewarded[0].label}  +${rewarded[0].reward} 💎`);
+          this.refreshResources();
+        });
+      },
+    });
+  }
+
+  /** Wren's forge: buy permanent sword damage, scaling ore cost. */
+  private furnaceTapped() {
+    if (this.editMode || this.panelOpen) return;
+    if (!this.meta.blacksmithHired) {
+      this.toast("the furnace is cold… someone in that tent might know its trade");
+      return;
+    }
+    const cost = forgeCost(this.meta.swordLevel);
+    const afford = canAfford(this.meta, { ore: cost });
+    this.panel(
+      "⚒ WREN'S FORGE",
+      [
+        `blade edge:  +${this.meta.swordLevel} → +${this.meta.swordLevel + 1} first-strike damage`,
+        ``,
+        `your bank:  🪨 ${this.meta.ore}`,
+      ],
+      [
+        { label: `FORGE  🪨${cost}`, enabled: afford, cb: () => this.forgeUpgrade(cost) },
+        { label: "not yet" },
+      ],
+    );
+  }
+
+  private forgeUpgrade(cost: number) {
+    spend(this.meta, { ore: cost });
+    this.meta.swordLevel++;
+    saveMeta(this.meta);
+    this.refreshResources();
+    this.sfx("pickup", 0.65);
+    this.toast(`the edge sings — sword damage +${this.meta.swordLevel} ⚔`);
+    const rewarded = collectQuestRewards(this.meta);
+    if (rewarded.length) this.time.delayedCall(1500, () => {
+      this.sfx("coin3", 0.5);
+      this.toast(`quest complete: ${rewarded[0].label}  +${rewarded[0].reward} 💎`);
+      this.refreshResources();
+    });
+  }
+
+  /** The Wayfarer's quest board: accepted quests with progress + new offers to accept. */
+  private goddessTapped() {
+    if (this.editMode || this.panelOpen) return;
+    this.closePanel();
+    this.panelOpen = true;
+
+    const vw = this.scale.width;
+    const vh = this.scale.height;
+    const active = this.meta.active;
+    const offers = offeredQuests(this.meta);
+    const rows = Math.max(1, active.length + offers.length) + (active.length && offers.length ? 1 : 0);
+    const W = 600;
+    const H = 168 + rows * 34 + 56;
+    const box = this.add.container(0, 0).setDepth(90);
+    const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive();
+    const bg = this.add.rectangle(vw / 2, vh / 2, W, H, 0x14171f).setStrokeStyle(3, 0x2a2d38);
+    const title = this.add
+      .text(vw / 2, vh / 2 - H / 2 + 32, "THE WAYFARER", { fontFamily: "monospace", fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
+      .setOrigin(0.5);
+    box.add([veil, bg, title]);
+
+    const left = vw / 2 - W / 2 + 26;
+    let y = vh / 2 - H / 2 + 72;
+    const line = (txt: string, color = "#dfe3ea", size = "15px") => {
+      const t = this.add.text(left, y, txt, { fontFamily: EMOJI_FONT, fontSize: size, color });
+      box.add(t);
+      return t;
+    };
+
+    if (active.length) {
+      line(`— sworn (${active.length}/${MAX_ACTIVE}) —`, "#8a8f98", "13px");
+      y += 26;
+      for (const aq of active) {
+        const q = questById(aq.id)!;
+        const p = questProgress(this.meta, aq);
+        const done = p.have >= p.need;
+        line(`${done ? "✅" : "▫️"} ${q.label}   (${p.have}/${p.need})`, done ? "#a9e6a9" : "#dfe3ea");
+        y += 34;
+      }
+    }
+    if (offers.length) {
+      line(`— the Wayfarer offers —`, "#8a8f98", "13px");
+      y += 26;
+      for (const q of offers) {
+        line(`${q.label}   +${q.reward}💎`);
+        // ACCEPT button on the row
+        const bx = vw / 2 + W / 2 - 78;
+        const rect = this.add.rectangle(bx, y + 10, 104, 30, 0x2e5e34).setStrokeStyle(2, 0x54c26e).setInteractive({ useHandCursor: true });
+        const bt = this.add.text(bx, y + 10, "ACCEPT", { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#dff5df" }).setOrigin(0.5);
+        rect.on("pointerdown", () => {
+          if (acceptQuest(this.meta, q.id)) {
+            this.sfx("pickup", 0.55);
+            this.toast(`sworn: ${q.label}`);
+            this.closePanel();
+            this.goddessTapped(); // reopen with refreshed board
+          }
+        });
+        box.add([rect, bt]);
+        y += 34;
+      }
+    }
+    const cleared = allQuestsDone(this.meta);
+    const canTravel = roadOpen(this.meta); // pool cleared AND a next biome exists
+    if (!active.length && !offers.length) {
+      line(cleared ? "「 Every oath is kept. The road onward lies open. 」" : "「 Rest. The road will ask more of you soon. 」", "#ffe08a");
+      y += 34;
+    } else {
+      y += 6;
+      const foot = cleared
+        ? "「 Every oath is kept. The road onward lies open. 」"
+        : "「 Keep every oath on my list, and I will open the road. 」";
+      box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, foot, { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
+    }
+
+    // bottom button: travel onward once the road is open, otherwise just close
+    const cbx = vw / 2;
+    const cby = vh / 2 + H / 2 - 36;
+    if (canTravel) {
+      const next = nextBiome(this.meta)!;
+      const label = `▸ take the road to the ${next === "forest" ? "High Forest" : next} ▸`;
+      const crect = this.add.rectangle(cbx, cby, 300, 40, 0x2e5e34).setStrokeStyle(2, 0x54c26e).setInteractive({ useHandCursor: true });
+      const ct = this.add.text(cbx, cby, label, { fontFamily: "monospace", fontStyle: "bold", fontSize: "14px", color: "#dff5df" }).setOrigin(0.5);
+      crect.on("pointerdown", () => this.travelOnward());
+      box.add([crect, ct]);
+    } else {
+      const crect = this.add.rectangle(cbx, cby, 150, 38, 0x2a2d38).setStrokeStyle(2, 0x3a3f4b).setInteractive({ useHandCursor: true });
+      const ct = this.add.text(cbx, cby, "onward", { fontFamily: "monospace", fontSize: "15px", color: "#dfe3ea" }).setOrigin(0.5);
+      crect.on("pointerdown", () => this.closePanel());
+      box.add([crect, ct]);
+    }
+
+    this.panelBox = box;
+  }
+
+  /** The road is open — break camp and rebuild the scene in the next biome. */
+  private travelOnward() {
+    if (this.departing) return;
+    this.departing = true;
+    this.closePanel();
+    const next = nextBiome(this.meta);
+    if (!advanceBiome(this.meta) || !next) {
+      this.departing = false;
+      return;
+    }
+    this.sfx("pickup", 0.6);
+    this.toast("the caravan breaks camp…");
+    this.cameras.main.fadeOut(900, 6, 8, 12);
+    this.cameras.main.once("camerafadeoutcomplete", () => this.scene.restart());
+  }
+
   /** Head out: the hero jogs off toward the portal, the day fades, the run begins. */
   private depart() {
-    if (this.departing || this.editMode) return;
+    if (this.departing || this.editMode || this.panelOpen) return;
     this.departing = true;
     this.hero.play("hero-walk");
-    this.tweens.add({ targets: this.hero, x: 900, duration: 1100, ease: "Sine.easeIn" });
-    this.tweens.add({ targets: this.fireSnd, volume: 0, duration: 700 });
-    this.cameras.main.fadeOut(750, 5, 6, 10);
-    this.time.delayedCall(800, () => this.scene.start("game"));
+    // a slow, deliberate jog to the portal — then a gentle fade well after he sets off
+    this.tweens.add({ targets: this.hero, x: 700, duration: 2300, ease: "Sine.easeIn" });
+    this.tweens.add({ targets: this.fireSnd, volume: 0, duration: 1800 });
+    this.time.delayedCall(1400, () => this.cameras.main.fadeOut(1300, 5, 6, 10));
+    this.time.delayedCall(2750, () => this.scene.start("game"));
   }
 
   // ===== dev layout editor: toggle ✎, drag anything, 📋 copies the layout JSON =====

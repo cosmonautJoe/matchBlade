@@ -94,6 +94,27 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
 
 - **Camp scene** between runs: wagons in a line, campfire, tap a recruit to
   spend wood/ore on their track. Persist via localStorage.
+- **v1 SHIPPED (src/meta.ts + camp.ts):** resources bank across runs (shown on
+  the death screen); the blacksmith ("Wren") hides in the tarp tent (gold "?"
+  marker) until paid **30 wood + 30 ore**, then walks out and mans the furnace;
+  her forge sells **+1 first-strike sword damage** per level (20 + 15/level ore).
+- **Quest board (src/meta.ts):** the Wayfarer (Goddess sprite, by the portal)
+  OFFERS quests from a 10-deep plains pool; the player ACCEPTS up to 3 at a
+  time. Progress is **delta-based from acceptance** (no retro-completing);
+  accepted quests show with live progress in the run HUD under DEPTH/SCORE.
+  Completing quests pays treasure, frees a slot, and surfaces the next offers.
+  Clearing the WHOLE pool opens the road to the next biome (YMBAB-style gate;
+  hiring alone does NOT advance the area). Keys stay per-run.
+- **Biomes & the road gate (SHIPPED, src/meta.ts):** `meta.biome` is the caravan's
+  current stop, ordered by `BIOME_ORDER = [plains, forest]`, each with its own quest
+  pool in `QUEST_POOLS`. Clearing the current pool → `roadOpen()` true → the Wayfarer's
+  board shows a **"take the road onward"** button that calls `advanceBiome()` (bumps the
+  biome, clears active oaths, saves) and rebuilds the camp in the new biome. Both scenes
+  redress off `meta.biome`: the **camp** via `CAMP_BIOMES` (forest = layered jungle
+  parallax + baked forest floor) and the **run** via `RUN_BIOMES` in main.ts (forest
+  parallax layers + forest ground crop). Forest art lives in `public/worlds/forest/`
+  (plx1–5 + baked floor.png). TEMP: tapping the camp biome tag flips plains↔forest for
+  preview (remove before release).
 - **Character budget:** one portrait, a name, and a single line of dialogue per
   recruit (on rescue + at camp). No dialogue trees, no cutscenes, and recruits
   never fight beside you — that's sequel scope.
@@ -145,6 +166,16 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     enemy art (boar/bee/snail) is staged for later.
   - Runner state is a pure, unit-tested module (`src/run.ts`); a single
     `pressure` value in [0,1] is the fail axis (see §4).
+  - **First-run tutorial (src/tutorial.ts):** a step-driven spotlight overlay
+    the first time the puzzle scene opens — dim veil + hole, card per idea,
+    progress dots, skippable. Two beats are hands-on: a planted one-swap sword
+    match (`rigSwapMatch`, re-planted if a cascade eats it) to show damage, and
+    a shield match followed by a scripted enemy strike clanging off the guard.
+    A scripted "pierce" strike demos knockback toward the skull. While active
+    the scene holds the run harmless (no strikes / scroll / chests, board
+    unlocked only for the hands-on steps). Plays once via `meta.tutorialSeen`.
+    Copy notes: resource tiles are pitched as "spend at camp, more uses coming"
+    since tile roles may still change.
 - `npm install` then `npm run dev` -> the harness picks a free port (see
   `vite.config.ts` / `.claude/launch.json` `autoPort`).
 - **Still placeholder / TODO:** real tile-icon art, weapon-vs-enemy-type gating

@@ -33,6 +33,8 @@ import {
 } from "./board";
 import { type RunState, type MatchOutcome, SWORD, newRun, applyMatches, enemyStrike, spawnNext, scroll } from "./run";
 import { CampScene } from "./camp";
+import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
+import { Tutorial } from "./tutorial";
 
 // ---- layout ---------------------------------------------------------------
 // The centre column (runner lane over the match board) is authored in these fixed
@@ -70,10 +72,11 @@ const HERO_ORIGIN = 0.734; // WarriorMan feet at y47/64
 const SLIME_ORIGIN = 0.656; // slime base at y41/64
 const SKULL_X = PADIN + 28; // death marker at the far left of the lane
 const SAFE_X = PADIN + 300; // hero x at pressure 0
-const ENGAGE_GAP = 130; // enemy centre sits this far right of the hero when fighting
+const ENGAGE_GAP = 180; // enemy centre sits this far right of the hero when fighting (widened for bigger sprites)
 const ENTER_X = CENTER_DW + 80; // enemies walk in from off the right
-const HERO_SCALE = 2.3; // WarriorMan in the taller lane
-const SLIME_SCALE = 2.2; // ground slime
+const HERO_SCALE = 3.8; // WarriorMan in the taller lane
+const SLIME_SCALE = 3.7; // ground slime
+const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
 const HP_W = 70;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
@@ -85,16 +88,45 @@ const FACE = TILE - 8; // tile face square (64) — sliced into chaotic shards o
 const SHARD_PATTERNS = 3; // pre-baked crack patterns per tile type (variety)
 const WORLD_SCROLL = 170; // px/sec the world pans while the hero is running
 const FLOOR_SCALE = 1.6; // show the grass chunk chunky so the blades read like the reference
-const PARALLAX_SRC_H = 216; // source height of the vnitti parallax layers
-// parallax layers, back-to-front, with scroll factors (0 = static .. 1 = foreground)
-const PARALLAX: { key: string; scroll: number }[] = [
-  { key: "grass-sky", scroll: 0.04 },
-  { key: "grass-clouds-mid", scroll: 0.1 },
-  { key: "grass-mtn-far", scroll: 0.16 },
-  { key: "grass-mtn", scroll: 0.3 },
-  { key: "grass-clouds-front", scroll: 0.24 },
-  { key: "grass-hill", scroll: 0.5 },
-];
+const PARALLAX_SRC_H = 216; // source height of the parallax layers (both biome sets are 216 tall)
+// Per-biome run backdrop: parallax layers back-to-front with scroll factors (0 = static ..
+// 1 = foreground), plus the floor atlas + the ground-band crop [sx,sy,w,h]. meta.biome picks one.
+type RunBiome = {
+  parallax: { key: string; file: string; scroll: number }[];
+  floorKey: string;
+  floorFile: string;
+  groundKey: string;
+  crop: [number, number, number, number];
+};
+const RUN_BIOMES: Record<string, RunBiome> = {
+  plains: {
+    parallax: [
+      { key: "grass-sky", file: "worlds/grass/sky.png", scroll: 0.04 },
+      { key: "grass-clouds-mid", file: "worlds/grass/clouds_mid.png", scroll: 0.1 },
+      { key: "grass-mtn-far", file: "worlds/grass/mountains_far.png", scroll: 0.16 },
+      { key: "grass-mtn", file: "worlds/grass/mountains.png", scroll: 0.3 },
+      { key: "grass-clouds-front", file: "worlds/grass/clouds_front.png", scroll: 0.24 },
+      { key: "grass-hill", file: "worlds/grass/hill.png", scroll: 0.5 },
+    ],
+    floorKey: "grass-floor",
+    floorFile: "worlds/grass/floor.png",
+    groundKey: "grass-ground",
+    crop: [16, 0, 64, 96],
+  },
+  forest: {
+    parallax: [
+      { key: "forest-sky", file: "worlds/forest/plx1.png", scroll: 0.03 },
+      { key: "forest-far", file: "worlds/forest/plx2.png", scroll: 0.08 },
+      { key: "forest-mid", file: "worlds/forest/plx3.png", scroll: 0.16 },
+      { key: "forest-near", file: "worlds/forest/plx4.png", scroll: 0.3 },
+      { key: "forest-front", file: "worlds/forest/plx5.png", scroll: 0.5 },
+    ],
+    floorKey: "forest-floor",
+    floorFile: "worlds/forest/floor.png",
+    groundKey: "forest-ground",
+    crop: [0, 0, 112, 96],
+  },
+};
 
 // ---- placeholder tile look (see DESIGN.md §3) -----------------------------
 const TILE_COLORS = [
@@ -108,7 +140,9 @@ const TILE_COLORS = [
 ];
 // icon per tile type: sword, staff, shield, key, treasure, wood, ore
 const TILE_GLYPH = ["⚔️", "🪄", "🛡️", "🔑", "💎", "🪵", "🪨"];
-const EMOJI_FONT = '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+// Text-FIRST so iOS Safari draws real digit/letter glyphs; emoji fall back per-glyph to
+// the system emoji font. (Leading with an emoji font garbles ASCII digits on iPhone.)
+const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
 
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
@@ -150,9 +184,11 @@ class GameScene extends Phaser.Scene {
   private run!: RunState;
   private phase: "advance" | "fight" | "chest" = "advance";
   private parallax: { sprite: Phaser.GameObjects.TileSprite; scroll: number }[] = [];
+  private world: RunBiome = RUN_BIOMES.plains; // backdrop set for the current biome
   private floor!: Phaser.GameObjects.TileSprite;
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
+  private orcAnim = "orc"; // anim-key prefix of the currently spawned slime variant (orc / orc2 / orc3)
   private orcDying = false;
   private heroLockX = false; // freeze hero x while a killing swing lands, then surge
   private enemyHpBar!: Phaser.GameObjects.Rectangle;
@@ -176,6 +212,10 @@ class GameScene extends Phaser.Scene {
   private chestActive = false; // takeover sequence running — board input is frozen
   private chestFast = false; // tap-to-skip: shortens every remaining beat
   private sinceChest = 0; // kills since the last chest
+  private chestsOpened = 0; // opened this run (banked into meta quest stats on death)
+  private meta!: MetaState; // snapshot at run start — drives the in-run quest HUD
+  private questText!: Phaser.GameObjects.Text;
+  private tutorial: Tutorial | null = null; // first-entry guided overlay (null once seen)
   private itemSlots: { x: number; y: number; s: number; bg: Phaser.GameObjects.Rectangle; inner: Phaser.GameObjects.Rectangle; plus: Phaser.GameObjects.Text; icon: Phaser.GameObjects.Text | null }[] = [];
 
   constructor() {
@@ -195,17 +235,20 @@ class GameScene extends Phaser.Scene {
     sheet("slime-walk", "slime_run.png", 64, 64);
     sheet("slime-hurt", "slime_hurt.png", 64, 64);
     sheet("slime-death", "slime_death.png", 64, 64);
-    // grass world backdrop: vnitti parallax layers + GandalfHardcore floor atlas
+    // extra slime variants (same pack, same layout): green=1, blue=2, dark=3 — depth adds them
+    for (const n of ["2", "3"]) {
+      sheet(`slime${n}-idle`, `slime${n}_idle.png`, 64, 64);
+      sheet(`slime${n}-walk`, `slime${n}_run.png`, 64, 64);
+      sheet(`slime${n}-hurt`, `slime${n}_hurt.png`, 64, 64);
+      sheet(`slime${n}-death`, `slime${n}_death.png`, 64, 64);
+    }
+    // world backdrop for the current biome: parallax layers + floor atlas (meta.biome picks the set)
+    this.world = RUN_BIOMES[loadMeta().biome] ?? RUN_BIOMES.plains;
     const img = (key: string, file: string) => {
       if (!this.textures.exists(key)) this.load.image(key, file);
     };
-    img("grass-sky", "worlds/grass/sky.png");
-    img("grass-mtn-far", "worlds/grass/mountains_far.png");
-    img("grass-mtn", "worlds/grass/mountains.png");
-    img("grass-hill", "worlds/grass/hill.png");
-    img("grass-clouds-mid", "worlds/grass/clouds_mid.png");
-    img("grass-clouds-front", "worlds/grass/clouds_front.png");
-    img("grass-floor", "worlds/grass/floor.png");
+    for (const l of this.world.parallax) img(l.key, l.file);
+    img(this.world.floorKey, this.world.floorFile);
     // sfx — combat is dedicated WAVs; swap/gameover are the foley pack
     const audio: Record<string, string> = {
       swing1: "swing1.wav", swing2: "swing2.wav", swing3: "swing3.wav",
@@ -227,7 +270,9 @@ class GameScene extends Phaser.Scene {
   }
 
   create() {
-    this.run = newRun();
+    this.meta = loadMeta();
+    this.run = newRun(this.meta.swordLevel); // forge levels bite through the whole run
+    this.chestsOpened = 0;
     this.busy = false;
     this.down = null;
     this.orc = null;
@@ -241,6 +286,7 @@ class GameScene extends Phaser.Scene {
     this.chestActive = false;
     this.chestFast = false;
     this.sinceChest = 0;
+    this.tutorial = null;
     this.buildTileFaces();
     this.buildChestArt();
 
@@ -277,6 +323,13 @@ class GameScene extends Phaser.Scene {
     this.time.addEvent({ delay: STRIKE_MS, loop: true, callback: () => this.strike() });
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
+    // first time into the puzzle: the guided tutorial runs over the live scene
+    // (it gates strikes / scroll / board input itself; see src/tutorial.ts)
+    if (!this.meta.tutorialSeen) {
+      this.tutorial = new Tutorial(this);
+      this.tutorial.start();
+    }
+
     if (import.meta.env.DEV) (globalThis as unknown as { __mb: GameScene }).__mb = this;
   }
 
@@ -302,11 +355,20 @@ class GameScene extends Phaser.Scene {
     mk("orc-hurt", "slime-hurt", 0, 4, 12, 0);
     mk("orc-death", "slime-death", 0, 9, 12, 0);
     mk("orc-attack", "slime-walk", 0, 7, 12, 0); // slime lunges (reuse run)
+    // variant anims mirror the orc-* frame layout (orc2 = blue slime, orc3 = dark slime)
+    for (const [p, n] of [["orc2", "2"], ["orc3", "3"]] as const) {
+      mk(`${p}-idle`, `slime${n}-idle`, 0, 5, 6, -1);
+      mk(`${p}-walk`, `slime${n}-walk`, 0, 7, 10, -1);
+      mk(`${p}-hurt`, `slime${n}-hurt`, 0, 4, 12, 0);
+      mk(`${p}-death`, `slime${n}-death`, 0, 9, 12, 0);
+      mk(`${p}-attack`, `slime${n}-walk`, 0, 7, 12, 0);
+    }
   }
 
-  /** Crop a seamless middle slice (grass top + dirt, no rocky side edges) from the floor atlas. */
+  /** Crop a seamless ground slice (grass top + dirt, no rocky side edges) from the biome floor atlas. */
   private buildGrassGround() {
-    if (!this.textures.exists("grass-ground")) this.cropTile("grass-ground", "grass-floor", 16, 0, 64, 96);
+    const w = this.world;
+    if (!this.textures.exists(w.groundKey)) this.cropTile(w.groundKey, w.floorKey, ...w.crop);
   }
 
   /** Copy a region of a loaded image into its own texture, for TileSprite tiling. */
@@ -411,6 +473,7 @@ class GameScene extends Phaser.Scene {
       this.resVals[i].setPosition(padX + 40, y);
     }
     this.scoreText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 16));
+    this.questText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 92));
     this.gearText.setPosition(padX, y0 + uh - 14);
 
     // right: item slots, vertical, centred
@@ -449,6 +512,9 @@ class GameScene extends Phaser.Scene {
     this.scoreText = this.add
       .text(0, 0, "", { fontFamily: "monospace", fontSize: "15px", color: "#ffe08a", lineSpacing: 8 })
       .setOrigin(0, 0);
+    this.questText = this.add
+      .text(0, 0, "", { fontFamily: "monospace", fontSize: "12px", color: "#a9c8a9", lineSpacing: 7 })
+      .setOrigin(0, 0);
     this.gearText = this.add.text(0, 0, "⚙", { fontFamily: EMOJI_FONT, fontSize: "26px", color: "#c7ccd6" }).setOrigin(0, 1);
     this.gearText.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.debugCombo()); // TEMP: tap gear = force a combo
     this.rotateHint = this.add
@@ -470,6 +536,15 @@ class GameScene extends Phaser.Scene {
     const vals = [r.wood, r.ore, r.treasure, r.keys];
     for (let i = 0; i < this.resVals.length; i++) this.resVals[i].setText(`${vals[i]}`);
     this.scoreText.setText(`DEPTH   ${this.run.killed}\n\nSCORE   ${this.run.score}`);
+    // accepted quests, with progress counting this run's haul live
+    const live = { kills: this.run.killed, chests: this.chestsOpened, wood: r.wood, ore: r.ore };
+    const lines = this.meta.active.map((aq) => {
+      const q = questById(aq.id);
+      if (!q) return "";
+      const p = questProgress(this.meta, aq, live);
+      return `${p.have >= p.need ? "✓" : "·"} ${q.shortLabel.padEnd(14)} ${p.have}/${p.need}`;
+    });
+    this.questText.setText(lines.length ? `QUESTS\n${lines.join("\n")}` : "");
   }
 
   // --- runner lane (all objects live in centerBox, design-local coords) ---
@@ -477,13 +552,13 @@ class GameScene extends Phaser.Scene {
     // --- parallax world backdrop, back-to-front (each layer fills the lane) ---
     const pscale = LANE_H / PARALLAX_SRC_H; // fit the 216-tall layers into the lane
     this.parallax = [];
-    for (const { key, scroll: s } of PARALLAX) {
+    for (const { key, scroll: s } of this.world.parallax) {
       const ts = this.inBox(this.add.tileSprite(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, key)).setTileScale(pscale);
       this.parallax.push({ sprite: ts, scroll: s });
     }
 
-    // grass ground band the hero runs along
-    this.floor = this.inBox(this.add.tileSprite(CXC, GROUND_Y + FLOOR_H / 2, UI_W, FLOOR_H, "grass-ground")).setTileScale(FLOOR_SCALE);
+    // ground band the hero runs along
+    this.floor = this.inBox(this.add.tileSprite(CXC, GROUND_Y + FLOOR_H / 2, UI_W, FLOOR_H, this.world.groundKey)).setTileScale(FLOOR_SCALE);
 
     this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H).setStrokeStyle(2, 0x2a2d38)); // border
     this.inBox(this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "48px", color: "#c0424a" }).setOrigin(0.5, 1));
@@ -514,12 +589,12 @@ class GameScene extends Phaser.Scene {
   // --- input ---
   private buildInput() {
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
-      if (this.busy || this.run.over || this.chestActive) return;
+      if (this.busy || this.run.over || this.chestActive || this.tutorial?.lockBoard) return;
       const coord = this.cellAt(p.x, p.y);
       if (coord) this.down = { coord, x: p.x, y: p.y };
     });
     this.input.on("pointerup", (p: Phaser.Input.Pointer) => {
-      if (!this.down || this.busy || this.run.over || this.chestActive) {
+      if (!this.down || this.busy || this.run.over || this.chestActive || this.tutorial?.lockBoard) {
         this.down = null;
         return;
       }
@@ -539,7 +614,8 @@ class GameScene extends Phaser.Scene {
 
   // --- per-frame: scroll pressure (only while engaged) + sprite placement ---
   update(_time: number, delta: number) {
-    if (this.phase === "fight" && !this.run.over) scroll(this.run, SCROLL_PER_SEC * (delta / 1000));
+    // the tutorial holds the run harmless — no scroll pressure while it teaches
+    if (this.phase === "fight" && !this.run.over && !this.tutorial?.active) scroll(this.run, SCROLL_PER_SEC * (delta / 1000));
 
     // pan the world while the hero runs to the next foe; hold still in a fight
     const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
@@ -590,8 +666,14 @@ class GameScene extends Phaser.Scene {
     this.phase = "advance";
     this.hero.play("hero-walk", true); // stride forward while the foe approaches
 
+    // pick a slime variant: green early, blue joins mid-run, blue/dark deep (deeper foes look tougher)
+    const k = this.run.killed;
+    const pool = k < 3 ? ["orc"] : k < 8 ? ["orc", "orc2"] : ["orc2", "orc3"];
+    this.orcAnim = Phaser.Utils.Array.GetRandom(pool);
+    const idleTex = this.orcAnim === "orc" ? "slime-idle" : this.orcAnim === "orc2" ? "slime2-idle" : "slime3-idle";
+
     const orc = this.inBox(
-      this.add.sprite(ENTER_X, GROUND_Y, "slime-idle").setOrigin(0.5, SLIME_ORIGIN).setScale(SLIME_SCALE).play("orc-walk"),
+      this.add.sprite(ENTER_X, GROUND_Y, idleTex).setOrigin(0.5, SLIME_ORIGIN).setScale(SLIME_SCALE).play(`${this.orcAnim}-walk`),
     );
     this.orc = orc;
     this.sfx(this.pick(["squish1", "squish2"]), 0.32, 0.95 + Math.random() * 0.1); // one squelch as it bounces in
@@ -611,7 +693,7 @@ class GameScene extends Phaser.Scene {
   private enterFight() {
     if (this.run.over || !this.orc || this.orcDying) return;
     this.phase = "fight";
-    this.orc.play("orc-idle");
+    this.orc.play(`${this.orcAnim}-idle`);
     this.hero.play("hero-idle", true);
   }
 
@@ -646,6 +728,7 @@ class GameScene extends Phaser.Scene {
 
     await this.resolve();
     if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    this.tutorial?.onBoardSettled();
     this.busy = false;
   }
 
@@ -680,6 +763,7 @@ class GameScene extends Phaser.Scene {
       await Promise.all(fades);
 
       const outcome = applyMatches(this.run, counts);
+      this.tutorial?.onCascade(counts);
       const swords = counts[SWORD] ?? 0;
       if (swords > 0) swordHits++;
       this.onCombat(outcome, swords, swordHits);
@@ -729,8 +813,8 @@ class GameScene extends Phaser.Scene {
       this.killOrc(ms + 420); // hold the next foe until the combo + surge finishes
     } else {
       this.playCombo(combo, this.heroBaseAnim()); // combo, then fall back to idle/run
-      this.orc.play("orc-hurt").once("animationcomplete", () => {
-        if (this.orc && !this.orcDying) this.orc.play(this.phase === "fight" ? "orc-idle" : "orc-walk");
+      this.orc.play(`${this.orcAnim}-hurt`).once("animationcomplete", () => {
+        if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-${this.phase === "fight" ? "idle" : "walk"}`);
       });
     }
   }
@@ -791,7 +875,7 @@ class GameScene extends Phaser.Scene {
     this.orc = null;
     if (dying) {
       this.tweens.killTweensOf(dying);
-      dying.play("orc-death");
+      dying.play(`${this.orcAnim}-death`);
       dying.once("animationcomplete", () => {
         this.tweens.add({ targets: dying, alpha: 0, duration: 260, onComplete: () => dying.destroy() });
       });
@@ -799,9 +883,9 @@ class GameScene extends Phaser.Scene {
 
     this.time.delayedCall(Math.max(760, afterMs), () => {
       if (this.run.over) return;
-      if (++this.sinceChest >= CHEST_EVERY) {
+      if (++this.sinceChest >= CHEST_EVERY && !this.tutorial?.active) {
         this.sinceChest = 0;
-        this.spawnChest(); // treasure interlude — the next foe waits its turn
+        this.spawnChest(); // treasure interlude — the next foe waits its turn (held during the tutorial)
       } else {
         spawnNext(this.run);
         this.spawnOrc();
@@ -810,15 +894,16 @@ class GameScene extends Phaser.Scene {
     });
   }
 
-  private strike() {
+  private strike(force = false) {
+    if (!force && this.tutorial?.active) return; // the tutorial scripts its own strikes
     if (this.run.over || this.phase !== "fight" || this.orcDying || !this.orc || !this.run.enemy) return;
     const blockBefore = this.run.block;
     const net = enemyStrike(this.run);
     this.sfx("slimeatk", 0.3); // slime lunges
     if (this.run.block < blockBefore) // armour soaked some/all of it -> clang on contact
       this.time.delayedCall(90, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.45));
-    this.orc.play("orc-attack").once("animationcomplete", () => {
-      if (this.orc && !this.orcDying) this.orc.play("orc-idle");
+    this.orc.play(`${this.orcAnim}-attack`).once("animationcomplete", () => {
+      if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
     });
     if (net > 0) {
       this.cameras.main.shake(150, 0.006);
@@ -883,6 +968,7 @@ class GameScene extends Phaser.Scene {
   private async openChest() {
     const cont = this.chest!;
     this.chestActive = true;
+    this.chestsOpened++;
     this.chestFast = false;
     const skip = () => (this.chestFast = true); // any tap fast-forwards the remaining beats
     this.input.on("pointerdown", skip);
@@ -1133,6 +1219,82 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  // ================= first-run tutorial host API (src/tutorial.ts drives these) =================
+
+  /** design-local -> screen px (the centre column is scaled + centred by layout()). */
+  public toScreen(x: number, y: number) {
+    return { x: this.centerBox.x + x * this.centerScale, y: this.centerBox.y + y * this.centerScale };
+  }
+  public uiScale() {
+    return this.centerScale;
+  }
+  public laneRectD() {
+    return { x: GRID_X, y: LANE_Y, w: UI_W, h: LANE_H };
+  }
+  public boardRectD() {
+    return { x: GRID_X, y: GRID_Y, w: GRID_W, h: GRID_H };
+  }
+  public cellRectD(r: number, c: number) {
+    return { x: GRID_X + c * TILE, y: GRID_Y + r * TILE, w: TILE, h: TILE };
+  }
+  /** Bounding box of HUD resource rows [from..to] (wood, ore, treasure, keys) — already screen px. */
+  public resourceRowsRect(from: number, to: number) {
+    const a = this.resIcons[from];
+    const b = this.resIcons[to];
+    return { x: a.x - 10, y: a.y - 22, w: 180, h: b.y - a.y + 44 };
+  }
+  /** Scripted strike for the tutorial beats; pierce ignores banked block (the knockback demo). */
+  public demoStrike(pierce: boolean): boolean {
+    if (this.run.over || this.phase !== "fight" || !this.orc || this.orcDying || !this.run.enemy) return false;
+    if (pierce) {
+      const saved = this.run.block;
+      this.run.block = 0;
+      this.strike(true);
+      this.run.block = saved;
+    } else this.strike(true);
+    return true;
+  }
+  public markTutorialSeen() {
+    this.tutorial = null;
+    this.meta.tutorialSeen = true;
+    saveMeta(this.meta);
+  }
+  /**
+   * Plant a one-swap match of `type` near the bottom middle of the board:
+   * T T · in the bottom row with the third T waiting one row up — dragging it
+   * down completes the row. Any accidental matches the plant creates are
+   * scrubbed (without touching the planted cells), then changed sprites rebuilt.
+   */
+  public rigSwapMatch(type: number): { from: Coord; to: Coord } {
+    const b = H - 1;
+    const c0 = Math.floor(W / 2) - 1;
+    const changed = new Set<string>();
+    const set = (r: number, c: number, t: number) => {
+      if (this.grid[r][c] === t) return;
+      this.grid[r][c] = t;
+      changed.add(r + "," + c);
+    };
+    set(b, c0, type);
+    set(b, c0 + 1, type);
+    set(b - 1, c0 + 2, type);
+    if (this.grid[b][c0 + 2] === type) set(b, c0 + 2, (type + 1) % TYPES); // don't pre-complete the row
+    const planted = new Set([`${b},${c0}`, `${b},${c0 + 1}`, `${b - 1},${c0 + 2}`]);
+    for (let guard = 0; guard < 60; guard++) {
+      const ms = findMatches(this.grid);
+      if (!ms.length) break;
+      for (const m of ms) {
+        const cell = m.cells.find((x) => !planted.has(`${x.r},${x.c}`)) ?? m.cells[0];
+        set(cell.r, cell.c, (this.grid[cell.r][cell.c] + 1 + ((Math.random() * (TYPES - 1)) | 0)) % TYPES);
+      }
+    }
+    changed.forEach((key) => {
+      const [r, c] = key.split(",").map(Number);
+      this.tiles[r][c]?.destroy();
+      this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
+    });
+    return { from: { r: b - 1, c: c0 + 2 }, to: { r: b, c: c0 + 2 } };
+  }
+
   /** Float one damage number per swing, timed so it pops as each hit lands. */
   private showHits(hits: number[], combo: string[]) {
     if (combo[0] === "hero-spell") {
@@ -1213,6 +1375,12 @@ class GameScene extends Phaser.Scene {
     this.overShown = true;
     this.orc?.stop();
     this.hero.play("hero-death"); // the hero falls where the dark caught him
+    // the big flat death pose sprawls left of the skull and off the lane — clamp it back on
+    this.hero.x = Math.max(this.hero.x, PADIN + 8 + DEATH_BODY_LEFT * HERO_SCALE);
+
+    // the caravan keeps what you carried: bank resources + quest stats
+    const r = this.run.resources;
+    bankRun(loadMeta(), { wood: r.wood, ore: r.ore, treasure: r.treasure, kills: this.run.killed, chests: this.chestsOpened });
 
     // let the death animation land, then fade in the game-over screen (full viewport)
     this.time.delayedCall(850, () => {
@@ -1220,22 +1388,27 @@ class GameScene extends Phaser.Scene {
       const h = this.scale.height;
       const veil = this.add.rectangle(w / 2, h / 2, w, h, 0x05060a, 0.72).setAlpha(0).setDepth(80);
       const title = this.add
-        .text(w / 2, h / 2 - 40, "THE DARK TAKES YOU", { fontFamily: "monospace", fontStyle: "bold", fontSize: "34px", color: "#e6e8ee" })
+        .text(w / 2, h / 2 - 56, "THE DARK TAKES YOU", { fontFamily: "monospace", fontStyle: "bold", fontSize: "34px", color: "#e6e8ee" })
         .setOrigin(0.5)
         .setDepth(81)
         .setAlpha(0);
       const stats = this.add
-        .text(w / 2, h / 2 + 6, `Depth ${this.run.killed}    Score ${this.run.score}`, { fontFamily: "monospace", fontSize: "20px", color: "#ffe08a" })
+        .text(w / 2, h / 2 - 10, `Depth ${this.run.killed}    Score ${this.run.score}`, { fontFamily: "monospace", fontSize: "20px", color: "#ffe08a" })
+        .setOrigin(0.5)
+        .setDepth(81)
+        .setAlpha(0);
+      const banked = this.add
+        .text(w / 2, h / 2 + 26, `banked  🪵 ${r.wood}   🪨 ${r.ore}   💎 ${r.treasure}`, { fontFamily: EMOJI_FONT, fontSize: "17px", color: "#a9e6a9" })
         .setOrigin(0.5)
         .setDepth(81)
         .setAlpha(0);
       const hint = this.add
-        .text(w / 2, h / 2 + 54, "tap to return to camp", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
+        .text(w / 2, h / 2 + 68, "tap to return to camp", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
         .setOrigin(0.5)
         .setDepth(81)
         .setAlpha(0);
       this.tweens.add({ targets: veil, alpha: 0.72, duration: 400 });
-      this.tweens.add({ targets: [title, stats], alpha: 1, duration: 400 });
+      this.tweens.add({ targets: [title, stats, banked], alpha: 1, duration: 400 });
       this.tweens.add({ targets: hint, alpha: 1, duration: 350 });
       this.tweens.add({ targets: hint, alpha: 0.3, duration: 700, yoyo: true, repeat: -1, delay: 400 });
       this.time.delayedCall(500, () => this.input.once("pointerdown", () => this.scene.start("camp"))); // lick your wounds, spend, retry

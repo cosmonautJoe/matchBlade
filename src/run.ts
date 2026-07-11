@@ -41,6 +41,7 @@ export interface RunState {
   score: number;
   resources: Resources;
   over: boolean;
+  swordBonus: number; // forge upgrades: extra damage folded into the first sword hit
 }
 
 // --- tuning knobs (easy to expose as upgrades later, DESIGN.md §5) ---
@@ -63,7 +64,7 @@ export function makeEnemy(killed: number): Enemy {
   return { kind: "orc", hp, maxHp: hp, power: ENEMY_BASE_POWER + killed * ENEMY_POWER_GROWTH };
 }
 
-export function newRun(): RunState {
+export function newRun(swordBonus = 0): RunState {
   return {
     pressure: 0,
     block: 0,
@@ -72,6 +73,7 @@ export function newRun(): RunState {
     score: 0,
     resources: { wood: 0, ore: 0, treasure: 0, keys: 0 },
     over: false,
+    swordBonus,
   };
 }
 
@@ -110,6 +112,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   s.score += (gained.wood + gained.ore + gained.treasure + gained.keys) * 2;
 
   const hits = swordHits(n(SWORD));
+  if (hits.length && n(SWORD) >= 3) hits[0] += s.swordBonus; // forged edge bites harder
   const staffDmg = n(STAFF) * STAFF_DMG;
   if (staffDmg > 0) {
     if (hits.length) hits[0] += staffDmg;
