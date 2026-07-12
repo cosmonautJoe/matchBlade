@@ -166,6 +166,21 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     enemy art (boar/bee/snail) is staged for later.
   - Runner state is a pure, unit-tested module (`src/run.ts`); a single
     `pressure` value in [0,1] is the fail axis (see §4).
+  - **Boss encounters (SHIPPED):** every `BOSS_EVERY`th (10th) foe is **MALGRIM
+    THE CINDERMAGE** (Evil Wizard pack, CC0, flipped to face left). Entrance:
+    summon sting, the lane darkens, ember-gradient name banner, wide named HP
+    bar with a dramatic fill-up. He fights with fireball strikes (harder shake,
+    seared tint); scroll pressure halves during the fight (`BOSS_SCROLL_MULT` —
+    no intermediate kills means no relief). Death: flash + quake + coin/spark
+    eruption, "CINDERMAGE FELLED!", `BOSS_BOUNTY` treasure, an extra
+    `BOSS_SURGE` of pressure relief, and a guaranteed chest right after.
+    Dev: `__mb.debugBoss()` rigs the next foe. Knobs live in run.ts.
+  - **Ambient soundscape + weather (SHIPPED):** a looping forest bed under
+    every run (`amb_day`), with a `RAIN_CHANCE` roll per run that swaps in
+    `amb_rain` plus rain streaks + an overcast wash over the lane. Camp adds
+    night crickets (`amb_night`) beside the fire crackle, faded out on DEPART.
+    Loops are 40s mono MP3s cut from the 10MB ambience WAVs (tail crossfaded
+    into the head for a seamless loop; conversion script kept in the chat log).
   - **First-run tutorial (src/tutorial.ts):** a step-driven spotlight overlay
     the first time the puzzle scene opens — dim veil + hole, card per idea,
     progress dots, skippable. Two beats are hands-on: a planted one-swap sword

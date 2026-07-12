@@ -123,6 +123,7 @@ export class CampScene extends Phaser.Scene {
   private biomeLabel!: Phaser.GameObjects.Text;
   private hero!: Phaser.GameObjects.Sprite;
   private fireSnd: Phaser.Sound.BaseSound | null = null;
+  private ambSnd: Phaser.Sound.BaseSound | null = null; // looping night-forest bed
   private departing = false;
 
   // meta progression (persistent across runs)
@@ -178,6 +179,7 @@ export class CampScene extends Phaser.Scene {
     for (const n of [3, 4, 5, 6]) img(`cloud${n}`, `${P}cloud${n}.png`);
 
     if (!this.cache.audio.exists("camp_fire")) this.load.audio("camp_fire", "sounds/camp_fire.mp3");
+    if (!this.cache.audio.exists("amb_night")) this.load.audio("amb_night", "sounds/amb_night.mp3"); // crickets round the fire
     for (const [k, f] of [["pickup", "pickup.mp3"], ["coin3", "coin3.mp3"], ["pouch", "pouch.mp3"]] as const)
       if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
   }
@@ -266,10 +268,14 @@ export class CampScene extends Phaser.Scene {
       this.scale.off("resize", this.layout, this);
       this.fireSnd?.stop();
       this.fireSnd = null;
+      this.ambSnd?.stop();
+      this.ambSnd = null;
     });
 
     this.fireSnd = this.sound.add("camp_fire", { volume: 0.22, loop: true });
     this.fireSnd.play();
+    this.ambSnd = this.sound.add("amb_night", { volume: 0.16, loop: true }); // the wilds hum past the firelight
+    this.ambSnd.play();
     this.cameras.main.fadeIn(350, 5, 6, 10);
 
     if (import.meta.env.DEV) (globalThis as unknown as { __mbCamp: CampScene }).__mbCamp = this;
@@ -696,6 +702,7 @@ export class CampScene extends Phaser.Scene {
     // a slow, deliberate jog to the portal — then a gentle fade well after he sets off
     this.tweens.add({ targets: this.hero, x: 700, duration: 2300, ease: "Sine.easeIn" });
     this.tweens.add({ targets: this.fireSnd, volume: 0, duration: 1800 });
+    this.tweens.add({ targets: this.ambSnd, volume: 0, duration: 1800 });
     this.time.delayedCall(1400, () => this.cameras.main.fadeOut(1300, 5, 6, 10));
     this.time.delayedCall(2750, () => this.scene.start("game"));
   }

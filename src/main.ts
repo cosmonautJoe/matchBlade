@@ -31,7 +31,20 @@ import {
   swap,
   hasPossibleMove,
 } from "./board";
-import { type RunState, type MatchOutcome, SWORD, newRun, applyMatches, enemyStrike, spawnNext, scroll } from "./run";
+import {
+  type RunState,
+  type MatchOutcome,
+  SWORD,
+  newRun,
+  applyMatches,
+  enemyStrike,
+  spawnNext,
+  scroll,
+  BOSS_EVERY,
+  BOSS_SCROLL_MULT,
+  BOSS_BOUNTY,
+  BOSS_SURGE,
+} from "./run";
 import { CampScene } from "./camp";
 import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
 import { Tutorial } from "./tutorial";
@@ -76,6 +89,12 @@ const ENGAGE_GAP = 180; // enemy centre sits this far right of the hero when fig
 const ENTER_X = CENTER_DW + 80; // enemies walk in from off the right
 const HERO_SCALE = 3.8; // WarriorMan in the taller lane
 const SLIME_SCALE = 3.7; // ground slime
+// boss: the Cindermage (Evil Wizard pack, CC0) — 150x150 frames, feet at y101, faces right natively
+const BOSS_SCALE = 3.4;
+const BOSS_ORIGIN = 0.675;
+const BOSS_ENGAGE_GAP = 240; // the big robe (and his fire breath) needs a wider stance
+const BOSS_NAME = "MALGRIM THE CINDERMAGE";
+const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
 const HP_W = 70;
 
@@ -188,8 +207,12 @@ class GameScene extends Phaser.Scene {
   private floor!: Phaser.GameObjects.TileSprite;
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
-  private orcAnim = "orc"; // anim-key prefix of the currently spawned slime variant (orc / orc2 / orc3)
+  private orcAnim = "orc"; // anim-key prefix of the current foe (orc / orc2 / orc3 / boss)
+  private orcGap = ENGAGE_GAP; // engage distance for the current foe (wider for the boss)
   private orcDying = false;
+  private bossBar: { root: Phaser.GameObjects.Container; fill: Phaser.GameObjects.Rectangle } | null = null;
+  private rainy = false; // rolled per run: rain ambience + streaks over the lane
+  private amb: Phaser.Sound.BaseSound | null = null; // looping forest bed under the run
   private heroLockX = false; // freeze hero x while a killing swing lands, then surge
   private enemyHpBar!: Phaser.GameObjects.Rectangle;
   private enemyHpBg!: Phaser.GameObjects.Rectangle;
@@ -242,6 +265,12 @@ class GameScene extends Phaser.Scene {
       sheet(`slime${n}-hurt`, `slime${n}_hurt.png`, 64, 64);
       sheet(`slime${n}-death`, `slime${n}_death.png`, 64, 64);
     }
+    // boss: the Cindermage (Evil Wizard pack, CC0) — every BOSS_EVERYth foe
+    sheet("boss-idle", "boss_idle.png", 150, 150);
+    sheet("boss-move", "boss_move.png", 150, 150);
+    sheet("boss-attack", "boss_attack.png", 150, 150);
+    sheet("boss-hurt", "boss_hurt.png", 150, 150);
+    sheet("boss-death", "boss_death.png", 150, 150);
     // world backdrop for the current biome: parallax layers + floor atlas (meta.biome picks the set)
     this.world = RUN_BIOMES[loadMeta().biome] ?? RUN_BIOMES.plains;
     const img = (key: string, file: string) => {
@@ -263,6 +292,10 @@ class GameScene extends Phaser.Scene {
       // chest blast: unlock click, lid creak, coin eruption, per-reward flips, collect thunk
       chest_unlock: "chest_unlock.wav", chest_creak: "chest_creak.wav", coin_pour: "coin_pour.mp3",
       coin1: "coin1.mp3", coin2: "coin2.mp3", coin3: "coin3.mp3", pouch: "pouch.mp3", pickup: "pickup.mp3",
+      // boss: summon sting on his entrance, fireballs when he strikes
+      summon: "summon.wav", fireball1: "fireball1.wav", fireball2: "fireball2.wav", fireball3: "fireball3.wav",
+      // ambient forest bed under the run (rain variant on wet runs)
+      amb_day: "amb_day.mp3", amb_rain: "amb_rain.mp3",
     };
     for (const [k, f] of Object.entries(audio)) if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
     for (let i = 1; i <= TILE_SFX; i++)
@@ -277,6 +310,9 @@ class GameScene extends Phaser.Scene {
     this.down = null;
     this.orc = null;
     this.orcDying = false;
+    this.orcGap = ENGAGE_GAP;
+    this.bossBar = null;
+    this.rainy = Math.random() < RAIN_CHANCE;
     this.heroLockX = false;
     this.overShown = false;
     this.phase = "advance";
@@ -304,6 +340,17 @@ class GameScene extends Phaser.Scene {
     this.scale.on("resize", this.layout, this);
     // the ScaleManager is global — drop our handler when the camp takes over
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", this.layout, this));
+
+    // ambient forest bed under the whole run (rain variant on wet runs); the
+    // sound manager outlives the scene, so stop it when the camp takes over
+    this.amb = this.sound.add(this.rainy ? "amb_rain" : "amb_day", { volume: 0, loop: true });
+    this.amb.play();
+    this.tweens.add({ targets: this.amb, volume: this.rainy ? 0.34 : 0.22, duration: 1400 });
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.amb?.stop();
+      this.amb = null;
+    });
+
     this.cameras.main.fadeIn(300, 5, 6, 10);
     // intro: the hero jogs in from off the left edge to meet the first foe.
     // Slow both approaches together so the hero's run reads at a natural pace.
@@ -365,6 +412,12 @@ class GameScene extends Phaser.Scene {
       mk(`${p}-death`, `slime${n}-death`, 0, 9, 12, 0);
       mk(`${p}-attack`, `slime${n}-walk`, 0, 7, 12, 0);
     }
+    // boss anims plug into the same `${orcAnim}-*` key scheme the slimes use
+    mk("boss-idle", "boss-idle", 0, 7, 8, -1);
+    mk("boss-walk", "boss-move", 0, 7, 10, -1);
+    mk("boss-attack", "boss-attack", 0, 7, 14, 0);
+    mk("boss-hurt", "boss-hurt", 0, 3, 12, 0);
+    mk("boss-death", "boss-death", 0, 4, 10, 0);
   }
 
   /** Crop a seamless ground slice (grass top + dirt, no rocky side edges) from the biome floor atlas. */
@@ -562,6 +615,9 @@ class GameScene extends Phaser.Scene {
     // ground band the hero runs along
     this.floor = this.inBox(this.add.tileSprite(CXC, GROUND_Y + FLOOR_H / 2, UI_W, FLOOR_H, this.world.groundKey)).setTileScale(FLOOR_SCALE);
 
+    // wet runs read overcast: a cool wash over the backdrop, under the characters
+    if (this.rainy) this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x0a1626, 0.16));
+
     this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H).setStrokeStyle(2, 0x2a2d38)); // border
     this.inBox(this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "48px", color: "#c0424a" }).setOrigin(0.5, 1));
 
@@ -571,6 +627,35 @@ class GameScene extends Phaser.Scene {
 
     this.enemyHpBg = this.inBox(this.add.rectangle(0, 0, HP_W, 10, 0x000000, 0.55).setOrigin(0.5).setVisible(false));
     this.enemyHpBar = this.inBox(this.add.rectangle(0, 0, HP_W, 10, 0xe05a5a).setOrigin(0, 0.5).setVisible(false));
+
+    // rain streaks fall in front of the actors, dying just above the ground band
+    if (this.rainy) {
+      if (!this.textures.exists("raindrop")) {
+        const cv = document.createElement("canvas");
+        cv.width = 2;
+        cv.height = 12;
+        const g = cv.getContext("2d")!;
+        const gr = g.createLinearGradient(0, 0, 0, 12);
+        gr.addColorStop(0, "rgba(190,215,255,0)");
+        gr.addColorStop(1, "rgba(190,215,255,0.9)");
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 2, 12);
+        this.textures.addCanvas("raindrop", cv);
+      }
+      this.inBox(
+        this.add.particles(0, 0, "raindrop", {
+          x: { min: GRID_X, max: GRID_X + UI_W },
+          y: LANE_Y - 6,
+          speedY: { min: 560, max: 700 },
+          speedX: { min: -60, max: -25 }, // wind leans with the world's drift
+          lifespan: 350,
+          quantity: 2,
+          frequency: 30,
+          alpha: { start: 0.7, end: 0.25 },
+          scaleY: { min: 1, max: 1.6 },
+        }),
+      );
+    }
   }
 
   // --- board ---
@@ -616,8 +701,10 @@ class GameScene extends Phaser.Scene {
 
   // --- per-frame: scroll pressure (only while engaged) + sprite placement ---
   update(_time: number, delta: number) {
-    // the tutorial holds the run harmless — no scroll pressure while it teaches
-    if (this.phase === "fight" && !this.run.over && !this.tutorial?.active) scroll(this.run, SCROLL_PER_SEC * (delta / 1000));
+    // the tutorial holds the run harmless — no scroll pressure while it teaches.
+    // Boss fights ease the scroll (BOSS_SCROLL_MULT): no intermediate kills = no relief.
+    if (this.phase === "fight" && !this.run.over && !this.tutorial?.active)
+      scroll(this.run, SCROLL_PER_SEC * (this.run.enemy?.kind === "boss" ? BOSS_SCROLL_MULT : 1) * (delta / 1000));
 
     // pan the world while the hero runs to the next foe; hold still in a fight
     const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
@@ -630,7 +717,7 @@ class GameScene extends Phaser.Scene {
 
     const heroX = this.heroXForPressure();
     if (!this.heroLockX) this.hero.x = heroX; // held put while a killing swing lands
-    if (this.orc && this.phase === "fight") this.orc.x = heroX + ENGAGE_GAP; // enemy pushes the hero toward the skull
+    if (this.orc && this.phase === "fight") this.orc.x = heroX + this.orcGap; // enemy pushes the hero toward the skull
     if (this.orc) {
       const barY = GROUND_Y - 56; // above the slime's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
@@ -664,8 +751,13 @@ class GameScene extends Phaser.Scene {
     if (this.run.over) return;
     if (!this.run.enemy) spawnNext(this.run);
     if (!this.run.enemy) return;
+    if (this.run.enemy.kind === "boss") {
+      this.spawnBoss();
+      return;
+    }
     this.orcDying = false;
     this.phase = "advance";
+    this.orcGap = ENGAGE_GAP;
     this.hero.play("hero-walk", true); // stride forward while the foe approaches
 
     // pick a slime variant: green early, blue joins mid-run, blue/dark deep (deeper foes look tougher)
@@ -699,9 +791,100 @@ class GameScene extends Phaser.Scene {
     this.hero.play("hero-idle", true);
   }
 
+  /** ===== THE BOSS ===== the Cindermage strides in under a darkening sky. */
+  private spawnBoss() {
+    if (this.run.over) return;
+    this.orcDying = false;
+    this.phase = "advance";
+    this.orcAnim = "boss";
+    this.orcGap = BOSS_ENGAGE_GAP;
+    this.hero.play("hero-walk", true);
+    this.sfx("summon", 0.55, 0.9);
+    buzz(30);
+
+    // the lane darkens for his approach; the veil lifts as he plants his staff
+    const veil = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x1a0505, 0).setDepth(20));
+    this.tweens.add({ targets: veil, fillAlpha: 0.38, duration: 800 });
+
+    const orc = this.inBox(
+      this.add
+        .sprite(ENTER_X, GROUND_Y, "boss-idle")
+        .setOrigin(0.5, BOSS_ORIGIN)
+        .setScale(BOSS_SCALE)
+        .setFlipX(true) // pack faces right; he walks in from the right, glaring left
+        .play("boss-walk"),
+    );
+    this.orc = orc;
+
+    // name banner over the lane while he closes the distance
+    const nm = this.inBox(
+      this.add
+        .text(CXC, LANE_Y + 64, BOSS_NAME, {
+          fontFamily: "monospace",
+          fontStyle: "bold",
+          fontSize: "30px",
+          color: "#ffd7a0",
+          stroke: "#2a0c06",
+          strokeThickness: 7,
+        })
+        .setOrigin(0.5)
+        .setDepth(30)
+        .setScale(0.3)
+        .setAlpha(0),
+    );
+    nm.setTint(0xfff2d0, 0xffd280, 0xf2903b, 0xc9581f); // ember gradient
+    this.tweens.add({ targets: nm, alpha: 1, scale: 1, duration: 420, ease: "Back.easeOut", delay: 300 });
+    this.tweens.add({ targets: nm, alpha: 0, y: nm.y - 20, duration: 500, delay: 2600, onComplete: () => nm.destroy() });
+
+    this.enemyHpBg.setVisible(false); // the boss carries his own bar
+    this.enemyHpBar.setVisible(false);
+    this.showBossBar();
+
+    this.tweens.add({
+      targets: orc,
+      x: this.heroXForPressure() + this.orcGap,
+      duration: 2100, // a slow, inevitable approach
+      ease: "Sine.easeOut",
+      onComplete: () => {
+        this.tweens.add({ targets: veil, fillAlpha: 0, duration: 700, onComplete: () => veil.destroy() });
+        this.enterFight();
+      },
+    });
+  }
+
+  /** Wide named HP bar across the lane top — the classic boss-fight furniture. */
+  private showBossBar() {
+    this.hideBossBar();
+    const BW = 460;
+    const BH = 13;
+    const root = this.add.container(CXC, LANE_Y + 30).setDepth(31);
+    const label = this.add
+      .text(0, -10, `☠ ${BOSS_NAME}`, { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffb3a0" })
+      .setOrigin(0.5, 1);
+    const bg = this.add.rectangle(0, 0, BW, BH, 0x000000, 0.6).setStrokeStyle(2, 0x8a2d2d);
+    const fill = this.add.rectangle(-BW / 2 + 2, 0, BW - 4, BH - 4, 0xe05a5a).setOrigin(0, 0.5);
+    root.add([bg, fill, label]);
+    this.inBox(root);
+    root.setAlpha(0);
+    this.tweens.add({ targets: root, alpha: 1, duration: 400, delay: 350 });
+    fill.scaleX = 0;
+    this.tweens.add({ targets: fill, scaleX: 1, duration: 1500, delay: 400, ease: "Quad.easeOut" }); // dramatic fill-up
+    this.bossBar = { root, fill };
+  }
+
+  private hideBossBar() {
+    this.bossBar?.root.destroy();
+    this.bossBar = null;
+  }
+
   private updateEnemyBar() {
     const e = this.run.enemy;
-    this.enemyHpBar.scaleX = e && !this.orcDying ? Math.max(0, e.hp / e.maxHp) : 0;
+    const frac = e && !this.orcDying ? Math.max(0, e.hp / e.maxHp) : 0;
+    this.enemyHpBar.scaleX = frac;
+    if (this.bossBar) {
+      this.tweens.killTweensOf(this.bossBar.fill); // first hit cancels the intro fill-up
+      this.bossBar.fill.scaleX = frac;
+    }
   }
 
   private async trySwap(a: Coord, b: Coord) {
@@ -865,7 +1048,8 @@ class GameScene extends Phaser.Scene {
   }
 
   private killOrc(afterMs = 760) {
-    this.sfx("death", 0.16); // slime death — kept well in the background
+    const wasBoss = this.orcAnim === "boss";
+    if (!wasBoss) this.sfx("death", 0.16); // slime death — kept well in the background
     this.orcDying = true;
     this.phase = "advance";
     this.updateEnemyBar();
@@ -879,9 +1063,10 @@ class GameScene extends Phaser.Scene {
       this.tweens.killTweensOf(dying);
       dying.play(`${this.orcAnim}-death`);
       dying.once("animationcomplete", () => {
-        this.tweens.add({ targets: dying, alpha: 0, duration: 260, onComplete: () => dying.destroy() });
+        this.tweens.add({ targets: dying, alpha: 0, duration: wasBoss ? 700 : 260, onComplete: () => dying.destroy() });
       });
     }
+    if (wasBoss) this.bossSpoils(dying?.x ?? SAFE_X + BOSS_ENGAGE_GAP);
 
     this.time.delayedCall(Math.max(760, afterMs), () => {
       if (this.run.over) return;
@@ -896,21 +1081,103 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  /** The Cindermage falls: flash, quake, treasure bounty, and a chest rolls in next. */
+  private bossSpoils(x: number) {
+    this.hideBossBar();
+    buzz(40);
+    this.cameras.main.shake(420, 0.012);
+    this.sfx("coin_pour", 0.6);
+    const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xfff0d8, 0.85).setDepth(40));
+    this.tweens.add({ targets: flash, fillAlpha: 0, duration: 420, onComplete: () => flash.destroy() });
+
+    // treasure erupts from where he fell (the chest blast's textures moonlight here)
+    const coins = this.inBox(
+      this.add
+        .particles(x, GROUND_Y - 46, "coin", {
+          speed: { min: 300, max: 640 }, angle: { min: 230, max: 310 }, gravityY: 1100,
+          lifespan: { min: 700, max: 1200 }, scale: { min: 0.9, max: 1.5 }, rotate: { min: 0, max: 360 },
+          emitting: false,
+        })
+        .setDepth(41),
+    );
+    const sparks = this.inBox(
+      this.add
+        .particles(x, GROUND_Y - 46, "spark", {
+          speed: { min: 160, max: 520 }, angle: { min: 210, max: 330 }, gravityY: 650,
+          lifespan: { min: 400, max: 900 }, scale: { start: 1.3, end: 0 }, blendMode: "ADD",
+          emitting: false,
+        })
+        .setDepth(41),
+    );
+    coins.explode(26);
+    sparks.explode(38);
+    this.time.delayedCall(1600, () => {
+      coins.destroy();
+      sparks.destroy();
+    });
+
+    const t = this.inBox(
+      this.add
+        .text(CXC, LANE_Y + 96, "CINDERMAGE FELLED!", {
+          fontFamily: "monospace", fontStyle: "bold", fontSize: "34px",
+          color: "#ffffff", stroke: "#3a1d08", strokeThickness: 8,
+        })
+        .setOrigin(0.5)
+        .setDepth(42)
+        .setScale(2.2)
+        .setAlpha(0),
+    );
+    t.setTint(0xfff6c8, 0xffe08a, 0xf2a93b, 0xc9761f);
+    this.tweens.add({ targets: t, scale: 1, alpha: 1, duration: 260, ease: "Back.easeOut" });
+    this.tweens.add({ targets: t, alpha: 0, y: t.y - 24, duration: 600, delay: 1500, onComplete: () => t.destroy() });
+
+    const bounty = this.inBox(
+      this.add
+        .text(x, GROUND_Y - 130, `+${BOSS_BOUNTY} 💎`, {
+          fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "26px",
+          color: "#bfe6ff", stroke: "#2a0c06", strokeThickness: 6,
+        })
+        .setOrigin(0.5)
+        .setDepth(42)
+        .setScale(0.3),
+    );
+    this.tweens.add({ targets: bounty, scale: 1.1, duration: 220, ease: "Back.easeOut", delay: 350 });
+    this.tweens.add({ targets: bounty, y: bounty.y - 46, alpha: 0, duration: 900, delay: 900, onComplete: () => bounty.destroy() });
+
+    this.run.resources.treasure += BOSS_BOUNTY;
+    this.run.score += 400;
+    this.run.pressure = Math.max(0, this.run.pressure - BOSS_SURGE); // the road clears ahead of the caravan
+    this.sinceChest = CHEST_EVERY - 1; // his hoard rolls in right behind him
+    this.refreshHud();
+  }
+
+  /** Dev: rig the next foe to be the boss (console: __mb.debugBoss()). */
+  public debugBoss() {
+    this.run.killed = BOSS_EVERY - 1;
+    this.sinceChest = -999; // skip the chest interlude for this test
+    if (this.orc && !this.orcDying) {
+      this.run.enemy = null;
+      this.killOrc(0);
+    }
+  }
+
   private strike(force = false) {
     if (!force && this.tutorial?.active) return; // the tutorial scripts its own strikes
     if (this.run.over || this.phase !== "fight" || this.orcDying || !this.orc || !this.run.enemy) return;
     const blockBefore = this.run.block;
     const net = enemyStrike(this.run);
-    this.sfx("slimeatk", 0.3); // slime lunges
+    const isBoss = this.orcAnim === "boss";
+    if (isBoss) this.sfx(this.pick(["fireball1", "fireball2", "fireball3"]), 0.55); // fire roars across the gap
+    else this.sfx("slimeatk", 0.3); // slime lunges
     if (this.run.block < blockBefore) // armour soaked some/all of it -> clang on contact
       this.time.delayedCall(90, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.45));
     this.orc.play(`${this.orcAnim}-attack`).once("animationcomplete", () => {
       if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
     });
     if (net > 0) {
-      this.cameras.main.shake(150, 0.006);
-      this.hero.setTint(0xff8888);
-      this.time.delayedCall(130, () => this.hero.clearTint());
+      this.cameras.main.shake(isBoss ? 260 : 150, isBoss ? 0.009 : 0.006);
+      this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
+      this.time.delayedCall(isBoss ? 200 : 130, () => this.hero.clearTint());
     }
   }
 

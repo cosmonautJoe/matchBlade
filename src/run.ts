@@ -20,7 +20,7 @@ export const WOOD = 5;
 export const ORE = 6;
 
 export interface Enemy {
-  kind: "orc";
+  kind: "orc" | "boss";
   hp: number;
   maxHp: number;
   power: number; // pressure a full strike adds, before block
@@ -59,9 +59,20 @@ export const ENEMY_HP_GROWTH = 3; // +hp per prior kill
 export const ENEMY_BASE_POWER = 0.075;
 export const ENEMY_POWER_GROWTH = 0.015;
 
+// --- bosses: every Nth foe is the Cindermage (DESIGN.md §4) --------------------
+// A boss fight has no intermediate kills to relieve pressure, so the scroll
+// eases while he's engaged (the world holds its breath) and the kill pays a
+// bigger surge + a treasure bounty (applied scene-side).
+export const BOSS_EVERY = 10;
+export const BOSS_HP_MULT = 1.8;
+export const BOSS_SCROLL_MULT = 0.5;
+export const BOSS_BOUNTY = 8; // treasure showered on the kill
+export const BOSS_SURGE = 0.2; // extra pressure relief on top of ADVANCE_PER_KILL
+
 export function makeEnemy(killed: number): Enemy {
-  const hp = ENEMY_BASE_HP + killed * ENEMY_HP_GROWTH;
-  return { kind: "orc", hp, maxHp: hp, power: ENEMY_BASE_POWER + killed * ENEMY_POWER_GROWTH };
+  const boss = (killed + 1) % BOSS_EVERY === 0;
+  const hp = Math.round((ENEMY_BASE_HP + killed * ENEMY_HP_GROWTH) * (boss ? BOSS_HP_MULT : 1));
+  return { kind: boss ? "boss" : "orc", hp, maxHp: hp, power: ENEMY_BASE_POWER + killed * ENEMY_POWER_GROWTH };
 }
 
 export function newRun(swordBonus = 0): RunState {
