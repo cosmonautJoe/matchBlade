@@ -35,6 +35,8 @@ import {
   type RunState,
   type MatchOutcome,
   SWORD,
+  STAFF,
+  SHIELD,
   KEY,
   TREASURE,
   WOOD,
@@ -1219,11 +1221,17 @@ class GameScene extends Phaser.Scene {
 
       buzz(depth > 1 ? 22 : 14); // haptic tick as the tiles shatter (deeper cascade = longer buzz on Android)
       const fades: Promise<void>[] = [];
-      const resCells: { x: number; y: number }[] = []; // where the scoring (resource/key) tiles sat
+      // every match pays out visibly WHERE it happened — group the cleared cells
+      const resCells: { x: number; y: number }[] = []; // resources/keys -> gold score
+      const cmbCells: { x: number; y: number }[] = []; // swords/staves  -> gold combat score
+      const shdCells: { x: number; y: number }[] = []; // shields        -> steel guard chip
       cleared.forEach((key) => {
         const [r, c] = key.split(",").map(Number);
         const ty = this.grid[r][c];
-        if (ty === WOOD || ty === ORE || ty === TREASURE || ty === KEY) resCells.push({ x: this.xFor(c), y: this.yFor(r) });
+        const at = { x: this.xFor(c), y: this.yFor(r) };
+        if (ty === WOOD || ty === ORE || ty === TREASURE || ty === KEY) resCells.push(at);
+        else if (ty === SWORD || ty === STAFF) cmbCells.push(at);
+        else if (ty === SHIELD) shdCells.push(at);
         const t = this.tiles[r][c];
         if (t) fades.push(this.shatter(t, ty));
         this.tiles[r][c] = null;
@@ -1231,13 +1239,29 @@ class GameScene extends Phaser.Scene {
       });
       await Promise.all(fades);
 
+      const scoreBefore = this.run.score;
       const outcome = applyMatches(this.run, counts);
-      // the haul pays out where it was matched — a gold "+N" over the cleared tiles
+      const centroid = (cells: { x: number; y: number }[]) => ({
+        x: cells.reduce((s, p) => s + p.x, 0) / cells.length,
+        y: cells.reduce((s, p) => s + p.y, 0) / cells.length,
+      });
+      // resources: their haul score lands over the matched tiles
       const resScore = (outcome.gained.wood + outcome.gained.ore + outcome.gained.treasure + outcome.gained.keys) * 2;
       if (resScore > 0 && resCells.length) {
-        const cx = resCells.reduce((s, p) => s + p.x, 0) / resCells.length;
-        const cy = resCells.reduce((s, p) => s + p.y, 0) / resCells.length;
-        this.floatScore(cx, cy, resScore, { delay: 70, size: Math.min(52, 32 + Math.floor(resScore / 4) + depth * 3) });
+        const p = centroid(resCells);
+        this.floatScore(p.x, p.y, resScore, { delay: 70, size: Math.min(52, 32 + Math.floor(resScore / 4) + depth * 3) });
+      }
+      // swords/staves: the combat score (damage x5) — the kill's +100 pops at the corpse instead
+      const combatScore = this.run.score - scoreBefore - resScore - (outcome.killed ? 100 : 0);
+      if (combatScore > 0 && cmbCells.length) {
+        const p = centroid(cmbCells);
+        this.floatScore(p.x, p.y, combatScore, { delay: 140, size: Math.min(52, 32 + Math.floor(combatScore / 4) + depth * 3) });
+      }
+      // shields: no points, but the guard gained answers back in steel-blue
+      const shields = counts[SHIELD] ?? 0;
+      if (shields > 0 && shdCells.length) {
+        const p = centroid(shdCells);
+        this.floatGuard(p.x, p.y, shields, 100);
       }
       this.tutorial?.onCascade(counts);
       const swords = outcome.swords; // effective count — Wren's Whetstone can upgrade the swing
@@ -2283,24 +2307,27 @@ class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Floating score number — the gold-gradient "+N" that pops wherever points are
-   * earned (matches, kills, chests). Distinct from floatDamage (amber "-N"):
-   * score is always gold, always "+", and scales with the size of the win.
+   * Floating reward chip — the pop/rise/fade renderer behind every "+N".
+   * Tint picks the identity: gold = score, steel-blue = guard. Sizes are
+   * DESIGN px (the centre column scales on small screens), so floors stay
+   * generous or a 3-match's "+6" vanishes into the board.
    */
-  private floatScore(x: number, y: number, n: number, opts: { size?: number; delay?: number; sparkle?: boolean } = {}) {
-    if (n <= 0) return;
+  private floatChip(
+    x: number,
+    y: number,
+    label: string,
+    opts: { size: number; delay?: number; sparkle?: boolean; tint?: [number, number, number, number]; stroke?: string; font?: string },
+  ) {
     const spawn = () => {
-      // Sizes are DESIGN px (the centre column scales down on small screens), so
-      // the floor has to be generous or a 3-match's "+6" vanishes into the board.
-      const size = opts.size ?? Math.min(52, 32 + Math.floor(n / 4)); // bigger wins land bigger
+      const size = opts.size;
       const t = this.inBox(
         this.add
-          .text(x + (Math.random() * 18 - 9), y, `+${n}`, {
-            fontFamily: "monospace",
+          .text(x + (Math.random() * 18 - 9), y, label, {
+            fontFamily: opts.font ?? "monospace",
             fontStyle: "bold",
             fontSize: `${size}px`,
             color: "#ffffff",
-            stroke: "#1a0a04",
+            stroke: opts.stroke ?? "#1a0a04",
             strokeThickness: Math.max(5, Math.round(size / 4)),
           })
           .setOrigin(0.5)
@@ -2309,7 +2336,8 @@ class GameScene extends Phaser.Scene {
           .setAngle(Math.random() * 8 - 4), // a little tilt so repeats don't stamp
       );
       t.setShadow(0, 4, "rgba(0,0,0,0.85)", 8, true, true); // lifts it off any tile colour
-      t.setTint(0xfff6c8, 0xffe08a, 0xf2a93b, 0xc9761f); // the game's gold gradient
+      const [a, b, c, d] = opts.tint ?? [0xfff6c8, 0xffe08a, 0xf2a93b, 0xc9761f]; // default: the game's gold
+      t.setTint(a, b, c, d);
       this.tweens.add({ targets: t, scale: 1.12, duration: 200, ease: "Back.easeOut" });
       this.tweens.add({ targets: t, scale: 1, duration: 120, delay: 200 }); // settle off the overshoot
       this.tweens.add({
@@ -2341,6 +2369,25 @@ class GameScene extends Phaser.Scene {
     };
     if (opts.delay) this.time.delayedCall(opts.delay, spawn);
     else spawn();
+  }
+
+  /** Gold "+N" score number (matches, kills, chests). Distinct from amber -damage. */
+  private floatScore(x: number, y: number, n: number, opts: { size?: number; delay?: number; sparkle?: boolean } = {}) {
+    if (n <= 0) return;
+    const size = opts.size ?? Math.min(52, 32 + Math.floor(n / 4)); // bigger wins land bigger
+    this.floatChip(x, y, `+${n}`, { size, delay: opts.delay, sparkle: opts.sparkle });
+  }
+
+  /** Steel-blue "+N🛡" guard chip — shields pay protection, not points. */
+  private floatGuard(x: number, y: number, n: number, delay?: number) {
+    if (n <= 0) return;
+    this.floatChip(x, y, `+${n}🛡`, {
+      size: 30,
+      delay,
+      tint: [0xeef6ff, 0xbfe0ff, 0x6ea8e0, 0x3a6a9a],
+      stroke: "#050d16",
+      font: EMOJI_FONT,
+    });
   }
 
   private floatDamage(n: number, big = true) {
