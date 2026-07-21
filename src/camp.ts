@@ -25,6 +25,7 @@ import {
   forgeCost,
   questById,
   questProgress,
+  questDone,
   offeredQuests,
   acceptQuest,
   collectQuestRewards,
@@ -134,6 +135,14 @@ export class CampScene extends Phaser.Scene {
   private panelOpen = false;
   private panelBox: Phaser.GameObjects.Container | null = null;
 
+  // quest-giver state marker + cutscene actors
+  private goddess: Phaser.GameObjects.Sprite | null = null;
+  private wayMark: Phaser.GameObjects.GameObject[] = []; // !/? over the Wayfarer (state-driven)
+  private furnace: Phaser.GameObjects.Sprite | null = null;
+  private furnaceLitObjs: Phaser.GameObjects.GameObject[] = []; // glow + plaque, only while lit
+  private departSign: Phaser.GameObjects.Container | null = null;
+  private cutscene = false; // arrival cutscene running — camp input held
+
   // dev layout editor: drag props around, then copy the layout as JSON
   private campScale = 1;
   private editMode = false;
@@ -193,6 +202,12 @@ export class CampScene extends Phaser.Scene {
     this.panelOpen = false;
     this.panelBox = null;
     this.smith = null;
+    this.goddess = null;
+    this.wayMark = [];
+    this.furnace = null;
+    this.furnaceLitObjs = [];
+    this.departSign = null;
+    this.cutscene = false;
     this.meta = loadMeta();
     const biome = biomeDef(this.meta.biome);
     const groundKey = `camp-ground-${this.meta.biome}`; // per-biome so a road-onward rebuilds it
@@ -241,7 +256,7 @@ export class CampScene extends Phaser.Scene {
       .setDepth(50);
     // TEMP debug: tap the biome tag to flip plains<->forest instantly (preview both worlds; remove before release)
     this.biomeLabel.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-      if (this.editMode || this.panelOpen || this.departing) return;
+      if (this.editMode || this.panelOpen || this.departing || this.cutscene) return;
       this.meta.biome = this.meta.biome === "forest" ? "plains" : "forest";
       saveMeta(this.meta);
       this.scene.restart();
@@ -251,13 +266,8 @@ export class CampScene extends Phaser.Scene {
       .setDepth(50);
     this.refreshResources();
 
-    // pay out any quests completed during the last run
-    const rewarded = collectQuestRewards(this.meta);
-    rewarded.forEach((q, i) => this.time.delayedCall(600 + i * 1300, () => {
-      this.sfx("coin3", 0.5);
-      this.toast(`quest complete: ${q.label}  +${q.reward} 💎`);
-      this.refreshResources();
-    }));
+    // NB: quest rewards are no longer auto-paid on arrival — the Wayfarer holds
+    // them (her gold "?" invites the visit) and pays when you see her.
 
     if (import.meta.env.DEV) this.buildEditor();
 
@@ -277,6 +287,11 @@ export class CampScene extends Phaser.Scene {
     this.ambSnd = this.sound.add("amb_night", { volume: 0.16, loop: true }); // the wilds hum past the firelight
     this.ambSnd.play();
     this.cameras.main.fadeIn(350, 5, 6, 10);
+
+    // first arrival (or ?intro): the walk-in cutscene, then the marker; else marker now
+    const replayIntro = new URLSearchParams(location.search).has("intro");
+    if (!this.meta.campIntroSeen || replayIntro) this.playIntro();
+    else this.refreshWayfarerMark();
 
     if (import.meta.env.DEV) (globalThis as unknown as { __mbCamp: CampScene }).__mbCamp = this;
   }
@@ -335,12 +350,6 @@ export class CampScene extends Phaser.Scene {
       this.editable.push({ obj: sp, key: `anim:${anim}` });
       return sp;
     };
-    const glow = (x: number, y: number, scale: number, a: number) => {
-      const g = this.add.image(x, y, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setScale(scale).setAlpha(a).setDepth(9);
-      this.propBox.add(g);
-      this.tweens.add({ targets: g, alpha: a * 0.55, scale: scale * 0.92, duration: 380, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
-    };
-
     for (const p of PROPS) {
       const im = put(p);
       // the tarp tent hides the reluctant blacksmith until she's hired
@@ -372,33 +381,31 @@ export class CampScene extends Phaser.Scene {
     this.hero = this.add.sprite(-47, 2, "warrior").setOrigin(0.5, 0.734).setScale(2.1).setDepth(7).play("hero-idle");
     this.propBox.add(this.hero);
 
-    // the Wayfarer — quest giver waiting by the road out (static frame + gentle float)
-    const goddess = this.add.sprite(300, 2, "goddess").setOrigin(0.5, 1).setScale(1.9).setDepth(6).setFrame(0);
-    this.propBox.add(goddess);
-    this.tweens.add({ targets: goddess, y: -5, duration: 1600, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
-    goddess.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.goddessTapped());
-    const mark = this.add
-      .text(300, -132, "❗", { fontFamily: EMOJI_FONT, fontSize: "20px" })
-      .setOrigin(0.5)
-      .setDepth(10);
-    this.propBox.add(mark);
-    this.tweens.add({ targets: mark, y: -140, duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    // the Wayfarer — quest giver waiting by the road out (static frame + gentle float).
+    // Her !/? marker is state-driven — see refreshWayfarerMark().
+    this.goddess = this.add.sprite(300, 2, "goddess").setOrigin(0.5, 1).setScale(1.9).setDepth(6).setFrame(0);
+    this.propBox.add(this.goddess);
+    this.tweens.add({ targets: this.goddess, y: -5, duration: 1600, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    this.goddess.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.goddessTapped());
 
-    // blacksmith's furnace (Wren stands here once hired; tap for hints / the forge)
-    const furnace = sprite("furnace", "furnace-burn", 138, 0, 2.1, 5);
-    glow(138, -46, 2.4, 0.26);
-    this.plaque(138, -152, "⚒ BLACKSMITH");
-    furnace.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
+    // blacksmith's furnace — COLD until Wren is hired (she lights it herself);
+    // the plaque + firelight only exist while the forge is actually manned
+    this.furnace = sprite("furnace", "furnace-burn", 138, 0, 2.1, 5);
+    this.furnace.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
     if (this.meta.blacksmithHired) {
+      this.lightFurnace(false);
       this.smith = this.add.sprite(85, 2, "smith").setOrigin(0.5, 0.734).setScale(2.1).setDepth(6).play("smith-idle");
       this.propBox.add(this.smith);
       this.smith.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
+    } else {
+      this.furnace.stop().setFrame(0).setTint(0x6f7b8e); // dead coals in the morning light
     }
 
     // DEPART: humming portal (right side of camp)
     const portal = sprite("portal", "portal-spin", 445, 9, 2.6, 5);
-    glow(445, -60, 2.6, 0.3);
+    this.addGlow(445, -60, 2.6, 0.3);
     const sign = this.plaque(363, -194, "DEPART ▶");
+    this.departSign = sign;
     this.tweens.add({ targets: sign, y: -200, duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     const hit = this.add.rectangle(445, -80, 220, 220, 0xffffff, 0).setDepth(10).setInteractive({ useHandCursor: true });
     this.propBox.add(hit);
@@ -420,6 +427,234 @@ export class CampScene extends Phaser.Scene {
     return cont;
   }
 
+  /** Soft additive firelight, breathing. Returns the image so callers can keep/kill it. */
+  private addGlow(x: number, y: number, scale: number, a: number): Phaser.GameObjects.Image {
+    const g = this.add.image(x, y, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setScale(scale).setAlpha(a).setDepth(9);
+    this.propBox.add(g);
+    this.tweens.add({ targets: g, alpha: a * 0.55, scale: scale * 0.92, duration: 380, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    return g;
+  }
+
+  /** The forge comes alive: fire animation, firelight, and the BLACKSMITH plaque. */
+  private lightFurnace(ceremony: boolean) {
+    if (!this.furnace || this.furnaceLitObjs.length) return;
+    this.furnace.clearTint();
+    this.furnace.play("furnace-burn");
+    const g = this.addGlow(138, -46, 2.4, 0.26);
+    const plq = this.plaque(138, -152, "⚒ BLACKSMITH");
+    this.furnaceLitObjs = [g, plq];
+    if (ceremony) {
+      // she strikes the flint: a warm flash and the plaque pops into place
+      const flash = this.add.image(138, -46, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setScale(0.6).setAlpha(0.95).setDepth(11);
+      this.propBox.add(flash);
+      this.tweens.add({ targets: flash, scale: 4.4, alpha: 0, duration: 700, ease: "Quad.easeOut", onComplete: () => flash.destroy() });
+      plq.setScale(0.2);
+      this.tweens.add({ targets: plq, scale: 1, duration: 320, ease: "Back.easeOut" });
+      this.sfx("pickup", 0.5);
+    }
+  }
+
+  /**
+   * The Wayfarer's marker is her state, at a glance:
+   *   big gold "?"  — a sworn oath is DONE; she has payment waiting (top priority)
+   *   big gold "!"  — new oaths to swear (or the road onward is open)
+   *   small gray "?" — oaths in progress, nothing to do at the board yet
+   *   nothing        — no offers, nothing sworn (pool exhausted, journey's end)
+   */
+  private refreshWayfarerMark() {
+    for (const o of this.wayMark) o.destroy();
+    this.wayMark = [];
+    if (!this.goddess) return;
+    const anyDone = this.meta.active.some((aq) => questDone(this.meta, aq));
+    const hasOffers = offeredQuests(this.meta).length > 0;
+    const road = roadOpen(this.meta);
+
+    let glyph: string;
+    let big: boolean;
+    if (anyDone) [glyph, big] = ["?", true];
+    else if (hasOffers || road) [glyph, big] = ["!", true];
+    else if (this.meta.active.length) [glyph, big] = ["?", false];
+    else return;
+
+    const x = 300;
+    const y = big ? -156 : -142;
+    if (big) {
+      const g = this.add.image(x, y, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setTint(0xffd24a).setScale(2.2).setAlpha(0.6).setDepth(9);
+      this.propBox.add(g);
+      this.tweens.add({ targets: g, alpha: 0.28, scale: 1.7, duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+      this.wayMark.push(g);
+    }
+    const t = this.add
+      .text(x, y, glyph, {
+        fontFamily: "monospace",
+        fontStyle: "bold",
+        fontSize: big ? "48px" : "24px",
+        color: big ? "#ffd94a" : "#9aa0ab",
+        stroke: big ? "#5a3a08" : "#1a1d24",
+        strokeThickness: big ? 8 : 5,
+      })
+      .setOrigin(0.5)
+      .setDepth(10);
+    this.propBox.add(t);
+    this.tweens.add({ targets: t, y: y - (big ? 12 : 7), duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    if (big) this.tweens.add({ targets: t, scale: 1.14, duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    this.wayMark.push(t);
+  }
+
+  // ===== arrival cutscene: the scout walks into camp, the Wayfarer speaks =====
+
+  private playIntro() {
+    this.cutscene = true;
+    const vw = this.scale.width;
+    const vh = this.scale.height;
+    const cleanup: Phaser.GameObjects.GameObject[] = [];
+    let lineTimer: Phaser.Time.TimerEvent | null = null;
+    let walkTween: Phaser.Tweens.Tween | null = null;
+
+    // letterbox bars ease in — this is a scene, not play
+    const barH = Math.round(vh * 0.09);
+    const mkBar = (oy: 0 | 1) =>
+      this.add.rectangle(0, oy ? vh : 0, vw, barH, 0x05060a, 0.94).setOrigin(0, oy).setDepth(94).setScale(1, 0);
+    const top = mkBar(0);
+    const bot = mkBar(1);
+    this.tweens.add({ targets: [top, bot], scaleY: 1, duration: 500, ease: "Sine.easeOut" });
+    cleanup.push(top, bot);
+
+    // full-screen tap-catcher (advances dialog) + skip button above it
+    const catcher = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0xffffff, 0.001).setDepth(96).setInteractive();
+    const skip = this.add
+      .text(vw - 14, barH + 10, "skip ▸", { fontFamily: "monospace", fontSize: "14px", color: "#9aa0ab", backgroundColor: "#14171f", padding: { x: 8, y: 4 } })
+      .setOrigin(1, 0)
+      .setDepth(97)
+      .setInteractive({ useHandCursor: true });
+    cleanup.push(catcher, skip);
+
+    // dialog panel (hidden until the walk lands)
+    const boxW = Math.min(680, vw - 60);
+    const boxH = 96;
+    const boxY = vh - barH - boxH / 2 - 14;
+    const dlgBg = this.add.rectangle(vw / 2, boxY, boxW, boxH, 0x14171f, 0.96).setStrokeStyle(3, 0x8a6d3a).setDepth(96).setVisible(false);
+    const dlgName = this.add
+      .text(vw / 2 - boxW / 2 + 16, boxY - boxH / 2 + 10, "THE WAYFARER", { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffd94a" })
+      .setDepth(97)
+      .setVisible(false);
+    const dlgText = this.add
+      .text(vw / 2 - boxW / 2 + 16, boxY - boxH / 2 + 32, "", { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#e6e8ee", wordWrap: { width: boxW - 32 }, lineSpacing: 5 })
+      .setDepth(97)
+      .setVisible(false);
+    const dlgHint = this.add
+      .text(vw / 2 + boxW / 2 - 14, boxY + boxH / 2 - 8, "▾", { fontFamily: "monospace", fontSize: "15px", color: "#8fd0ff" })
+      .setOrigin(1, 1)
+      .setDepth(97)
+      .setVisible(false);
+    this.tweens.add({ targets: dlgHint, alpha: 0.25, duration: 500, yoyo: true, repeat: -1 });
+    cleanup.push(dlgBg, dlgName, dlgText, dlgHint);
+
+    // the script — each line can fire a directorial cue when it appears
+    const LINES: { text: string; cue?: () => void }[] = [
+      { text: "So you're the scout. The caravan can roll no further — the wilds ahead have swallowed the road." },
+      {
+        text: "I hold the list of what we lack. Swear my oaths, and haul what I ask back to camp — all of it is found beyond that portal.",
+        cue: () => {
+          if (this.departSign) {
+            this.tweens.add({ targets: this.departSign, scale: 1.3, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
+          }
+          const pg = this.addGlow(445, -60, 3.4, 0.5);
+          this.time.delayedCall(1800, () => pg.destroy());
+        },
+      },
+      {
+        text: "And mind the tarp tent — a smith sulks inside. Past the tenth floor, an unforged blade will not carry you.",
+        cue: () => {
+          for (const o of this.tentMark) {
+            this.tweens.add({ targets: o, scale: (o as Phaser.GameObjects.Text).scale * 1.5, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
+          }
+        },
+      },
+    ];
+
+    let li = -1;
+    let typing = false;
+    let fullText = "";
+
+    const showLine = (i: number) => {
+      const ln = LINES[i];
+      dlgBg.setVisible(true);
+      dlgName.setVisible(true);
+      dlgText.setVisible(true).setText("");
+      dlgHint.setVisible(false);
+      fullText = ln.text;
+      typing = true;
+      let ci = 0;
+      lineTimer?.remove(false);
+      lineTimer = this.time.addEvent({
+        delay: 16,
+        repeat: fullText.length - 1,
+        callback: () => {
+          ci++;
+          dlgText.setText(fullText.slice(0, ci));
+          if (ci >= fullText.length) {
+            typing = false;
+            dlgHint.setVisible(true);
+          }
+        },
+      });
+      ln.cue?.();
+    };
+
+    const end = (skipped: boolean) => {
+      lineTimer?.remove(false);
+      walkTween?.stop();
+      for (const o of cleanup) o.destroy();
+      this.hero.setX(-47).play("hero-idle");
+      this.meta.campIntroSeen = true;
+      saveMeta(this.meta);
+      this.cutscene = false;
+      this.refreshWayfarerMark();
+      if (skipped) this.toast("the Wayfarer waits by the portal");
+    };
+
+    const advance = () => {
+      if (typing) {
+        // finish the line instantly
+        lineTimer?.remove(false);
+        dlgText.setText(fullText);
+        typing = false;
+        dlgHint.setVisible(true);
+        return;
+      }
+      li++;
+      if (li < LINES.length) showLine(li);
+      else end(false);
+    };
+
+    skip.on("pointerdown", () => end(true));
+
+    // the walk: in from beyond the camp's edge, slow and road-weary
+    this.hero.setX(-860).play("hero-walk");
+    walkTween = this.tweens.add({
+      targets: this.hero,
+      x: -47,
+      duration: 4400,
+      ease: "Sine.easeOut",
+      onComplete: () => {
+        this.hero.play("hero-idle");
+        this.time.delayedCall(600, () => advance()); // a beat, then she speaks
+      },
+    });
+    // taps during the walk skip straight to the dialog; after, they advance it
+    catcher.on("pointerdown", () => {
+      if (walkTween && walkTween.isPlaying()) {
+        walkTween.stop();
+        this.hero.setX(-47).play("hero-idle");
+        walkTween = null;
+        advance();
+        return;
+      }
+      if (li >= 0) advance();
+    });
+  }
+
   private toast(msg: string) {
     const vw = this.scale.width;
     const t = this.add
@@ -427,7 +662,7 @@ export class CampScene extends Phaser.Scene {
         fontFamily: "monospace", fontStyle: "bold", fontSize: "17px", color: "#fff2b0", stroke: "#2a0c06", strokeThickness: 5,
       })
       .setOrigin(0.5)
-      .setDepth(60)
+      .setDepth(95)
       .setAlpha(0);
     this.tweens.add({ targets: t, alpha: 1, y: t.y - 8, duration: 220 });
     this.tweens.add({ targets: t, alpha: 0, duration: 400, delay: 1400, onComplete: () => t.destroy() });
@@ -490,11 +725,12 @@ export class CampScene extends Phaser.Scene {
     this.panelBox?.destroy();
     this.panelBox = null;
     this.panelOpen = false;
+    this.refreshWayfarerMark(); // accepting/paying oaths changes her marker
   }
 
   /** The reluctant smith, hiding in the tarp tent until paid. */
   private tentTapped() {
-    if (this.editMode || this.panelOpen) return;
+    if (this.editMode || this.panelOpen || this.cutscene) return;
     if (this.meta.blacksmithHired) {
       this.toast("the tent is empty — Wren works the forge now");
       return;
@@ -534,21 +770,18 @@ export class CampScene extends Phaser.Scene {
       ease: "Sine.easeInOut",
       onComplete: () => {
         smith.play("smith-idle");
-        this.sfx("pickup", 0.6);
+        this.lightFurnace(true); // she keeps her word — the furnace roars to life
         this.toast("Wren the blacksmith joins the caravan! ⚒");
-        const rewarded = collectQuestRewards(this.meta);
-        if (rewarded.length) this.time.delayedCall(1500, () => {
-          this.sfx("coin3", 0.5);
-          this.toast(`quest complete: ${rewarded[0].label}  +${rewarded[0].reward} 💎`);
-          this.refreshResources();
-        });
+        this.refreshWayfarerMark(); // a "hire" oath may now be ready to turn in
+        if (this.meta.active.some((aq) => questDone(this.meta, aq)))
+          this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
       },
     });
   }
 
   /** Wren's forge: buy permanent sword damage, scaling ore cost. */
   private furnaceTapped() {
-    if (this.editMode || this.panelOpen) return;
+    if (this.editMode || this.panelOpen || this.cutscene) return;
     if (!this.meta.blacksmithHired) {
       this.toast("the furnace is cold… someone in that tent might know its trade");
       return;
@@ -576,17 +809,27 @@ export class CampScene extends Phaser.Scene {
     this.refreshResources();
     this.sfx("pickup", 0.65);
     this.toast(`the edge sings — sword damage +${this.meta.swordLevel} ⚔`);
-    const rewarded = collectQuestRewards(this.meta);
-    if (rewarded.length) this.time.delayedCall(1500, () => {
-      this.sfx("coin3", 0.5);
-      this.toast(`quest complete: ${rewarded[0].label}  +${rewarded[0].reward} 💎`);
-      this.refreshResources();
-    });
+    this.refreshWayfarerMark(); // a forge oath may now be ready to turn in
+    if (this.meta.active.some((aq) => questDone(this.meta, aq)))
+      this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
   }
 
   /** The Wayfarer's quest board: accepted quests with progress + new offers to accept. */
   private goddessTapped() {
-    if (this.editMode || this.panelOpen) return;
+    if (this.editMode || this.panelOpen || this.cutscene) return;
+
+    // turn-ins happen HERE: she pays every kept oath the moment you see her
+    const rewarded = collectQuestRewards(this.meta);
+    if (rewarded.length) {
+      this.refreshResources();
+      rewarded.forEach((q, i) =>
+        this.time.delayedCall(250 + i * 1200, () => {
+          this.sfx("coin3", 0.5);
+          this.toast(`oath kept: ${q.label}  +${q.reward} 💎`);
+        }),
+      );
+    }
+
     this.closePanel();
     this.panelOpen = true;
 
@@ -696,7 +939,7 @@ export class CampScene extends Phaser.Scene {
 
   /** Head out: the hero jogs off toward the portal, the day fades, the run begins. */
   private depart() {
-    if (this.departing || this.editMode || this.panelOpen) return;
+    if (this.departing || this.editMode || this.panelOpen || this.cutscene) return;
     this.departing = true;
     this.hero.play("hero-walk");
     // a slow, deliberate jog to the portal — then a gentle fade well after he sets off

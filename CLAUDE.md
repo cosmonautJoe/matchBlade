@@ -38,7 +38,8 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
 - `__mb` = GameScene: `.debugBoss()`, `.debugChest()`, `.debugCombo()`,
   `.debugItem(id?)`, `.rigSwapMatch(type)`.
 - `__mbCamp` = CampScene (has an in-camp layout editor, "✎ edit").
-- `?tutorial` URL param force-replays the tutorial.
+- `?tutorial` URL param force-replays the run tutorial; `?intro` force-replays
+  the camp arrival cutscene.
 
 ## Quirks worth knowing
 - `assets/` (raw art/audio packs) is **gitignored and not served** — the game

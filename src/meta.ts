@@ -37,6 +37,8 @@ export interface MetaState {
   bestDepth: number;
   // the run scene's first-entry tutorial has been completed (or skipped)
   tutorialSeen: boolean;
+  // the camp's arrival cutscene (walk in + the Wayfarer's welcome) has played
+  campIntroSeen: boolean;
   // quest board
   active: ActiveQuest[];
   questsRewarded: string[]; // completed & paid out
@@ -61,6 +63,7 @@ export function defaultMeta(): MetaState {
     chestsOpened: 0,
     bestDepth: 0,
     tutorialSeen: false,
+    campIntroSeen: false,
     active: [],
     questsRewarded: [],
     fulfilledRuns: [],
