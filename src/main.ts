@@ -654,7 +654,10 @@ class GameScene extends Phaser.Scene {
       .text(0, 0, "", { fontFamily: "monospace", fontSize: "12px", color: "#a9c8a9", lineSpacing: 7 })
       .setOrigin(0, 0);
     this.gearText = this.add.text(0, 0, "⚙", { fontFamily: EMOJI_FONT, fontSize: "26px", color: "#c7ccd6" }).setOrigin(0, 1);
-    this.gearText.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.debugCombo()); // TEMP: tap gear = force a combo
+    // dev-only combo rig — in production an accidental tap here instantly rewrote
+    // the whole board mid-run ("my board just reset?!"), so the gear ships hidden
+    if (import.meta.env.DEV) this.gearText.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.debugCombo());
+    else this.gearText.setVisible(false);
     this.rotateHint = this.add
       .text(0, 0, "↻ rotate to landscape", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
       .setOrigin(0.5, 0)
@@ -1180,7 +1183,7 @@ class GameScene extends Phaser.Scene {
     }
 
     await this.resolve();
-    if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    if (!this.run.over && !hasPossibleMove(this.grid)) await this.animatedReshuffle("no moves left — fresh tiles");
     this.tutorial?.onBoardSettled();
     this.busy = false;
   }
@@ -1922,8 +1925,19 @@ class GameScene extends Phaser.Scene {
   private async diceReroll() {
     this.busy = true;
     this.sfx("swap", 0.5, 1.2);
-    this.boardFlash(0.2);
-    // brief scatter: every tile pops out, then the fresh spread pops in
+    await this.animatedReshuffle();
+    await this.resolve(); // a fresh spread never opens matched, but cascades stay safe
+    this.busy = false;
+  }
+
+  /**
+   * Deal a fresh board with ceremony: tiles scatter out, the new spread pops in.
+   * Used by the Dice AND by the deadlock guard — a silent instant rebuild reads
+   * as a bug ("my board just reset?!"), so the reshuffle always announces itself.
+   */
+  private async animatedReshuffle(msg?: string) {
+    if (msg) this.notice(msg, "#8fd0ff");
+    this.boardFlash(0.18);
     const outs: Promise<void>[] = [];
     for (let r = 0; r < H; r++)
       for (let c = 0; c < W; c++) {
@@ -1943,8 +1957,6 @@ class GameScene extends Phaser.Scene {
       }
     this.sfx(`tile${1 + ((Math.random() * TILE_SFX) | 0)}`, 0.4);
     await new Promise<void>((res) => this.time.delayedCall(360, res));
-    await this.resolve(); // a fresh spread never opens matched, but cascades stay safe
-    this.busy = false;
   }
 
   /** Lodestone: rip every wood + ore tile into the pack, then let the board settle. */
@@ -1977,7 +1989,7 @@ class GameScene extends Phaser.Scene {
     this.refreshHud();
     await this.collapse();
     await this.resolve();
-    if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    if (!this.run.over && !hasPossibleMove(this.grid)) await this.animatedReshuffle("no moves left — fresh tiles");
     this.busy = false;
   }
 
@@ -2055,7 +2067,7 @@ class GameScene extends Phaser.Scene {
     this.refreshHud();
     await this.collapse();
     await this.resolve();
-    if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    if (!this.run.over && !hasPossibleMove(this.grid)) await this.animatedReshuffle("no moves left — fresh tiles");
     this.busy = false;
   }
 
@@ -2080,7 +2092,7 @@ class GameScene extends Phaser.Scene {
     this.notice(`${converts.length} tiles turn to swords`, "#ffd0f4");
     await new Promise<void>((res) => this.time.delayedCall(480, res));
     await this.resolve(); // freshly-forged swords may already line up — let them sing
-    if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    if (!this.run.over && !hasPossibleMove(this.grid)) await this.animatedReshuffle("no moves left — fresh tiles");
     this.busy = false;
   }
 
