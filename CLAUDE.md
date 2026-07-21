@@ -21,7 +21,7 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
   Deploy only when the user asks (it publishes).
 
 ## Architecture (src/)
-- `board.ts` — pure match-3 grid logic (no Phaser). W=11 x H=5, 7 tile types,
+- `board.ts` — pure match-3 grid logic (no Phaser). W=10 x H=5, 7 tile types,
   weighted spawns (`SPAWN_WEIGHTS`).
 - `run.ts` — pure run/combat state. Single fail axis: `pressure` 0→1 (skull).
   All combat/boss tuning knobs live here.
@@ -44,5 +44,7 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
 - `assets/` (raw art/audio packs) is **gitignored and not served** — the game
   loads only from `public/`. Vite ignores it in watch (locked files crash chokidar).
 - Windows checkout: LF/CRLF warnings on commit are normal; ignore them.
-- Tile icons are emoji placeholders on colored discs (real art is a TODO).
+- Tile faces are custom 84×84 ironbound pixel-art PNGs in `public/tiles/`;
+  `TILE_ART` in `src/main.ts` maps board types to preload keys. Keep future
+  replacements inside the shared frame/inset silhouette so the set stays cohesive.
 - The `⚙` gear (bottom-left) is dev-only; hidden in production builds.

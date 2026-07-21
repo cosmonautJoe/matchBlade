@@ -82,8 +82,9 @@ Three nested loops:
 > (damage / block / loot / gather) → cascade juice → repeat.
 
 **The run (2–5 minutes):**
-> fight a rising line of enemies → every 3rd kill a **chest** rolls in (spend a
-> banked key to pop it) → every 10th foe is a **boss** → *pressure* creeps up the
+> fight a rising line of enemies → every 3rd kill a **chest** becomes due (spend
+> a banked key to pop it; a full item pack defers it) → every 10th foe is a
+> **boss** → *pressure* creeps up the
 > whole time → you die when it hits 1.0 → the run's haul banks to the caravan.
 
 **The meta (many runs):**
@@ -100,19 +101,19 @@ Pure logic lives in **`src/board.ts`** (framework-agnostic); the animated layer
 is in `src/main.ts` (`GameScene`).
 
 ### 4.1 Dimensions & tiles
-- **Grid:** `W = 11` columns × `H = 5` rows (landscape board). `EMPTY = -1`.
-- **7 tile types** (`TYPES = 7`), currently drawn as **emoji glyphs on a colored
-  disc** (placeholder art — real tile icons are TODO):
+- **Grid:** `W = 10` columns × `H = 5` rows (landscape board). `EMPTY = -1`.
+- **7 tile types** (`TYPES = 7`), rendered as custom **84×84 ironbound pixel-art
+  faces** loaded from `public/tiles/`:
 
-| id | tile | glyph | effect (context-sensitive) |
+| id | tile | visual | effect (context-sensitive) |
 |----|----------|----|------------------------------------------------------|
-| 0 | sword | ⚔️ | melee attack on the current foe |
-| 1 | staff | 🪄 | magic attack (folds into the swing; standalone if no swords) |
-| 2 | shield | 🛡️ | adds **block** that soaks the next enemy strike |
-| 3 | key | 🔑 | **banks** a key (per-run) → pops chests / frees cages |
-| 4 | treasure | 💎 | diamonds — banked currency (premium/quests/boss bounty) |
-| 5 | wood | 🪵 | crafting resource, banked to the caravan |
-| 6 | ore | 🪨 | crafting resource, banked to the caravan |
+| 0 | sword | crossed steel swords | melee attack on the current foe |
+| 1 | staff | crooked crystal staff | magic attack (folds into the swing; standalone if no swords) |
+| 2 | shield | blue kite shield | adds **block** that soaks the next enemy strike |
+| 3 | key | ornate gold key | **banks** a key (per-run) → pops chests / frees cages |
+| 4 | treasure | faceted cyan diamond | diamonds — banked currency (premium/quests/boss bounty) |
+| 5 | wood | bound timber bundle | crafting resource, banked to the caravan |
+| 6 | ore | jagged steel crystals | crafting resource, banked to the caravan |
 
 ### 4.2 Spawn weights (the economy dial)
 Tiles do **not** spawn uniformly. `SPAWN_WEIGHTS = [4, 2, 2, 2, 2, 1, 1]` (sword,
@@ -226,16 +227,18 @@ pack, CC0, 150×150, flipped to face left).
 - **Death — the spoils:** flash + camera quake + a **coin/spark eruption**,
   `"CINDERMAGE FELLED!"`, **`BOSS_BOUNTY = 8` treasure**, +400 score, an extra
   **`BOSS_SURGE = 0.2`** pressure relief on top of the kill surge, and a
-  **guaranteed chest** rolls in right behind him.
+  **guaranteed chest** becomes due next (and waits if the item pack is full).
 - **Dev:** `__mb.debugBoss()` rigs the next foe as the boss.
 
 ---
 
 ## 7. Chests — The Dopamine Blast
 
-A chest rolls into the lane **every `CHEST_EVERY = 3`rd kill** (and always after a
-boss). Opening it is a **Vampire-Survivors-style full-screen takeover**, not
-floating text. Costs **1 banked key** (`CHEST_KEY_COST = 1`).
+A chest becomes due **every `CHEST_EVERY = 3`rd kill** (and immediately after a
+boss). At most one due chest waits while all 6 item slots are occupied; once the
+player uses an item, it arrives after the next fight. Opening it is a
+**Vampire-Survivors-style full-screen takeover**, not floating text. Costs **1
+banked key** (`CHEST_KEY_COST = 1`).
 
 **Sequence (`openChest`, skippable by tapping — `chestFast` collapses timings):**
 1. **Key gate** — hero jogs up; if no key, `🔒 need a key!` rattle and it slides
@@ -249,12 +252,16 @@ floating text. Costs **1 banked key** (`CHEST_KEY_COST = 1`).
 5. **Reveal one at a time** — each pull rises on an orb with an **escalating
    sting** (`combo2..combo6`); slot-machine tension because the count is hidden.
    Pull table: **2 guaranteed** + diminishing "one more!" rolls (0.6 / 0.32 /
-   0.16). Each pull: **14% a run item** (if a slot is free, once), else treasure
-   (2–4), wood (4–8), or ore (4–8). Best pull is sorted to land **last**.
+   0.16). Every opened chest reserves **at least one run item and one resource**.
+   Each remaining pull has a **14% bonus-item chance** while another slot is
+   free; otherwise it is treasure (2–4), wood (4–8), or ore (4–8). Resources
+   reveal first and all item pulls land **last**. A due chest waits behind
+   the next fight while all 6 item slots are full, preserving the guarantee.
 6. **Cash out** — each reward zips to its HUD counter/slot, values tick up with
    coin sfx, a final `pouch`; the world resumes.
 
-- **Dev:** `__mb.debugChest()` grants a key and forces a chest.
+- **Dev:** `__mb.debugChest()` grants a key and forces the next eligible chest;
+  a full item pack still defers it.
 
 **Cages (designed, next up):** the same walk-in + key-gate reused for **caged
 recruits** — match keys under scroll pressure to free a craftsperson before they
@@ -264,9 +271,10 @@ scroll past.
 
 ## 8. Run Items (the 6 HUD slots)
 
-**16 tap-to-use consumables** (`src/items.ts` registry + scene wiring in
-`main.ts`), earned from chest item-pulls into the **`SLOT_N = 6`** right-panel
-slots. **Tap a filled slot to use it**; **hover (mouse)** or **press-and-hold
+**16 one-shot run items** (`src/items.ts` registry + scene wiring in `main.ts`),
+earned from chest item-pulls into the **`SLOT_N = 6`** right-panel slots. Tap a
+filled slot to use it (the Hearth Charm instead fires automatically on death);
+**hover (mouse)** or **press-and-hold
 380ms (touch)** shows a **tooltip** (name, tier tag, description, usage hint).
 Aimed items enter a **targeting mode** (gold board ring + banner; tap a tile to
 fire, tap elsewhere to cancel — the item is only consumed when the shot lands).
@@ -278,8 +286,9 @@ A live **buff readout** under the quests shows charges/timers (`🗡️×2 📯9
 | **uncommon** | Waystone 🗿 (freeze scroll 12s) · Sapper's Charge 💣 (aim: 3×3 blast, destroyed tiles count as matched) · Lodestone 🧲 (bank every wood/ore tile) · Skeleton Key 🗝️ (next chest opens free) · Prospector's Pan ⛏️ (next chest +2 pulls) · Merchant's Ledger 📒 (2× resource matches 20s) · **Cinder Flask 🔥** *(boss hoard only: foe burns 2/sec for 10s)* |
 | **rare** | Stormcall Scroll 📜 (instant 25-dmg spell blast) · Chromatic Prism 🔮 (aim: every tile of a kind → swords) · Hearth Charm ❤️ (**auto**: on death it burns instead — once — pressure resets to 0.5) |
 
-- **Roll:** the 14% chest item-pull draws tier `60/30/10`%; the **boss hoard**
-  chest draws `25/45/30` and is the only source of boss trophies.
+- **Roll:** every chest has one guaranteed item; additional pulls retain a 14%
+  item chance. Regular items draw tier `60/30/10`%; the **boss hoard** chest
+  draws `25/45/30` and is the only source of boss trophies.
 - Effects hook the pure layer via `RunState.whetstone / surgeMult / resMult` and
   a shared `dealDamage()` (items, burns, and matches all kill through one path,
   so surge/score/kill flow stays consistent).
@@ -458,8 +467,10 @@ All loaded in `preload` (guarded), master volume 0.7, via an `sfx()` helper.
 
 ## 14. Art & Assets
 
-**Style:** 2D pixel-art. Tiles are currently **emoji-on-disc placeholders** —
-real tile-icon art is the top art TODO.
+**Style:** 2D pixel-art. The board uses a custom **ironbound relic** tile set:
+dark chipped frames, saturated type-colored inset panels, and silhouette-distinct
+icons sized for the 84×84 gameplay face. A shared, staggered diagonal glint
+occasionally sweeps individual tiles without synchronizing the whole board.
 
 **Character sprite sheets** (`public/sprites/`):
 - Hero — `warrior.png` (WarriorMan, 80×64). Anims: idle / walk / attack ×3 /
@@ -473,8 +484,9 @@ real tile-icon art is the top art TODO.
 floor atlases (GandalfHardcore) cropped per biome. Camp set-dressing (fire,
 furnace, portal, torches/water staged for future biomes).
 
-**Procedural (baked at runtime, no files):** tile faces + shard crack textures,
-raindrop, chest closed/open, god rays, coins, sparks, orbs, cropped ground slices.
+**Procedural (baked at runtime, no files):** shard crack textures (sampling the
+PNG tile faces), raindrop, chest closed/open, god rays, coins, sparks, orbs,
+cropped ground slices.
 
 **Licensing note:** keep every pack CC0 / properly-licensed and original; the
 boss pack is explicitly CC0. (Confirm licenses before shipping commercially.)
@@ -535,7 +547,7 @@ replay; `window.__mbCamp` + the in-camp layout editor; TEMP camp biome-flip tag.
 
 Master knobs, current values (edit these to retune the game):
 
-**Board (`board.ts`):** `W=11`, `H=5`, `TYPES=7`, `SPAWN_WEIGHTS=[4,2,2,2,2,1,1]`.
+**Board (`board.ts`):** `W=10`, `H=5`, `TYPES=7`, `SPAWN_WEIGHTS=[4,2,2,2,2,1,1]`.
 
 **Combat (`run.ts`):**
 `SWORD_MAIN=5`, `SWORD_EXTRA=2` (→ 5/7/9 dmg for 3/4/5+), `STAFF_DMG=3`,
@@ -552,7 +564,8 @@ Master knobs, current values (edit these to retune the game):
 **Items (`items.ts`):** `STORMCALL_DMG=25`, `WARHORN_SECS=15`, `WAYSTONE_SECS=12`,
 `BULWARK_BLOCK=0.3`, `BURN_DPS=2`/`BURN_SECS=10`, `SPURS_STRIKE_MS=7000`,
 `HEARTH_PRESSURE=0.5`, `LEDGER_SECS=20`, `WHETSTONE_CHARGES=3`,
-`PAN_EXTRA_PULLS=2`, `SAPPER_RADIUS=1` (3×3); tiers `60/30/10` (boss `25/45/30`).
+`PAN_EXTRA_PULLS=2`, `CHEST_BONUS_ITEM_CHANCE=0.14`, `SAPPER_RADIUS=1` (3×3);
+tiers `60/30/10` (boss `25/45/30`).
 
 **Meta (`meta.ts`):** `BLACKSMITH_COST={wood:30, ore:30}`,
 `forgeCost=20+15·level`, `MAX_ACTIVE=3` quests, `BIOME_ORDER=[plains, forest]`.
@@ -568,7 +581,7 @@ Master knobs, current values (edit these to retune the game):
   strikes, block, weapon combos, kill surge, score/depth HUD.
 - **Bosses** (Malgrim the Cindermage) with entrance, named bar, spoils, gated chest.
 - **Chests** — full VS-style takeover, pull table, reveal-one-at-a-time, cashout.
-- **Run items** — 16 tap-to-use consumables with hover/hold tooltips, targeting
+- **Run items** — 16 one-shot items with hover/hold tooltips, targeting
   mode, timed buffs + buff readout, tiered chest/boss-hoard roll tables (§8).
 - **Worlds/biomes** — plains + forest parallax, weather (rain/overcast), ambient beds.
 - **Meta caravan** — camp scene, Wren the blacksmith (hire + forge), the Wayfarer
@@ -581,11 +594,10 @@ Master knobs, current values (edit these to retune the game):
    chest walk-in + key-gate). *(Immediate next.)*
 2. **More recruits** — Carpenter (shield block), Hedge-witch (spell power), Cook
    (steadier pace) — each mapping to a `run.ts` knob (see §11).
-3. **Real tile-icon art** (retire the emoji placeholders).
-4. **Weapon-vs-enemy-type gating** (sword=ground, staff=flying) + a richer enemy
+3. **Weapon-vs-enemy-type gating** (sword=ground, staff=flying) + a richer enemy
    roster / lane obstacle set.
-5. More biomes (jungle → snow → dungeon) using staged floor/parallax sets.
-6. **Ship polish:** itch.io page, then Capacitor iOS wrap.
+4. More biomes (jungle → snow → dungeon) using staged floor/parallax sets.
+5. **Ship polish:** itch.io page, then Capacitor iOS wrap.
 
 ### Open questions
 - Difficulty curve per world; final pacing of the win condition.

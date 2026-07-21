@@ -8,3 +8,6 @@ Thumbs.db
 # Raw asset-pack library (source material only — the game loads from public/).
 # Remove this line if you want the packs versioned too.
 assets/
+
+# Local generated-art working sheets and dev-server scratch files.
+tmp/

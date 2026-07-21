@@ -55,8 +55,10 @@ import {
 } from "./run";
 import {
   type ItemDef,
+  type ChestPull,
   itemById,
   rollItem,
+  rollChestPulls,
   TIER_COLORS,
   STORMCALL_DMG,
   WARHORN_SECS,
@@ -80,9 +82,9 @@ import { Tutorial } from "./tutorial";
 // "design" coordinates and lives inside `centerBox`, which layout() scales + centres
 // to the live viewport. Side panels (resources / item slots) fill the leftover width,
 // so the game fills any landscape screen — phone or desktop — with no letterboxing.
-const TILE = 84;
-const GRID_W = W * TILE; // 11*84 = 924
-const GRID_H = H * TILE; // 5*84 = 420
+const TILE = 92;
+const GRID_W = W * TILE; // 10*92 = 920
+const GRID_H = H * TILE; // 5*92 = 460
 const PADIN = 12; // inner padding of the centre column
 const LANE_H = 240; // runner strip height (design)
 const GRID_GAP = 14; // gap between lane and board
@@ -90,7 +92,7 @@ const GRID_GAP = 14; // gap between lane and board
 const LANE_Y = PADIN;
 const GRID_X = PADIN; // board / lane left inset (design-local)
 const GRID_Y = LANE_Y + LANE_H + GRID_GAP; // board top (design-local)
-const CENTER_DW = GRID_W + PADIN * 2; // 948 — centre-column design width
+const CENTER_DW = GRID_W + PADIN * 2; // 944 — centre-column design width
 const CENTER_DH = GRID_Y + GRID_H + PADIN; // centre-column design height
 const CXC = CENTER_DW / 2; // centre-column horizontal centre (design-local)
 const UI_W = GRID_W; // lane inner width
@@ -100,7 +102,6 @@ const SLOT_N = 6; // item slots down the right panel
 // treasure chests — the Vampire-Survivors-style dopamine blast (DESIGN.md §4)
 const CHEST_EVERY = 3; // a chest rolls in after every Nth kill
 const CHEST_KEY_COST = 1; // banked keys needed to pop it
-type ChestPull = { kind: "wood" | "ore" | "treasure" | "item"; n: number; icon: string; item?: ItemDef };
 const HOLD_TIP_MS = 380; // touch: press-and-hold this long on a slot to read its tooltip
 
 /** One HUD item slot: frame + contents (def null = empty). */
@@ -141,7 +142,7 @@ const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
 const STRIKE_MS = 4800; // enemy strike cadence
 const WALK_IN_MS = 850; // time for a new enemy to march into range
 const TILE_SFX = 17; // number of tile-match sound variations (tile1..tileN)
-const FACE = TILE - 8; // tile face square (64) — sliced into chaotic shards on a match
+const FACE = TILE - 8; // 84px tile face — sliced into chaotic shards on a match
 const SHARD_PATTERNS = 3; // pre-baked crack patterns per tile type (variety)
 const WORLD_SCROLL = 170; // px/sec the world pans while the hero is running
 const FLOOR_SCALE = 1.6; // show the grass chunk chunky so the blades read like the reference
@@ -185,18 +186,21 @@ const RUN_BIOMES: Record<string, RunBiome> = {
   },
 };
 
-// ---- placeholder tile look (see DESIGN.md §3) -----------------------------
-const TILE_COLORS = [
-  0xd94b4b, // 0 sword     red
-  0x9b59b6, // 1 staff     purple
-  0x4b7bd9, // 2 shield    blue
-  0x54c26e, // 3 key       green
-  0xf2c14e, // 4 treasure  gold
-  0x9c6b3f, // 5 wood      brown
-  0x8a8f98, // 6 ore       gray
-];
-// icon per tile type: sword, staff, shield, key, treasure, wood, ore
-const TILE_GLYPH = ["⚔️", "🪄", "🛡️", "🔑", "💎", "🪵", "🪨"];
+// ---- ironbound relic tiles (logical order mirrors board.ts / run.ts) -------
+// Each source is an exact 84×84 composite face. The same texture is rendered on
+// the board and copied into the crack canvases, so matched shards keep the art.
+const TILE_ART = [
+  { key: "tile-sword", file: "tiles/sword.png" },
+  { key: "tile-staff", file: "tiles/staff.png" },
+  { key: "tile-shield", file: "tiles/shield.png" },
+  { key: "tile-key", file: "tiles/key.png" },
+  { key: "tile-treasure", file: "tiles/treasure.png" },
+  { key: "tile-wood", file: "tiles/wood.png" },
+  { key: "tile-ore", file: "tiles/ore.png" },
+] as const;
+const TILE_SHINE_KEY = "tile-shine";
+const TILE_SHINE_ANIM = "tile-shine-sweep";
+const TILE_SHINE_FRAMES = 11; // empty bookends + 9-frame diagonal glint
 // Text-FIRST so iOS Safari draws real digit/letter glyphs; emoji fall back per-glyph to
 // the system emoji font. (Leading with an emoji font garbles ASCII digits on iPhone.)
 const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
@@ -336,6 +340,7 @@ class GameScene extends Phaser.Scene {
     const img = (key: string, file: string) => {
       if (!this.textures.exists(key)) this.load.image(key, file);
     };
+    for (const tile of TILE_ART) img(tile.key, tile.file);
     for (const l of this.world.parallax) img(l.key, l.file);
     img(this.world.floorKey, this.world.floorFile);
     // sfx — combat is dedicated WAVs; swap/gameover are the foley pack
@@ -403,6 +408,11 @@ class GameScene extends Phaser.Scene {
     this.holdTimer = null;
     this.holdShown = false;
     this.buffStr = "";
+    // The rest of the game keeps crisp nearest-neighbour sampling, but these
+    // detailed composite faces need linear minification when the responsive
+    // shell displays them below their native 84px size.
+    for (const tile of TILE_ART) this.textures.get(tile.key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    this.buildTilePolish();
     this.buildTileFaces();
     this.buildChestArt();
 
@@ -816,10 +826,20 @@ class GameScene extends Phaser.Scene {
       for (let c = 0; c < W; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
   }
   private makeTile(r: number, c: number, type: number): Phaser.GameObjects.Container {
-    const rect = this.add.rectangle(0, 0, TILE - 8, TILE - 8, TILE_COLORS[type]).setStrokeStyle(2, 0x000000, 0.25);
-    const disc = this.add.circle(0, 0, 23, 0x0a0a0a, 0.32); // keeps icons legible on any tile colour
-    const label = this.add.text(0, 0, TILE_GLYPH[type], { fontFamily: EMOJI_FONT, fontSize: "34px" }).setOrigin(0.5);
-    return this.inBox(this.add.container(this.xFor(c), this.yFor(r), [rect, disc, label]).setData("type", type));
+    const face = this.add.image(0, 0, TILE_ART[type].key).setDisplaySize(FACE, FACE);
+    const shine = this.add
+      .sprite(0, 0, TILE_SHINE_KEY, 0)
+      .setDisplaySize(FACE, FACE)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0.4);
+    shine.play({
+      key: TILE_SHINE_ANIM,
+      delay: Phaser.Math.Between(500, 7200),
+      repeat: -1,
+      repeatDelay: Phaser.Math.Between(6500, 9000),
+      showBeforeDelay: true,
+    });
+    return this.inBox(this.add.container(this.xFor(c), this.yFor(r), [face, shine]).setData("type", type));
   }
 
   // --- input ---
@@ -987,6 +1007,7 @@ class GameScene extends Phaser.Scene {
     const out: string[] = [];
     let k = this.run.killed; // kills banked so far
     let sc = this.sinceChest;
+    const chestHasRoom = this.itemSlots.some((s) => !s.item);
     // the current engagement resolves first and isn't part of the forecast
     if (this.phase !== "chest" && !this.chest) {
       k++;
@@ -994,7 +1015,7 @@ class GameScene extends Phaser.Scene {
       if (this.run.enemy?.kind === "boss" || (this.orcAnim === "boss" && this.orc)) sc = CHEST_EVERY; // his hoard follows him out
     }
     while (out.length < n) {
-      if (sc >= CHEST_EVERY) {
+      if (sc >= CHEST_EVERY && chestHasRoom) {
         out.push("📦");
         sc = 0;
         continue;
@@ -1394,10 +1415,15 @@ class GameScene extends Phaser.Scene {
 
     this.time.delayedCall(Math.max(760, afterMs), () => {
       if (this.run.over) return;
-      if (++this.sinceChest >= CHEST_EVERY && !this.tutorial?.active) {
+      const chestDue = ++this.sinceChest >= CHEST_EVERY && !this.tutorial?.active;
+      const chestHasRoom = this.itemSlots.some((s) => !s.item);
+      if (chestDue && chestHasRoom) {
         this.sinceChest = 0;
         this.spawnChest(); // treasure interlude — the next foe waits its turn (held during the tutorial)
       } else {
+        if (chestDue && !chestHasRoom && this.sinceChest === CHEST_EVERY) {
+          this.notice("pack full — chest waits", "#ffd0a0");
+        }
         spawnNext(this.run);
         this.spawnOrc();
       }
@@ -1697,9 +1723,11 @@ class GameScene extends Phaser.Scene {
     for (const r of rays) this.tweens.add({ targets: r, alpha: 0, duration: 500, onComplete: () => r.destroy() });
     this.tweens.add({ targets: title, alpha: 0, y: title.y - 30, duration: 400, onComplete: () => title.destroy() });
     this.tweens.add({ targets: big, alpha: 0, y: CY + 30, duration: 500, delay: 200, onComplete: () => big.destroy() });
+    const itemTargets = this.itemSlots.filter((s) => !s.item);
+    let itemTarget = 0;
     for (let i = 0; i < collected.length; i++) {
       const { t, pull } = collected[i];
-      const slot = pull.kind === "item" ? this.itemSlots.find((s) => !s.icon) : null;
+      const slot = pull.kind === "item" ? itemTargets[itemTarget++] : undefined;
       // slots + resource counter are screen-space panels; the reveal lives in the centre column
       const tgt = slot ? this.toLocal(slot.x, slot.y) : this.toLocal(this.resIcons[0].x, this.resIcons[0].y);
       const tx = tgt.x;
@@ -1708,7 +1736,7 @@ class GameScene extends Phaser.Scene {
         targets: t, x: tx, y: ty, scale: 0.25, duration: 330, delay: i * 110, ease: "Cubic.easeIn",
         onComplete: () => {
           t.destroy();
-          this.applyPull(pull); // resources tick up as each one lands
+          this.applyPull(pull, slot); // resources tick up as each one lands
           this.sfx(this.pick(["coin1", "coin3"]), 0.4, 1 + i * 0.06);
         },
       });
@@ -1731,7 +1759,7 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Slot-machine pull table: 2 guaranteed, diminishing "one more!" odds, rare item. */
+  /** Slot-machine pull table: 2 guaranteed, diminishing extras, item + resource floor. */
   private rollChest(): ChestPull[] {
     let count = 2;
     if (Math.random() < 0.6) count++;
@@ -1743,34 +1771,23 @@ class GameScene extends Phaser.Scene {
     }
     const bossHoard = this.bossChestNext;
     this.bossChestNext = false;
-    const canItem = this.itemSlots.some((s) => !s.item);
-    const pulls: ChestPull[] = [];
-    for (let i = 0; i < count; i++) {
-      const r = Math.random();
-      if (r < 0.14 && canItem && !pulls.some((p) => p.kind === "item")) {
-        const def = rollItem(bossHoard);
-        pulls.push({ kind: "item", n: 1, icon: def.glyph, item: def });
-      } else if (r < 0.4) pulls.push({ kind: "treasure", n: 2 + ((Math.random() * 3) | 0), icon: "💎" });
-      else if (r < 0.7) pulls.push({ kind: "wood", n: 4 + ((Math.random() * 5) | 0), icon: "🪵" });
-      else pulls.push({ kind: "ore", n: 4 + ((Math.random() * 5) | 0), icon: "🪨" });
-    }
-    const rank = { wood: 0, ore: 0, treasure: 1, item: 2 } as const;
-    return pulls.sort((a, b) => rank[a.kind] - rank[b.kind]); // best pull lands last
+    const emptySlots = this.itemSlots.filter((s) => !s.item).length;
+    return rollChestPulls(count, emptySlots, bossHoard); // resources first; jackpot items land last
   }
 
-  private applyPull(pull: ChestPull) {
+  private applyPull(pull: ChestPull, itemSlot?: ItemSlotUI) {
     const r = this.run.resources;
     if (pull.kind === "wood") r.wood += pull.n;
     else if (pull.kind === "ore") r.ore += pull.n;
     else if (pull.kind === "treasure") r.treasure += pull.n;
-    else if (pull.item) this.fillSlot(pull.item);
+    else if (pull.item) this.fillSlot(pull.item, itemSlot);
     this.run.score += 25 + pull.n * 2;
     this.refreshHud();
   }
 
   /** Drop a chest item into the first empty HUD slot with a golden pop. */
-  private fillSlot(def: ItemDef) {
-    const slot = this.itemSlots.find((s) => !s.item);
+  private fillSlot(def: ItemDef, preferred?: ItemSlotUI) {
+    const slot = preferred && !preferred.item ? preferred : this.itemSlots.find((s) => !s.item);
     if (!slot) return;
     slot.item = def;
     const icon = this.add.text(slot.x, slot.y, def.glyph, { fontFamily: EMOJI_FONT, fontSize: `${Math.round(slot.s * 0.52)}px` }).setOrigin(0.5).setScale(0.2);
@@ -2501,25 +2518,79 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: t, x: this.xFor(c), y: this.yFor(r), duration: 140, ease: "Quad.easeInOut", onComplete: () => res() });
     });
   }
-  /** Paint one tile face (colour + disc + emoji) to an offscreen canvas. */
+  /** Shared, low-cost metallic glint: staggered per tile so the board never strobes in unison. */
+  private buildTilePolish() {
+    if (!this.textures.exists(TILE_SHINE_KEY)) {
+      const cv = document.createElement("canvas");
+      cv.width = FACE * TILE_SHINE_FRAMES;
+      cv.height = FACE;
+      const g = cv.getContext("2d")!;
+
+      // Frames 0 and 10 stay transparent. Across 1..9, a warm-white diagonal
+      // highlight crosses the iron frame and icon, clipped to the tile silhouette.
+      for (let frame = 1; frame < TILE_SHINE_FRAMES - 1; frame++) {
+        const ox = frame * FACE;
+        const p = (frame - 1) / (TILE_SHINE_FRAMES - 3);
+        g.save();
+        g.translate(ox, 0);
+        const inset = 2;
+        const radius = 7;
+        g.beginPath();
+        g.moveTo(inset + radius, inset);
+        g.lineTo(FACE - inset - radius, inset);
+        g.quadraticCurveTo(FACE - inset, inset, FACE - inset, inset + radius);
+        g.lineTo(FACE - inset, FACE - inset - radius);
+        g.quadraticCurveTo(FACE - inset, FACE - inset, FACE - inset - radius, FACE - inset);
+        g.lineTo(inset + radius, FACE - inset);
+        g.quadraticCurveTo(inset, FACE - inset, inset, FACE - inset - radius);
+        g.lineTo(inset, inset + radius);
+        g.quadraticCurveTo(inset, inset, inset + radius, inset);
+        g.closePath();
+        g.clip();
+
+        g.translate(FACE / 2, FACE / 2);
+        g.rotate(-Math.PI / 7);
+        const sweepX = lerp(-FACE * 0.9, FACE * 0.9, p);
+        const broad = g.createLinearGradient(sweepX - 15, 0, sweepX + 15, 0);
+        broad.addColorStop(0, "rgba(255,246,205,0)");
+        broad.addColorStop(0.34, "rgba(255,246,205,0.08)");
+        broad.addColorStop(0.5, "rgba(255,255,240,0.22)");
+        broad.addColorStop(0.66, "rgba(255,246,205,0.08)");
+        broad.addColorStop(1, "rgba(255,246,205,0)");
+        g.fillStyle = broad;
+        g.fillRect(sweepX - 16, -FACE, 32, FACE * 2);
+
+        // A fine specular edge gives the sweep a crisp pixel-art glint without
+        // washing out the saturated icon colours underneath.
+        g.fillStyle = "rgba(255,255,255,0.1)";
+        g.fillRect(sweepX - 1, -FACE, 2, FACE * 2);
+        g.restore();
+      }
+
+      const sheet = this.textures.addCanvas(TILE_SHINE_KEY, cv);
+      // Passing a Texture makes Phaser retain its existing key while slicing it.
+      if (sheet) this.textures.addSpriteSheet("", sheet, { frameWidth: FACE, frameHeight: FACE });
+      sheet?.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    }
+    if (!this.anims.exists(TILE_SHINE_ANIM)) {
+      this.anims.create({
+        key: TILE_SHINE_ANIM,
+        frames: this.anims.generateFrameNumbers(TILE_SHINE_KEY, { start: 0, end: TILE_SHINE_FRAMES - 1 }),
+        frameRate: 20,
+        repeat: -1,
+      });
+    }
+  }
+  /** Copy one composite tile face to an offscreen canvas for crack slicing. */
   private faceCanvas(type: number, S: number): HTMLCanvasElement {
     const cv = document.createElement("canvas");
     cv.width = S;
     cv.height = S;
     const cx = cv.getContext("2d")!;
-    cx.fillStyle = "#" + TILE_COLORS[type].toString(16).padStart(6, "0");
-    cx.fillRect(0, 0, S, S);
-    cx.strokeStyle = "rgba(0,0,0,0.25)";
-    cx.lineWidth = 2;
-    cx.strokeRect(1, 1, S - 2, S - 2);
-    cx.fillStyle = "rgba(10,10,10,0.32)";
-    cx.beginPath();
-    cx.arc(S / 2, S / 2, 23, 0, Math.PI * 2);
-    cx.fill();
-    cx.font = '34px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
-    cx.textAlign = "center";
-    cx.textBaseline = "middle";
-    cx.fillText(TILE_GLYPH[type], S / 2, S / 2 + 2);
+    cx.imageSmoothingEnabled = true;
+    cx.imageSmoothingQuality = "high";
+    const src = this.textures.get(TILE_ART[type].key).getSourceImage() as CanvasImageSource;
+    cx.drawImage(src, 0, 0, S, S);
     return cv;
   }
 

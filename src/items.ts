@@ -23,6 +23,8 @@ export interface ItemDef {
   bossOnly?: boolean; // only appears in the boss-hoard table
 }
 
+export type ChestPull = { kind: "wood" | "ore" | "treasure" | "item"; n: number; icon: string; item?: ItemDef };
+
 // ---- effect tuning (the scene reads these) ---------------------------------
 export const STORMCALL_DMG = 25;
 export const WARHORN_SECS = 15;
@@ -94,6 +96,7 @@ export const TIER_COLORS: Record<ItemTier, string> = {
 // place bossOnly trophies (the Cinder Flask) appear.
 const TIER_WEIGHTS: Record<ItemTier, number> = { common: 60, uncommon: 30, rare: 10 };
 const BOSS_TIER_WEIGHTS: Record<ItemTier, number> = { common: 25, uncommon: 45, rare: 30 };
+export const CHEST_BONUS_ITEM_CHANCE = 0.14;
 
 export function rollItem(bossHoard: boolean, rand: () => number = Math.random): ItemDef {
   const weights = bossHoard ? BOSS_TIER_WEIGHTS : TIER_WEIGHTS;
@@ -109,4 +112,42 @@ export function rollItem(bossHoard: boolean, rand: () => number = Math.random): 
   }
   const pool = ITEMS.filter((i) => i.tier === tier && (bossHoard || !i.bossOnly));
   return pool[(rand() * pool.length) | 0];
+}
+
+/**
+ * Build a fixed-size chest haul. One resource and one item are guaranteed when
+ * inventory space exists; the remaining pulls retain the old 14% item chance.
+ * Item count is capped to the empty-slot budget and one resource always remains.
+ */
+export function rollChestPulls(
+  count: number,
+  emptySlots: number,
+  bossHoard: boolean,
+  rand: () => number = Math.random,
+): ChestPull[] {
+  const total = Math.max(2, Math.floor(count));
+  const itemBudget = Math.max(0, Math.min(Math.floor(emptySlots), total - 1));
+  let itemCount = itemBudget > 0 ? 1 : 0;
+
+  // Two pulls are reserved for the guaranteed resource + item. Every extra
+  // reveal can jackpot into another item, while capacity remains available.
+  for (let i = 0; i < total - 2 && itemCount < itemBudget; i++) {
+    if (rand() < CHEST_BONUS_ITEM_CHANCE) itemCount++;
+  }
+
+  const resourcePull = (): ChestPull => {
+    const r = rand();
+    if (r < 0.4) return { kind: "treasure", n: 2 + ((rand() * 3) | 0), icon: "💎" };
+    if (r < 0.7) return { kind: "wood", n: 4 + ((rand() * 5) | 0), icon: "🪵" };
+    return { kind: "ore", n: 4 + ((rand() * 5) | 0), icon: "🪨" };
+  };
+
+  const pulls: ChestPull[] = [];
+  for (let i = itemCount; i < total; i++) pulls.push(resourcePull());
+  for (let i = 0; i < itemCount; i++) {
+    const def = rollItem(bossHoard, rand);
+    pulls.push({ kind: "item", n: 1, icon: def.glyph, item: def });
+  }
+  const rank = { wood: 0, ore: 0, treasure: 1, item: 2 } as const;
+  return pulls.sort((a, b) => rank[a.kind] - rank[b.kind]);
 }

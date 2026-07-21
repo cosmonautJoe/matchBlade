@@ -23,7 +23,7 @@ code, and content**; we do not copy their assets.
 
 ## 2. Grid & input  (classic swap match-3)
 
-- Board is ~**8 columns x 7 rows** (`W=8, H=7` in `src/board.ts`).
+- Board is **10 columns × 5 rows** (`W=10, H=5` in `src/board.ts`).
 - **Input is a SWAP** — Candy Crush / Bejeweled style. The player drags a tile
   onto an **orthogonally-adjacent** neighbour to swap the two; the swap only
   **sticks if it creates a match**, otherwise it animates back.
@@ -49,7 +49,8 @@ facing an enemy; keys only when at a lock; resources always stockpile.
 | 5  | wood      | crafting resource (spent at the caravan camp)                 |
 | 6  | ore       | crafting resource (spent at the caravan camp)                 |
 
-Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLYPH`).
+Production tile faces are 84×84 transparent pixel-art PNGs in `public/tiles/`.
+`TILE_ART` in `src/main.ts` maps each logical type to its preloaded texture.
 
 ## 4. Runner lane & combat
 
@@ -64,9 +65,10 @@ Palette + glyphs for placeholders are in `src/main.ts` (`TILE_COLORS`, `TILE_GLY
   text — a full takeover sequence: hitstop + dark veil → chest center-stage,
   rattling, light leaking → POP: radial light rays, loot erupting with physics
   (reuse the tile-shard tumble system) → rewards revealed **one at a time**
-  (hidden count = slot-machine tension; mostly resources, sometimes diamonds,
-  rare **item that flies up into one of the 5 HUD item slots**) → fast tick-up
-  tally → tap to collect, world resumes. Escalating sting per extra reward.
+  (hidden count = slot-machine tension; resources plus a guaranteed **run item
+  that flies into one of the 6 right-panel HUD slots**, with jackpot chances for
+  more items) → fast tick-up tally → world resumes. Escalating sting per extra
+  reward. A due chest waits while all 6 item slots are occupied.
 - **Scroll pressure:** the world scrolls left at a steady (increasing) rate;
   progress from matches/kills moves the hero right relative to it. Fall behind to
   the skull -> death.
@@ -129,8 +131,8 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
   - Chosen over PixiJS (leaner, the modern "Starling") and Three.js (3D, overkill
     for this 2D game). Phaser gives scenes, input, tweens, audio, and asset
     loading out of the box, which suits this game's many systems.
-- **Art: 2D.** Start with **colored-block placeholders** (already in the boot
-  scene) to nail mechanics, then add pixel-art sprites.
+- **Art: 2D pixel-art.** The board uses custom ironbound relic tile sprites;
+  remaining procedural/placeholder assets can be replaced incrementally.
 - **Deployment:**
   - **GitHub Pages (SHIPPED):** `npm run deploy` builds and force-pushes `dist/`
     to the `gh-pages` branch -> https://cosmonautjoe.github.io/matchBlade/.
@@ -151,8 +153,10 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
 
 - Vite + TS + Phaser project with the core loop working end to end:
   - **Swap match-3 board** (`src/main.ts` + `src/board.ts`): drag-to-swap,
-    illegal-swap revert, animated clear/gravity/refill cascade. Tiles use emoji
-    icons (⚔️🪄🛡️🔑💎🪵🪨) on a backing disc; real tile art still TODO.
+    illegal-swap revert, animated clear/gravity/refill cascade. Tiles use a
+    cohesive custom ironbound pixel-art set (crossed swords, crystal staff,
+    shield, key, treasure, timber, and ore); staggered metallic glints add subtle
+    runtime polish, and clear shards sample the same art.
   - **Runner + combat** (`src/main.ts` + `src/run.ts`): animated hero (Soldier)
     and enemies (Orc) marching in from the right, over a **grass world** — a
     layered **parallax** backdrop (vnitti Grassy-Mountains: sky, far/near
@@ -161,8 +165,8 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     pans while the hero runs and holds still in a fight. Constant leftward
     **scroll pressure** + enemy strikes push the hero toward the skull; matching
     combat tiles kills the enemy and surges the hero forward. Enemy HP bar,
-    score/resource HUD, a row of **5 placeholder item slots** along the top
-    (future run consumables — filled by chest drops, see §4), game-over +
+    score/resource HUD, **6 run-item slots** in the right panel (filled by chest
+    drops, see §4), game-over +
     tap-to-restart. (The pressure bar was removed: the hero's distance from
     the skull IS the pressure readout.)
   - **Worlds** (planned): the backdrop is swappable — grass first, then
@@ -177,7 +181,8 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     seared tint); scroll pressure halves during the fight (`BOSS_SCROLL_MULT` —
     no intermediate kills means no relief). Death: flash + quake + coin/spark
     eruption, "CINDERMAGE FELLED!", `BOSS_BOUNTY` treasure, an extra
-    `BOSS_SURGE` of pressure relief, and a guaranteed chest right after.
+    `BOSS_SURGE` of pressure relief, and a guaranteed chest becomes due next
+    (it waits if all 6 item slots are occupied).
     Dev: `__mb.debugBoss()` rigs the next foe. Knobs live in run.ts.
   - **Ambient soundscape + weather (SHIPPED):** a looping forest bed under
     every run (`amb_day`), with a `RAIN_CHANCE` roll per run that swaps in
@@ -195,9 +200,11 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     unlocked only for the hands-on steps). Plays once via `meta.tutorialSeen`.
     Copy notes: resource tiles are pitched as "spend at camp, more uses coming"
     since tile roles may still change.
-- **Run items (SHIPPED, src/items.ts + main.ts):** 16 tap-to-use consumables
-  fill the 6 HUD slots from chest item-pulls (tiers 60/30/10; the boss hoard
-  rolls 25/45/30 and is the only source of the Cinder Flask trophy). Tooltips
+- **Run items (SHIPPED, src/items.ts + main.ts):** 16 one-shot run items
+  fill the 6 HUD slots from chest item-pulls. Every opened chest reserves one
+  resource and one item; extra pulls retain a 14% bonus-item chance, capped by
+  free slots (tiers 60/30/10; the boss hoard rolls 25/45/30 and is the only
+  source of the Cinder Flask trophy). Due chests wait while the pack is full. Tooltips
   on **hover** (mouse) and **press-and-hold** (touch, 380ms — that release
   doesn't fire the item). Aimed items (Sapper's Charge, Chromatic Prism) enter
   a targeting mode (gold ring + banner, consumed only when the shot lands);
@@ -208,8 +215,8 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
   Scout's Spurs can stretch the cadence. Dev: `__mb.debugItem(id?)`.
 - `npm install` then `npm run dev` -> the harness picks a free port (see
   `vite.config.ts` / `.claude/launch.json` `autoPort`).
-- **Still placeholder / TODO:** real tile-icon art, weapon-vs-enemy-type gating
-  (sword vs ground, staff vs flying), cages/rescues, more recruits at camp.
+- **Still placeholder / TODO:** weapon-vs-enemy-type gating (sword vs ground,
+  staff vs flying), cages/rescues, more recruits at camp.
 
 ## 9. Suggested build order
 
@@ -219,14 +226,16 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
 4. ~~**Combat** — enemies with HP; sword/staff -> damage, shield -> block.~~ ✅ done
    (single ground enemy for now; weapon-vs-type gating still TODO)
 6. ~~**Score + HUD** — score, resource counters, depth.~~ ✅ done
-5. **Chests** — ✅ done. A chest rolls into the lane every Nth kill; a banked
-   key pops it into the full VS-style takeover blast (§4). Placeholder pixel
-   chest + baked god-rays/coins/sparks; real chest art TBD.
+5. **Chests** — ✅ done. A chest becomes due every Nth kill; at most one waits
+   while the item pack is full. A banked key pops it into the full VS-style
+   takeover blast (§4). Placeholder pixel chest + baked god-rays/coins/sparks;
+   real chest art TBD.
    **Cages & rescues** — cages in the lane, key matches free recruits under
    pressure (reuses the chest's walk-in + key-gate). ← next
 7. **Caravan camp** — wagon lineup between runs; recruits' upgrade tracks
    spend wood/ore (localStorage). See §5.
-8. **Art & audio** — real tile-icon art, SFX, music (character sprites done).
+8. **Art & audio** — custom tile-icon art ✅; SFX and music remain
+   (character sprites done).
 9. **Ship** — `npm run build`, itch.io page, (later) Capacitor iOS wrap.
 
 ## 10. Open questions
