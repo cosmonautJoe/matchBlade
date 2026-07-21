@@ -35,6 +35,8 @@ import {
   type RunState,
   type MatchOutcome,
   SWORD,
+  KEY,
+  TREASURE,
   WOOD,
   ORE,
   newRun,
@@ -254,6 +256,7 @@ class GameScene extends Phaser.Scene {
   private resIcons: Phaser.GameObjects.Text[] = []; // 🪵 🪨 💎 🔑 icons (left panel)
   private resVals: Phaser.GameObjects.Text[] = []; // matching counts, positioned tight to each icon
   private overShown = false;
+  private lastScoreShown = 0; // pulse the SCORE readout only when it climbs
 
   // responsive shell: the lane + board live in centerBox (design coords), scaled to
   // fit the viewport; the side panels flank it and absorb the leftover width.
@@ -370,6 +373,7 @@ class GameScene extends Phaser.Scene {
     this.rainy = Math.random() < RAIN_CHANCE;
     this.heroLockX = false;
     this.overShown = false;
+    this.lastScoreShown = 0;
     this.phase = "advance";
     this.parallax = [];
     this.frags = [];
@@ -728,6 +732,12 @@ class GameScene extends Phaser.Scene {
     const vals = [r.wood, r.ore, r.treasure, r.keys];
     for (let i = 0; i < this.resVals.length; i++) this.resVals[i].setText(`${vals[i]}`);
     this.scoreText.setText(`DEPTH   ${this.run.killed}\n\nSCORE   ${this.run.score}`);
+    if (this.run.score > this.lastScoreShown) {
+      this.lastScoreShown = this.run.score;
+      this.tweens.killTweensOf(this.scoreText);
+      this.scoreText.setScale(1);
+      this.tweens.add({ targets: this.scoreText, scale: 1.09, duration: 90, yoyo: true }); // a little thump as it climbs
+    }
     // accepted quests, with progress counting this run's haul live
     const live = { kills: this.run.killed, chests: this.chestsOpened, wood: r.wood, ore: r.ore };
     const lines = this.meta.active.map((aq) => {
@@ -1209,16 +1219,26 @@ class GameScene extends Phaser.Scene {
 
       buzz(depth > 1 ? 22 : 14); // haptic tick as the tiles shatter (deeper cascade = longer buzz on Android)
       const fades: Promise<void>[] = [];
+      const resCells: { x: number; y: number }[] = []; // where the scoring (resource/key) tiles sat
       cleared.forEach((key) => {
         const [r, c] = key.split(",").map(Number);
+        const ty = this.grid[r][c];
+        if (ty === WOOD || ty === ORE || ty === TREASURE || ty === KEY) resCells.push({ x: this.xFor(c), y: this.yFor(r) });
         const t = this.tiles[r][c];
-        if (t) fades.push(this.shatter(t, this.grid[r][c]));
+        if (t) fades.push(this.shatter(t, ty));
         this.tiles[r][c] = null;
         this.grid[r][c] = EMPTY;
       });
       await Promise.all(fades);
 
       const outcome = applyMatches(this.run, counts);
+      // the haul pays out where it was matched — a gold "+N" over the cleared tiles
+      const resScore = (outcome.gained.wood + outcome.gained.ore + outcome.gained.treasure + outcome.gained.keys) * 2;
+      if (resScore > 0 && resCells.length) {
+        const cx = resCells.reduce((s, p) => s + p.x, 0) / resCells.length;
+        const cy = resCells.reduce((s, p) => s + p.y, 0) / resCells.length;
+        this.floatScore(cx, cy, resScore, { delay: 70, size: Math.min(52, 32 + Math.floor(resScore / 4) + depth * 3) });
+      }
       this.tutorial?.onCascade(counts);
       const swords = outcome.swords; // effective count — Wren's Whetstone can upgrade the swing
       if (swords > 0) swordHits++;
@@ -1338,6 +1358,12 @@ class GameScene extends Phaser.Scene {
       dying.play(`${this.orcAnim}-death`);
       dying.once("animationcomplete", () => {
         this.tweens.add({ targets: dying, alpha: 0, duration: wasBoss ? 700 : 260, onComplete: () => dying.destroy() });
+      });
+      // the kill bounty pops over the corpse as the final swing lands
+      this.floatScore(dying.x + 14, GROUND_Y - 104, wasBoss ? 400 : 100, {
+        size: wasBoss ? 44 : 34,
+        sparkle: true,
+        delay: Math.max(0, afterMs - 420),
       });
     }
     if (wasBoss) this.bossSpoils(dying?.x ?? SAFE_X + BOSS_ENGAGE_GAP);
@@ -1665,6 +1691,9 @@ class GameScene extends Phaser.Scene {
     }
     await this.cwait(collected.length * 110 + 430);
     this.sfx("pouch", 0.6);
+    // the whole haul's score lands as one gold thump right where the chest stood
+    const chestScore = pulls.reduce((s, p) => s + 25 + p.n * 2, 0);
+    this.floatScore(CX, CY - 40, chestScore, { size: 42, sparkle: true });
     coins.destroy();
     sparks.destroy();
 
@@ -2251,6 +2280,67 @@ class GameScene extends Phaser.Scene {
       if (dmg > 0) this.time.delayedCall(t + 100, () => this.floatDamage(dmg, i === 0));
       t += this.anims.get(key)?.duration ?? 300;
     });
+  }
+
+  /**
+   * Floating score number — the gold-gradient "+N" that pops wherever points are
+   * earned (matches, kills, chests). Distinct from floatDamage (amber "-N"):
+   * score is always gold, always "+", and scales with the size of the win.
+   */
+  private floatScore(x: number, y: number, n: number, opts: { size?: number; delay?: number; sparkle?: boolean } = {}) {
+    if (n <= 0) return;
+    const spawn = () => {
+      // Sizes are DESIGN px (the centre column scales down on small screens), so
+      // the floor has to be generous or a 3-match's "+6" vanishes into the board.
+      const size = opts.size ?? Math.min(52, 32 + Math.floor(n / 4)); // bigger wins land bigger
+      const t = this.inBox(
+        this.add
+          .text(x + (Math.random() * 18 - 9), y, `+${n}`, {
+            fontFamily: "monospace",
+            fontStyle: "bold",
+            fontSize: `${size}px`,
+            color: "#ffffff",
+            stroke: "#1a0a04",
+            strokeThickness: Math.max(5, Math.round(size / 4)),
+          })
+          .setOrigin(0.5)
+          .setDepth(66)
+          .setScale(0.2)
+          .setAngle(Math.random() * 8 - 4), // a little tilt so repeats don't stamp
+      );
+      t.setShadow(0, 4, "rgba(0,0,0,0.85)", 8, true, true); // lifts it off any tile colour
+      t.setTint(0xfff6c8, 0xffe08a, 0xf2a93b, 0xc9761f); // the game's gold gradient
+      this.tweens.add({ targets: t, scale: 1.12, duration: 200, ease: "Back.easeOut" });
+      this.tweens.add({ targets: t, scale: 1, duration: 120, delay: 200 }); // settle off the overshoot
+      this.tweens.add({
+        targets: t,
+        y: y - 60 - size,
+        alpha: 0,
+        angle: 0,
+        duration: 950,
+        delay: 380,
+        ease: "Quad.easeOut",
+        onComplete: () => t.destroy(),
+      });
+      if (opts.sparkle) {
+        // a glint of sparks behind the big paydays
+        const sp = this.inBox(
+          this.add
+            .particles(x, y, "spark", {
+              speed: { min: 60, max: 190 },
+              lifespan: { min: 250, max: 520 },
+              scale: { start: 1.0, end: 0 },
+              blendMode: "ADD",
+              emitting: false,
+            })
+            .setDepth(65),
+        );
+        sp.explode(10);
+        this.time.delayedCall(700, () => sp.destroy());
+      }
+    };
+    if (opts.delay) this.time.delayedCall(opts.delay, spawn);
+    else spawn();
   }
 
   private floatDamage(n: number, big = true) {
