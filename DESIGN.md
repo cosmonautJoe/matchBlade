@@ -132,6 +132,10 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
 - **Art: 2D.** Start with **colored-block placeholders** (already in the boot
   scene) to nail mechanics, then add pixel-art sprites.
 - **Deployment:**
+  - **GitHub Pages (SHIPPED):** `npm run deploy` builds and force-pushes `dist/`
+    to the `gh-pages` branch -> https://cosmonautjoe.github.io/matchBlade/.
+    Pushing `master` does NOT update the live site — deploy is a separate,
+    manual step (see `scripts/deploy.mjs` + CLAUDE.md).
   - **Web / your site / itch.io:** `npm run build` -> static bundle in `dist/`.
   - **iOS:** wrap the web build with **Capacitor** (or Cordova) -> native app.
     Needs an Apple Developer account + Mac/Xcode to submit. Lighter 2D builds run
