@@ -35,16 +35,38 @@ import {
   type RunState,
   type MatchOutcome,
   SWORD,
+  WOOD,
+  ORE,
   newRun,
   applyMatches,
+  dealDamage,
   enemyStrike,
   spawnNext,
   scroll,
+  BLOCK_PER_SHIELD,
   BOSS_EVERY,
   BOSS_SCROLL_MULT,
   BOSS_BOUNTY,
   BOSS_SURGE,
 } from "./run";
+import {
+  type ItemDef,
+  itemById,
+  rollItem,
+  TIER_COLORS,
+  STORMCALL_DMG,
+  WARHORN_SECS,
+  WAYSTONE_SECS,
+  BULWARK_BLOCK,
+  BURN_DPS,
+  BURN_SECS,
+  SPURS_STRIKE_MS,
+  HEARTH_PRESSURE,
+  LEDGER_SECS,
+  WHETSTONE_CHARGES,
+  PAN_EXTRA_PULLS,
+  SAPPER_RADIUS,
+} from "./items";
 import { CampScene } from "./camp";
 import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
 import { Tutorial } from "./tutorial";
@@ -74,8 +96,20 @@ const SLOT_N = 6; // item slots down the right panel
 // treasure chests — the Vampire-Survivors-style dopamine blast (DESIGN.md §4)
 const CHEST_EVERY = 3; // a chest rolls in after every Nth kill
 const CHEST_KEY_COST = 1; // banked keys needed to pop it
-const ITEM_GLYPHS = ["🧪", "💣", "🧭"]; // placeholder slot items until the item system lands
-type ChestPull = { kind: "wood" | "ore" | "treasure" | "item"; n: number; icon: string };
+type ChestPull = { kind: "wood" | "ore" | "treasure" | "item"; n: number; icon: string; item?: ItemDef };
+const HOLD_TIP_MS = 380; // touch: press-and-hold this long on a slot to read its tooltip
+
+/** One HUD item slot: frame + contents (def null = empty). */
+interface ItemSlotUI {
+  x: number;
+  y: number;
+  s: number;
+  bg: Phaser.GameObjects.Rectangle;
+  inner: Phaser.GameObjects.Rectangle;
+  plus: Phaser.GameObjects.Text;
+  icon: Phaser.GameObjects.Text | null;
+  item: ItemDef | null;
+}
 
 // lane geometry (design-local)
 const FLOOR_H = 40; // grassy ground band the characters stand on
@@ -239,7 +273,28 @@ class GameScene extends Phaser.Scene {
   private meta!: MetaState; // snapshot at run start — drives the in-run quest HUD
   private questText!: Phaser.GameObjects.Text;
   private tutorial: Tutorial | null = null; // first-entry guided overlay (null once seen)
-  private itemSlots: { x: number; y: number; s: number; bg: Phaser.GameObjects.Rectangle; inner: Phaser.GameObjects.Rectangle; plus: Phaser.GameObjects.Text; icon: Phaser.GameObjects.Text | null }[] = [];
+  private itemSlots: ItemSlotUI[] = [];
+
+  // ---- run items (src/items.ts): live buffs, armed charges, targeting -------
+  private freezeLeft = 0; // Waystone: seconds of frozen scroll remaining
+  private freezeVeil: Phaser.GameObjects.Rectangle | null = null; // cool wash while frozen
+  private hornLeft = 0; // War Horn: seconds of doubled kill-surge
+  private ledgerLeft = 0; // Merchant's Ledger: seconds of doubled resource gains
+  private burnLeft = 0; // Cinder Flask: seconds the current foe keeps burning
+  private burnAcc = 0; // fractional-second accumulator for burn ticks
+  private spursActive = false; // Scout's Spurs: slowed strikes until the current foe falls
+  private skeletonCharges = 0; // Skeleton Key: free chest openings armed
+  private panCharges = 0; // Prospector's Pan: chests with bonus pulls armed
+  private inkActive = false; // Cartographer's Ink: road forecast on for the rest of the run
+  private bossChestNext = false; // the chest rolling in is the boss hoard (richer item table)
+  private targeting: { def: ItemDef; slot: ItemSlotUI } | null = null;
+  private targetObjs: Phaser.GameObjects.GameObject[] = []; // banner + board ring while aiming
+  private tip: Phaser.GameObjects.Container | null = null; // shared tooltip panel (screen-space)
+  private tipFor: number = -1; // slot index the tooltip is showing for
+  private holdTimer: Phaser.Time.TimerEvent | null = null; // touch press-and-hold -> tooltip
+  private holdShown = false; // this press already showed the tooltip -> release must not use
+  private buffText!: Phaser.GameObjects.Text; // live item-buff readout (left panel)
+  private buffStr = ""; // last rendered buff line (skip redundant setText)
 
   constructor() {
     super("game");
@@ -323,6 +378,25 @@ class GameScene extends Phaser.Scene {
     this.chestFast = false;
     this.sinceChest = 0;
     this.tutorial = null;
+    // run items: everything resets with the run
+    this.freezeLeft = 0;
+    this.freezeVeil = null;
+    this.hornLeft = 0;
+    this.ledgerLeft = 0;
+    this.burnLeft = 0;
+    this.burnAcc = 0;
+    this.spursActive = false;
+    this.skeletonCharges = 0;
+    this.panCharges = 0;
+    this.inkActive = false;
+    this.bossChestNext = false;
+    this.targeting = null;
+    this.targetObjs = [];
+    this.tip = null;
+    this.tipFor = -1;
+    this.holdTimer = null;
+    this.holdShown = false;
+    this.buffStr = "";
     this.buildTileFaces();
     this.buildChestArt();
 
@@ -367,7 +441,12 @@ class GameScene extends Phaser.Scene {
       onComplete: () => (this.heroLockX = false),
     });
 
-    this.time.addEvent({ delay: STRIKE_MS, loop: true, callback: () => this.strike() });
+    // strike cadence self-schedules so Scout's Spurs can stretch the interval mid-run
+    const strikeLoop = () => {
+      this.strike();
+      this.time.delayedCall(this.spursActive ? SPURS_STRIKE_MS : STRIKE_MS, strikeLoop);
+    };
+    this.time.delayedCall(STRIKE_MS, strikeLoop);
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
     // first time into the puzzle: the guided tutorial runs over the live scene
@@ -529,6 +608,7 @@ class GameScene extends Phaser.Scene {
     }
     this.scoreText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 16));
     this.questText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 92));
+    this.buffText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 196));
     this.gearText.setPosition(padX, y0 + uh - 14);
 
     // right: item slots, vertical, centred
@@ -543,10 +623,13 @@ class GameScene extends Phaser.Scene {
       it.y = y;
       it.s = slot;
       it.bg.setPosition(x, y).setSize(slot, slot);
+      // keep the pointer hit area in step with the resized rectangle
+      if (it.bg.input) (it.bg.input.hitArea as Phaser.Geom.Rectangle).setSize(slot, slot);
       it.inner.setPosition(x, y).setSize(slot - 10, slot - 10);
       it.plus.setPosition(x, y).setFontSize(Math.round(slot * 0.4)).setVisible(!it.icon);
-      it.icon?.setPosition(x, y);
+      it.icon?.setPosition(x, y).setFontSize(Math.round(slot * 0.52));
     }
+    this.hideTip(); // slot geometry moved — a floating tooltip would be orphaned
   }
 
   // --- HUD panels (positions are set later by layout()) ---
@@ -577,14 +660,65 @@ class GameScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setVisible(false);
 
+    // live item-buff readout (charges, timers, armed keys, the road forecast)
+    this.buffText = this.add
+      .text(0, 0, "", { fontFamily: EMOJI_FONT, fontSize: "13px", color: "#9fc4e8", lineSpacing: 7 })
+      .setOrigin(0, 0);
+
     this.itemSlots = [];
     for (let i = 0; i < SLOT_N; i++) {
       const bg = this.add.rectangle(0, 0, 10, 10, 0x101319).setStrokeStyle(2, 0x2a2d38);
       const inner = this.add.rectangle(0, 0, 8, 8, 0x0a0c11);
       const plus = this.add.text(0, 0, "+", { fontFamily: "monospace", fontSize: "20px", color: "#3a3f4b" }).setOrigin(0.5);
-      this.itemSlots.push({ x: 0, y: 0, s: 40, bg, inner, plus, icon: null });
+      this.itemSlots.push({ x: 0, y: 0, s: 40, bg, inner, plus, icon: null, item: null });
+      this.wireSlot(i, bg);
     }
     this.refreshHud();
+  }
+
+  /**
+   * Slot input: TAP uses the item; HOVER (mouse) shows the tooltip instantly;
+   * PRESS-AND-HOLD (touch) shows it too — and that release doesn't fire the item.
+   */
+  private wireSlot(i: number, bg: Phaser.GameObjects.Rectangle) {
+    bg.setInteractive({ useHandCursor: true });
+    bg.on("pointerover", (p: Phaser.Input.Pointer) => {
+      if (!p.wasTouch) this.showTip(i); // mouse hover — touch reads via hold instead
+    });
+    bg.on("pointerout", () => {
+      this.hideTip(i);
+      this.cancelHold();
+    });
+    bg.on("pointerdown", () => {
+      if (this.chestActive) return; // taps there belong to the skip handler
+      this.holdShown = false;
+      const slot = this.itemSlots[i];
+      if (slot.item) {
+        const targets: Phaser.GameObjects.GameObject[] = [bg, slot.inner];
+        if (slot.icon) targets.push(slot.icon);
+        this.tweens.add({ targets, scale: 0.92, duration: 70, yoyo: true });
+      }
+      this.cancelHold();
+      this.holdTimer = this.time.delayedCall(HOLD_TIP_MS, () => {
+        this.holdShown = true;
+        this.showTip(i);
+      });
+    });
+    bg.on("pointerup", (p: Phaser.Input.Pointer) => {
+      this.cancelHold();
+      if (this.holdShown) {
+        // this press was a "read the tooltip" hold — release just closes it
+        if (p.wasTouch) this.hideTip(i);
+        this.holdShown = false;
+        return;
+      }
+      this.useSlot(i);
+    });
+  }
+
+  private cancelHold() {
+    this.holdTimer?.remove(false);
+    this.holdTimer = null;
   }
   private refreshHud() {
     const r = this.run.resources;
@@ -676,6 +810,10 @@ class GameScene extends Phaser.Scene {
   // --- input ---
   private buildInput() {
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      if (this.targeting) {
+        this.onTargetTap(p); // an armed item is waiting for its board tap
+        return;
+      }
       if (this.busy || this.run.over || this.chestActive || this.tutorial?.lockBoard) return;
       const coord = this.cellAt(p.x, p.y);
       if (coord) this.down = { coord, x: p.x, y: p.y };
@@ -701,10 +839,14 @@ class GameScene extends Phaser.Scene {
 
   // --- per-frame: scroll pressure (only while engaged) + sprite placement ---
   update(_time: number, delta: number) {
+    const dts = delta / 1000;
+    this.tickItems(dts);
+
     // the tutorial holds the run harmless — no scroll pressure while it teaches.
     // Boss fights ease the scroll (BOSS_SCROLL_MULT): no intermediate kills = no relief.
-    if (this.phase === "fight" && !this.run.over && !this.tutorial?.active)
-      scroll(this.run, SCROLL_PER_SEC * (this.run.enemy?.kind === "boss" ? BOSS_SCROLL_MULT : 1) * (delta / 1000));
+    // The Waystone freezes the world's breath entirely.
+    if (this.phase === "fight" && !this.run.over && !this.tutorial?.active && this.freezeLeft <= 0)
+      scroll(this.run, SCROLL_PER_SEC * (this.run.enemy?.kind === "boss" ? BOSS_SCROLL_MULT : 1) * dts);
 
     // pan the world while the hero runs to the next foe; hold still in a fight
     const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
@@ -742,7 +884,133 @@ class GameScene extends Phaser.Scene {
       }
     }
 
-    if (this.run.over && !this.overShown) this.showGameOver();
+    if (this.run.over && !this.overShown) {
+      if (this.tryHearthRevive()) return; // the charm burns so you don't
+      this.showGameOver();
+    }
+  }
+
+  /** Per-frame item bookkeeping: timed buffs decay, the burn ticks, the readout refreshes. */
+  private tickItems(dts: number) {
+    if (this.run.over) return;
+
+    // Waystone: frozen scroll + a cool wash over the lane while it holds
+    if (this.freezeLeft > 0) {
+      this.freezeLeft = Math.max(0, this.freezeLeft - dts);
+      if (!this.freezeVeil) {
+        this.freezeVeil = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x3a7bd9, 0.1).setDepth(19));
+      }
+      if (this.freezeLeft <= 0 && this.freezeVeil) {
+        const v = this.freezeVeil;
+        this.freezeVeil = null;
+        this.tweens.add({ targets: v, fillAlpha: 0, duration: 400, onComplete: () => v.destroy() });
+      }
+    }
+
+    // War Horn / Merchant's Ledger: timed multipliers wind down
+    if (this.hornLeft > 0) {
+      this.hornLeft = Math.max(0, this.hornLeft - dts);
+      this.run.surgeMult = this.hornLeft > 0 ? 2 : 1;
+    }
+    if (this.ledgerLeft > 0) {
+      this.ledgerLeft = Math.max(0, this.ledgerLeft - dts);
+      this.run.resMult = this.ledgerLeft > 0 ? 2 : 1;
+    }
+
+    // Cinder Flask: the foe burns — one tick per second while it lives
+    if (this.burnLeft > 0) {
+      if (this.run.enemy && this.orc && !this.orcDying) {
+        this.burnLeft = Math.max(0, this.burnLeft - dts);
+        this.burnAcc += dts;
+        while (this.burnAcc >= 1 && this.run.enemy) {
+          this.burnAcc -= 1;
+          const killed = dealDamage(this.run, BURN_DPS);
+          this.floatDamage(BURN_DPS, false);
+          this.updateEnemyBar();
+          this.orc?.setTint(0xff9060);
+          this.time.delayedCall(160, () => this.orc?.clearTint());
+          if (killed) {
+            this.burnLeft = 0;
+            this.killOrc(0); // burned to ash — no swing needed
+            this.refreshHud();
+            break;
+          }
+        }
+      } else {
+        this.burnLeft = 0; // nothing left to burn
+        this.burnAcc = 0;
+      }
+    }
+
+    this.renderBuffs();
+  }
+
+  /** The buff readout under the quests: charges, timers, armed keys, the road ahead. */
+  private renderBuffs() {
+    const parts: string[] = [];
+    if (this.run.block >= BLOCK_PER_SHIELD / 2) parts.push(`🛡️×${Math.ceil(this.run.block / BLOCK_PER_SHIELD)}`);
+    if (this.run.whetstone > 0) parts.push(`🗡️×${this.run.whetstone}`);
+    if (this.hornLeft > 0) parts.push(`📯${Math.ceil(this.hornLeft)}s`);
+    if (this.freezeLeft > 0) parts.push(`🗿${Math.ceil(this.freezeLeft)}s`);
+    if (this.ledgerLeft > 0) parts.push(`📒${Math.ceil(this.ledgerLeft)}s`);
+    if (this.burnLeft > 0) parts.push(`🔥${Math.ceil(this.burnLeft)}s`);
+    if (this.spursActive) parts.push("🥾");
+    if (this.skeletonCharges > 0) parts.push(`🗝️×${this.skeletonCharges}`);
+    if (this.panCharges > 0) parts.push(`⛏️×${this.panCharges}`);
+    const lines: string[] = [];
+    for (let i = 0; i < parts.length; i += 3) lines.push(parts.slice(i, i + 3).join("  "));
+    if (this.inkActive) lines.push(`ROAD ▸ ${this.roadAhead().join(" ")}`);
+    const str = lines.join("\n");
+    if (str !== this.buffStr) {
+      this.buffStr = str;
+      this.buffText.setText(str);
+    }
+  }
+
+  /** Cartographer's Ink: simulate the spawn chain to name the next three encounters. */
+  private roadAhead(n = 3): string[] {
+    const out: string[] = [];
+    let k = this.run.killed; // kills banked so far
+    let sc = this.sinceChest;
+    // the current engagement resolves first and isn't part of the forecast
+    if (this.phase !== "chest" && !this.chest) {
+      k++;
+      sc++;
+      if (this.run.enemy?.kind === "boss" || (this.orcAnim === "boss" && this.orc)) sc = CHEST_EVERY; // his hoard follows him out
+    }
+    while (out.length < n) {
+      if (sc >= CHEST_EVERY) {
+        out.push("📦");
+        sc = 0;
+        continue;
+      }
+      const boss = (k + 1) % BOSS_EVERY === 0;
+      out.push(boss ? "☠" : "👾");
+      k++;
+      sc = boss ? CHEST_EVERY : sc + 1; // a boss kill always rolls his hoard in next
+    }
+    return out;
+  }
+
+  /** Hearth Charm: consumes itself at the moment of death and drags you back. */
+  private tryHearthRevive(): boolean {
+    const slot = this.itemSlots.find((s) => s.item?.id === "hearth");
+    if (!slot) return false;
+    this.consumeSlot(slot);
+    this.run.over = false;
+    this.run.pressure = HEARTH_PRESSURE;
+    buzz(40);
+    this.sfx("summon", 0.5, 1.25);
+    const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xff6a4a, 0.55).setDepth(48));
+    this.tweens.add({ targets: flash, fillAlpha: 0, duration: 700, onComplete: () => flash.destroy() });
+    const heart = this.inBox(
+      this.add.text(this.hero.x, GROUND_Y - 90, "❤️", { fontFamily: EMOJI_FONT, fontSize: "34px" }).setOrigin(0.5).setDepth(49).setScale(0.3),
+    );
+    this.tweens.add({ targets: heart, scale: 1.4, duration: 260, ease: "Back.easeOut" });
+    this.tweens.add({ targets: heart, y: heart.y - 50, alpha: 0, duration: 900, delay: 300, onComplete: () => heart.destroy() });
+    this.notice("THE HEARTH-CHARM BURNS", "#ff9d7a");
+    this.refreshHud();
+    return true;
   }
 
   // ================= combat / runner =================
@@ -949,7 +1217,7 @@ class GameScene extends Phaser.Scene {
 
       const outcome = applyMatches(this.run, counts);
       this.tutorial?.onCascade(counts);
-      const swords = counts[SWORD] ?? 0;
+      const swords = outcome.swords; // effective count — Wren's Whetstone can upgrade the swing
       if (swords > 0) swordHits++;
       this.onCombat(outcome, swords, swordHits);
       // non-combat clear — a random tile-match sound (1 of TILE_SFX), slight pitch variation
@@ -1051,6 +1319,9 @@ class GameScene extends Phaser.Scene {
     const wasBoss = this.orcAnim === "boss";
     if (!wasBoss) this.sfx("death", 0.16); // slime death — kept well in the background
     this.orcDying = true;
+    this.spursActive = false; // per-foe item effects die with the foe
+    this.burnLeft = 0;
+    this.burnAcc = 0;
     this.phase = "advance";
     this.updateEnemyBar();
     this.enemyHpBg.setVisible(false);
@@ -1148,6 +1419,7 @@ class GameScene extends Phaser.Scene {
     this.run.score += 400;
     this.run.pressure = Math.max(0, this.run.pressure - BOSS_SURGE); // the road clears ahead of the caravan
     this.sinceChest = CHEST_EVERY - 1; // his hoard rolls in right behind him
+    this.bossChestNext = true; // ...and it rolls the richer item table (Cinder Flask lives there)
     this.refreshHud();
   }
 
@@ -1207,7 +1479,7 @@ class GameScene extends Phaser.Scene {
     if (this.run.over || !this.chest) return;
     this.phase = "chest"; // pressure + strikes hold — a reward moment, not a fight
     this.hero.play("hero-idle", true);
-    if (this.run.resources.keys >= CHEST_KEY_COST) void this.openChest();
+    if (this.skeletonCharges > 0 || this.run.resources.keys >= CHEST_KEY_COST) void this.openChest();
     else this.chestLocked();
   }
 
@@ -1222,6 +1494,7 @@ class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: cont, x: cont.x + 5, duration: 55, yoyo: true, repeat: 5 });
     this.sfx("swap", 0.4, 0.8);
     this.tweens.add({ targets: lock, y: lock.y - 22, alpha: 0, duration: 1000, delay: 350, onComplete: () => lock.destroy() });
+    this.bossChestNext = false; // the hoard scrolls away unopened
     this.time.delayedCall(950, () => {
       if (this.run.over) return;
       this.phase = "advance"; // stride past it — the world pans it away
@@ -1242,11 +1515,20 @@ class GameScene extends Phaser.Scene {
     const skip = () => (this.chestFast = true); // any tap fast-forwards the remaining beats
     this.input.on("pointerdown", skip);
 
-    // the banked key flies from the HUD down into the lock
-    this.run.resources.keys -= CHEST_KEY_COST;
+    // the banked key flies from the HUD down into the lock — unless a Skeleton
+    // Key is armed, in which case a ghostly one turns the lock for free
+    const freeOpen = this.skeletonCharges > 0;
+    if (freeOpen) this.skeletonCharges--;
+    else this.run.resources.keys -= CHEST_KEY_COST;
     this.refreshHud();
     const ks = this.toLocal(this.resIcons[3].x, this.resIcons[3].y); // fly from the keys counter
-    const key = this.inBox(this.add.text(ks.x, ks.y, "🔑", { fontFamily: EMOJI_FONT, fontSize: "22px" }).setOrigin(0.5).setDepth(66));
+    const key = this.inBox(
+      this.add
+        .text(ks.x, ks.y, freeOpen ? "🗝️" : "🔑", { fontFamily: EMOJI_FONT, fontSize: "22px" })
+        .setOrigin(0.5)
+        .setDepth(66)
+        .setAlpha(freeOpen ? 0.8 : 1),
+    );
     await this.tweenP(key, { x: cont.x, y: cont.y - 40, scale: 0.8, angle: 90, duration: 480, ease: "Quad.easeIn" });
     key.destroy();
     this.sfx("chest_unlock", 0.6);
@@ -1338,7 +1620,7 @@ class GameScene extends Phaser.Scene {
         this.cameras.main.shake(160, 0.006);
         this.sfx("pickup", 0.6, 0.9);
       }
-      const label = pull.kind === "item" ? `${pull.icon} NEW ITEM!` : `${pull.icon} +${pull.n}`;
+      const label = pull.kind === "item" ? `${pull.icon} ${pull.item?.name ?? "NEW ITEM"}!` : `${pull.icon} +${pull.n}`;
       const t = this.inBox(
         this.add
           .text(CX, CY - 150, label, {
@@ -1399,13 +1681,20 @@ class GameScene extends Phaser.Scene {
     if (Math.random() < 0.6) count++;
     if (Math.random() < 0.32) count++;
     if (Math.random() < 0.16) count++;
-    const canItem = this.itemSlots.some((s) => !s.icon);
+    if (this.panCharges > 0) {
+      this.panCharges--; // Prospector's Pan: this chest was worked in advance
+      count += PAN_EXTRA_PULLS;
+    }
+    const bossHoard = this.bossChestNext;
+    this.bossChestNext = false;
+    const canItem = this.itemSlots.some((s) => !s.item);
     const pulls: ChestPull[] = [];
     for (let i = 0; i < count; i++) {
       const r = Math.random();
-      if (r < 0.14 && canItem && !pulls.some((p) => p.kind === "item"))
-        pulls.push({ kind: "item", n: 1, icon: this.pick(ITEM_GLYPHS) });
-      else if (r < 0.4) pulls.push({ kind: "treasure", n: 2 + ((Math.random() * 3) | 0), icon: "💎" });
+      if (r < 0.14 && canItem && !pulls.some((p) => p.kind === "item")) {
+        const def = rollItem(bossHoard);
+        pulls.push({ kind: "item", n: 1, icon: def.glyph, item: def });
+      } else if (r < 0.4) pulls.push({ kind: "treasure", n: 2 + ((Math.random() * 3) | 0), icon: "💎" });
       else if (r < 0.7) pulls.push({ kind: "wood", n: 4 + ((Math.random() * 5) | 0), icon: "🪵" });
       else pulls.push({ kind: "ore", n: 4 + ((Math.random() * 5) | 0), icon: "🪨" });
     }
@@ -1418,16 +1707,17 @@ class GameScene extends Phaser.Scene {
     if (pull.kind === "wood") r.wood += pull.n;
     else if (pull.kind === "ore") r.ore += pull.n;
     else if (pull.kind === "treasure") r.treasure += pull.n;
-    else this.fillSlot(pull.icon);
+    else if (pull.item) this.fillSlot(pull.item);
     this.run.score += 25 + pull.n * 2;
     this.refreshHud();
   }
 
   /** Drop a chest item into the first empty HUD slot with a golden pop. */
-  private fillSlot(glyph: string) {
-    const slot = this.itemSlots.find((s) => !s.icon);
+  private fillSlot(def: ItemDef) {
+    const slot = this.itemSlots.find((s) => !s.item);
     if (!slot) return;
-    const icon = this.add.text(slot.x, slot.y, glyph, { fontFamily: EMOJI_FONT, fontSize: `${Math.round(slot.s * 0.52)}px` }).setOrigin(0.5).setScale(0.2);
+    slot.item = def;
+    const icon = this.add.text(slot.x, slot.y, def.glyph, { fontFamily: EMOJI_FONT, fontSize: `${Math.round(slot.s * 0.52)}px` }).setOrigin(0.5).setScale(0.2);
     slot.icon = icon;
     slot.plus.setVisible(false);
     const glow = this.add.rectangle(slot.x, slot.y, slot.s, slot.s, 0xffe08a, 0.55);
@@ -1486,6 +1776,378 @@ class GameScene extends Phaser.Scene {
       if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
       this.busy = false;
     });
+  }
+
+  // ================= run items (tap to use; src/items.ts) =================
+
+  /** Tap a filled slot: run the item (or arm its board-targeting). */
+  private useSlot(i: number) {
+    const slot = this.itemSlots[i];
+    const def = slot.item;
+    if (!def) return;
+    if (this.run.over || this.chestActive || this.tutorial?.active) return;
+    this.hideTip();
+    if (this.targeting) {
+      // tapping the armed slot again (or any slot) backs out of aiming
+      this.cancelTargeting();
+      return;
+    }
+
+    const needsFoe = def.id === "stormcall" || def.id === "cinderflask" || def.id === "spurs";
+    if (needsFoe && (this.phase !== "fight" || !this.orc || this.orcDying || !this.run.enemy)) {
+      this.notice("no foe before you", "#9aa0ab");
+      return;
+    }
+    const needsBoard = def.target !== "none" || def.id === "dice" || def.id === "lodestone";
+    if (needsBoard && this.busy) {
+      this.notice("the board is still settling", "#9aa0ab");
+      return;
+    }
+
+    // aimed items arm targeting and consume only when the shot lands
+    if (def.target !== "none") {
+      this.enterTargeting(def, slot);
+      return;
+    }
+
+    switch (def.id) {
+      case "whetstone":
+        this.run.whetstone += WHETSTONE_CHARGES;
+        this.notice(`whetstone — next ${WHETSTONE_CHARGES} sword matches strike full combos`, "#ffe08a");
+        break;
+      case "stormcall":
+        this.castStorm();
+        break;
+      case "warhorn":
+        this.hornLeft += WARHORN_SECS;
+        this.run.surgeMult = 2;
+        this.notice("the horn sounds — kills surge twice as far", "#ffe08a");
+        this.sfx("summon", 0.45, 1.5);
+        break;
+      case "cinderflask": {
+        this.burnLeft = Math.max(this.burnLeft, BURN_SECS);
+        this.burnAcc = 0;
+        this.notice("the foe catches fire", "#ff9d6a");
+        this.sfx(this.pick(["fireball1", "fireball2", "fireball3"]), 0.5);
+        this.orc?.setTint(0xff9060);
+        this.time.delayedCall(220, () => this.orc?.clearTint());
+        break;
+      }
+      case "waystone":
+        this.freezeLeft += WAYSTONE_SECS;
+        this.notice("the world holds its breath", "#8fd0ff");
+        this.sfx("spell", 0.4, 0.7);
+        break;
+      case "bulwark": {
+        this.run.block += BULWARK_BLOCK;
+        this.notice("guard up!", "#8fd0ff");
+        this.sfx(this.pick(["block1", "block2", "block3"]), 0.5);
+        const sh = this.inBox(
+          this.add.text(this.hero.x, GROUND_Y - 96, "🛡️", { fontFamily: EMOJI_FONT, fontSize: "30px" }).setOrigin(0.5).setDepth(49).setScale(0.3),
+        );
+        this.tweens.add({ targets: sh, scale: 1.2, duration: 220, ease: "Back.easeOut" });
+        this.tweens.add({ targets: sh, y: sh.y - 40, alpha: 0, duration: 700, delay: 250, onComplete: () => sh.destroy() });
+        break;
+      }
+      case "hearth":
+        this.notice("the charm keeps itself — it acts when death comes", "#ff9d7a");
+        return; // NOT consumed by tapping
+      case "spurs":
+        if (this.spursActive) {
+          this.notice("this foe is already slowed", "#9aa0ab");
+          return; // not consumed
+        }
+        this.spursActive = true;
+        this.notice("the foe's strikes slow", "#8fd0ff");
+        this.sfx("swap", 0.4, 0.7);
+        break;
+      case "dice":
+        void this.diceReroll();
+        break;
+      case "lodestone":
+        void this.lodestonePull();
+        break;
+      case "skeleton":
+        this.skeletonCharges++;
+        this.notice("the next chest opens free", "#ffe08a");
+        this.sfx("chest_unlock", 0.5, 1.2);
+        break;
+      case "pan":
+        this.panCharges++;
+        this.notice(`the next chest yields +${PAN_EXTRA_PULLS} pulls`, "#ffe08a");
+        this.sfx("coin2", 0.5);
+        break;
+      case "ledger":
+        this.ledgerLeft += LEDGER_SECS;
+        this.run.resMult = 2;
+        this.notice("resource matches pay double", "#ffe08a");
+        this.sfx("coin3", 0.5);
+        break;
+      case "ink":
+        if (this.inkActive) {
+          this.notice("the road is already charted", "#9aa0ab");
+          return; // not consumed
+        }
+        this.inkActive = true;
+        this.notice("the road ahead reveals itself", "#8fd0ff");
+        this.sfx("pickup", 0.5, 1.1);
+        break;
+    }
+    this.consumeSlot(slot);
+    buzz(16);
+  }
+
+  /** Clear a slot back to its empty "+" state (with a little flash). */
+  private consumeSlot(slot: ItemSlotUI) {
+    slot.item = null;
+    slot.icon?.destroy();
+    slot.icon = null;
+    slot.plus.setVisible(true);
+    const glow = this.add.rectangle(slot.x, slot.y, slot.s, slot.s, 0xffffff, 0.4);
+    this.tweens.add({ targets: glow, alpha: 0, duration: 300, onComplete: () => glow.destroy() });
+    this.sfx("pickup", 0.35, 0.9);
+  }
+
+  /** Stormcall Scroll: an instant spell blast through the normal combat pipeline. */
+  private castStorm() {
+    const killed = dealDamage(this.run, STORMCALL_DMG);
+    const zero = { wood: 0, ore: 0, treasure: 0, keys: 0 };
+    // swords=1 + swordHits=2 routes onCombat into the hero-spell animation
+    this.onCombat({ damage: STORMCALL_DMG, hits: [STORMCALL_DMG], killed, gained: zero, swords: 1 }, 1, 2);
+    this.notice("STORMCALL!", "#bfe6ff");
+    this.refreshHud();
+  }
+
+  /** Vagrant's Dice: the whole board rerolls. */
+  private async diceReroll() {
+    this.busy = true;
+    this.sfx("swap", 0.5, 1.2);
+    this.boardFlash(0.2);
+    // brief scatter: every tile pops out, then the fresh spread pops in
+    const outs: Promise<void>[] = [];
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++) {
+        const t = this.tiles[r][c];
+        if (!t) continue;
+        outs.push(new Promise((res) => this.tweens.add({ targets: t, scale: 0, angle: 90, duration: 160, delay: (r + c) * 8, onComplete: () => res() })));
+      }
+    await Promise.all(outs);
+    this.rebuildBoard();
+    for (let g = 0; g < 10 && !hasPossibleMove(this.grid); g++) this.rebuildBoard(); // never deal a dead board
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++) {
+        const t = this.tiles[r][c];
+        if (!t) continue;
+        t.setScale(0);
+        this.tweens.add({ targets: t, scale: 1, duration: 180, delay: (r + c) * 8, ease: "Back.easeOut" });
+      }
+    this.sfx(`tile${1 + ((Math.random() * TILE_SFX) | 0)}`, 0.4);
+    await new Promise<void>((res) => this.time.delayedCall(360, res));
+    await this.resolve(); // a fresh spread never opens matched, but cascades stay safe
+    this.busy = false;
+  }
+
+  /** Lodestone: rip every wood + ore tile into the pack, then let the board settle. */
+  private async lodestonePull() {
+    this.busy = true;
+    const counts: Record<number, number> = {};
+    const cells: Coord[] = [];
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++)
+        if (this.grid[r][c] === WOOD || this.grid[r][c] === ORE) cells.push({ r, c });
+    if (!cells.length) {
+      this.busy = false;
+      this.notice("no wood or ore on the board", "#9aa0ab");
+      return;
+    }
+    this.sfx("coin_pour", 0.5);
+    buzz(20);
+    const fades: Promise<void>[] = [];
+    for (const cell of cells) {
+      const type = this.grid[cell.r][cell.c];
+      counts[type] = (counts[type] ?? 0) + 1;
+      const t = this.tiles[cell.r][cell.c];
+      if (t) fades.push(this.shatter(t, type));
+      this.tiles[cell.r][cell.c] = null;
+      this.grid[cell.r][cell.c] = EMPTY;
+    }
+    await Promise.all(fades);
+    const outcome = applyMatches(this.run, counts);
+    this.notice(`+${outcome.gained.wood} 🪵  +${outcome.gained.ore} 🪨`, "#fff2b0");
+    this.refreshHud();
+    await this.collapse();
+    await this.resolve();
+    if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    this.busy = false;
+  }
+
+  // ---- aimed items: Sapper's Charge (cell) & Chromatic Prism (type) ----------
+
+  private enterTargeting(def: ItemDef, slot: ItemSlotUI) {
+    this.targeting = { def, slot };
+    const label = def.target === "cell" ? `${def.glyph} tap a tile to detonate` : `${def.glyph} tap a tile — its kind turns to swords`;
+    const ring = this.inBox(
+      this.add.rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W + 6, GRID_H + 6).setStrokeStyle(3, 0xffe08a, 0.9).setDepth(72),
+    );
+    this.tweens.add({ targets: ring, alpha: 0.35, duration: 420, yoyo: true, repeat: -1 });
+    const txtBg = this.inBox(this.add.rectangle(CXC, GRID_Y + 26, 460, 34, 0x0e1015, 0.88).setStrokeStyle(2, 0x8a6d3a).setDepth(73));
+    const txt = this.inBox(
+      this.add
+        .text(CXC, GRID_Y + 26, `${label} · tap elsewhere to cancel`, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#ffe08a" })
+        .setOrigin(0.5)
+        .setDepth(74),
+    );
+    this.targetObjs = [ring, txtBg, txt];
+    this.sfx("pickup", 0.4, 1.2);
+  }
+
+  private cancelTargeting() {
+    for (const o of this.targetObjs) o.destroy();
+    this.targetObjs = [];
+    this.targeting = null;
+  }
+
+  private onTargetTap(p: Phaser.Input.Pointer) {
+    const armed = this.targeting!;
+    const cell = this.cellAt(p.x, p.y);
+    if (!cell || this.busy) {
+      this.cancelTargeting(); // off-board (or mid-settle) = back out, item kept
+      return;
+    }
+    if (armed.def.id === "prism" && this.grid[cell.r][cell.c] === SWORD) {
+      this.notice("already swords — pick another kind", "#9aa0ab");
+      return; // stay armed
+    }
+    this.cancelTargeting();
+    this.consumeSlot(armed.slot);
+    buzz(20);
+    if (armed.def.id === "sapper") void this.detonate(cell);
+    else void this.prismConvert(this.grid[cell.r][cell.c]);
+  }
+
+  /** Sapper's Charge: 3×3 blast — every destroyed tile counts as matched. */
+  private async detonate(center: Coord) {
+    this.busy = true;
+    const counts: Record<number, number> = {};
+    const fades: Promise<void>[] = [];
+    this.sfx("fireball1", 0.6, 0.9);
+    this.cameras.main.shake(240, 0.009);
+    this.boardFlash(0.3);
+    const bx = this.xFor(center.c);
+    const by = this.yFor(center.r);
+    const boom = this.inBox(this.add.image(bx, by, "spark").setDepth(70).setBlendMode(Phaser.BlendModes.ADD).setScale(2));
+    this.tweens.add({ targets: boom, scale: 14, alpha: 0, duration: 380, ease: "Quad.easeOut", onComplete: () => boom.destroy() });
+    for (let r = center.r - SAPPER_RADIUS; r <= center.r + SAPPER_RADIUS; r++)
+      for (let c = center.c - SAPPER_RADIUS; c <= center.c + SAPPER_RADIUS; c++) {
+        if (r < 0 || r >= H || c < 0 || c >= W || this.grid[r][c] === EMPTY) continue;
+        const type = this.grid[r][c];
+        counts[type] = (counts[type] ?? 0) + 1;
+        const t = this.tiles[r][c];
+        if (t) fades.push(this.shatter(t, type));
+        this.tiles[r][c] = null;
+        this.grid[r][c] = EMPTY;
+      }
+    await Promise.all(fades);
+    const outcome = applyMatches(this.run, counts);
+    this.tutorial?.onCascade(counts);
+    if (outcome.swords > 0) this.onCombat(outcome, outcome.swords, 1);
+    else if (outcome.damage > 0) this.onCombat(outcome, 0, 1); // staff-only blast still swings
+    this.refreshHud();
+    await this.collapse();
+    await this.resolve();
+    if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    this.busy = false;
+  }
+
+  /** Chromatic Prism: every tile of the picked kind transmutes into swords. */
+  private async prismConvert(srcType: number) {
+    this.busy = true;
+    this.sfx("spell", 0.6);
+    this.boardFlash(0.22);
+    const converts: Coord[] = [];
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++) if (this.grid[r][c] === srcType) converts.push({ r, c });
+    for (const { r, c } of converts) {
+      this.grid[r][c] = SWORD;
+      this.tiles[r][c]?.destroy();
+      const t = this.makeTile(r, c, SWORD);
+      this.tiles[r][c] = t;
+      t.setScale(0.2);
+      this.tweens.add({ targets: t, scale: 1, duration: 240, delay: (r + c) * 14, ease: "Back.easeOut" });
+      const glint = this.inBox(this.add.image(this.xFor(c), this.yFor(r), "spark").setDepth(70).setBlendMode(Phaser.BlendModes.ADD).setScale(0.6));
+      this.tweens.add({ targets: glint, scale: 2.2, alpha: 0, duration: 320, delay: (r + c) * 14, onComplete: () => glint.destroy() });
+    }
+    this.notice(`${converts.length} tiles turn to swords`, "#ffd0f4");
+    await new Promise<void>((res) => this.time.delayedCall(480, res));
+    await this.resolve(); // freshly-forged swords may already line up — let them sing
+    if (!this.run.over && !hasPossibleMove(this.grid)) this.rebuildBoard();
+    this.busy = false;
+  }
+
+  // ---- item tooltips (hover on mouse, press-and-hold on touch) ---------------
+
+  private showTip(i: number) {
+    const slot = this.itemSlots[i];
+    const def = slot.item;
+    if (!def || this.chestActive) return;
+    if (this.tipFor === i && this.tip) return;
+    this.hideTip();
+    this.tipFor = i;
+
+    const W_TIP = 236;
+    const PAD = 12;
+    const name = this.add
+      .text(PAD, PAD, def.name, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "15px", color: "#ffe08a" })
+      .setOrigin(0, 0);
+    const tier = this.add
+      .text(W_TIP - PAD, PAD + 1, def.tier, { fontFamily: "monospace", fontSize: "11px", color: TIER_COLORS[def.tier] })
+      .setOrigin(1, 0);
+    const desc = this.add
+      .text(PAD, PAD + 24, def.desc, { fontFamily: EMOJI_FONT, fontSize: "13px", color: "#dfe3ea", lineSpacing: 5, wordWrap: { width: W_TIP - PAD * 2 } })
+      .setOrigin(0, 0);
+    const hint = this.add
+      .text(PAD, PAD + 28 + desc.height, `▸ ${def.hint}`, { fontFamily: "monospace", fontSize: "11px", color: "#8fd0ff" })
+      .setOrigin(0, 0);
+    const hTip = PAD + 28 + desc.height + hint.height + PAD;
+    const bg = this.add.graphics();
+    bg.fillStyle(0x0e1015, 0.96);
+    bg.fillRoundedRect(0, 0, W_TIP, hTip, 8);
+    bg.lineStyle(2, 0x8a6d3a, 1);
+    bg.strokeRoundedRect(0, 0, W_TIP, hTip, 8);
+
+    // slots hug the right edge — the card sits to their left, clamped on-screen
+    const x = Math.max(6, slot.x - slot.s / 2 - 10 - W_TIP);
+    const y = Math.min(Math.max(6, slot.y - hTip / 2), this.scale.height - hTip - 6);
+    this.tip = this.add.container(x, y, [bg, name, tier, desc, hint]).setDepth(95).setAlpha(0);
+    this.tweens.add({ targets: this.tip, alpha: 1, duration: 120 });
+  }
+
+  private hideTip(i?: number) {
+    if (i !== undefined && this.tipFor !== i) return;
+    this.tip?.destroy();
+    this.tip = null;
+    this.tipFor = -1;
+  }
+
+  /** Small floating notice over the board (item feedback, gentle refusals). */
+  private notice(msg: string, color = "#ffe08a") {
+    const t = this.inBox(
+      this.add
+        .text(CXC, GRID_Y + 54, msg, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "19px", color, stroke: "#0a0b0f", strokeThickness: 5 })
+        .setOrigin(0.5)
+        .setDepth(75)
+        .setScale(0.4),
+    );
+    this.tweens.add({ targets: t, scale: 1, duration: 160, ease: "Back.easeOut" });
+    this.tweens.add({ targets: t, y: t.y - 30, alpha: 0, duration: 800, delay: 500, ease: "Quad.easeIn", onComplete: () => t.destroy() });
+  }
+
+  /** Dev: grant an item by id (or a random one) — console: __mb.debugItem("sapper"). */
+  public debugItem(id?: string) {
+    const def = id ? itemById(id) : rollItem(false);
+    if (!def) return `unknown item: ${id}`;
+    this.fillSlot(def);
+    return def.name;
   }
 
   // ================= first-run tutorial host API (src/tutorial.ts drives these) =================

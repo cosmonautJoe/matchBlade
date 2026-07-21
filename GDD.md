@@ -262,13 +262,27 @@ scroll past.
 
 ---
 
-## 8. Item Slots
+## 8. Run Items (the 6 HUD slots)
 
-- **`SLOT_N = 6`** slots down the right HUD panel.
-- **Filled** by the rare chest **item pull** (`fillSlot`, golden pop into the
-  first empty slot). Placeholder glyphs `ITEM_GLYPHS = ["🧪", "💣", "🧭"]`.
-- **Not yet usable** — display/fill only. The **run-consumable item system**
-  (activation, effects) is a designed-but-unbuilt feature (TODO).
+**16 tap-to-use consumables** (`src/items.ts` registry + scene wiring in
+`main.ts`), earned from chest item-pulls into the **`SLOT_N = 6`** right-panel
+slots. **Tap a filled slot to use it**; **hover (mouse)** or **press-and-hold
+380ms (touch)** shows a **tooltip** (name, tier tag, description, usage hint).
+Aimed items enter a **targeting mode** (gold board ring + banner; tap a tile to
+fire, tap elsewhere to cancel — the item is only consumed when the shot lands).
+A live **buff readout** under the quests shows charges/timers (`🗡️×2 📯9s …`).
+
+| tier | items |
+|---|---|
+| **common** | Wren's Whetstone 🗡️ (next 3 sword matches = full 5-match combos) · War Horn 📯 (2× kill-surge 15s) · Bulwark Brew 🧪 (+6 shields of guard) · Scout's Spurs 🥾 (foe strikes slow to 7s until it falls) · Vagrant's Dice 🎲 (reroll the board) · Cartographer's Ink 🗺️ (ROAD ▸ forecast of the next 3 encounters, rest of run) |
+| **uncommon** | Waystone 🗿 (freeze scroll 12s) · Sapper's Charge 💣 (aim: 3×3 blast, destroyed tiles count as matched) · Lodestone 🧲 (bank every wood/ore tile) · Skeleton Key 🗝️ (next chest opens free) · Prospector's Pan ⛏️ (next chest +2 pulls) · Merchant's Ledger 📒 (2× resource matches 20s) · **Cinder Flask 🔥** *(boss hoard only: foe burns 2/sec for 10s)* |
+| **rare** | Stormcall Scroll 📜 (instant 25-dmg spell blast) · Chromatic Prism 🔮 (aim: every tile of a kind → swords) · Hearth Charm ❤️ (**auto**: on death it burns instead — once — pressure resets to 0.5) |
+
+- **Roll:** the 14% chest item-pull draws tier `60/30/10`%; the **boss hoard**
+  chest draws `25/45/30` and is the only source of boss trophies.
+- Effects hook the pure layer via `RunState.whetstone / surgeMult / resMult` and
+  a shared `dealDamage()` (items, burns, and matches all kill through one path,
+  so surge/score/kill flow stays consistent).
 
 ---
 
@@ -532,7 +546,13 @@ Master knobs, current values (edit these to retune the game):
 `BOSS_BOUNTY=8`, `BOSS_SURGE=0.2`.
 
 **Pace/lane (`main.ts`):** `SCROLL_PER_SEC=0.02`, `WORLD_SCROLL=170`,
-`STRIKE_MS=4800`, `CHEST_EVERY=3`, `CHEST_KEY_COST=1`, `SLOT_N=6`, `RAIN_CHANCE=0.35`.
+`STRIKE_MS=4800`, `CHEST_EVERY=3`, `CHEST_KEY_COST=1`, `SLOT_N=6`, `RAIN_CHANCE=0.35`,
+`HOLD_TIP_MS=380`.
+
+**Items (`items.ts`):** `STORMCALL_DMG=25`, `WARHORN_SECS=15`, `WAYSTONE_SECS=12`,
+`BULWARK_BLOCK=0.3`, `BURN_DPS=2`/`BURN_SECS=10`, `SPURS_STRIKE_MS=7000`,
+`HEARTH_PRESSURE=0.5`, `LEDGER_SECS=20`, `WHETSTONE_CHARGES=3`,
+`PAN_EXTRA_PULLS=2`, `SAPPER_RADIUS=1` (3×3); tiers `60/30/10` (boss `25/45/30`).
 
 **Meta (`meta.ts`):** `BLACKSMITH_COST={wood:30, ore:30}`,
 `forgeCost=20+15·level`, `MAX_ACTIVE=3` quests, `BIOME_ORDER=[plains, forest]`.
@@ -548,7 +568,8 @@ Master knobs, current values (edit these to retune the game):
   strikes, block, weapon combos, kill surge, score/depth HUD.
 - **Bosses** (Malgrim the Cindermage) with entrance, named bar, spoils, gated chest.
 - **Chests** — full VS-style takeover, pull table, reveal-one-at-a-time, cashout.
-- **Item slots** (fill only).
+- **Run items** — 16 tap-to-use consumables with hover/hold tooltips, targeting
+  mode, timed buffs + buff readout, tiered chest/boss-hoard roll tables (§8).
 - **Worlds/biomes** — plains + forest parallax, weather (rain/overcast), ambient beds.
 - **Meta caravan** — camp scene, Wren the blacksmith (hire + forge), the Wayfarer
   quest board (offer/accept/complete), biome pools + the road gate, persistence.
@@ -560,19 +581,19 @@ Master knobs, current values (edit these to retune the game):
    chest walk-in + key-gate). *(Immediate next.)*
 2. **More recruits** — Carpenter (shield block), Hedge-witch (spell power), Cook
    (steadier pace) — each mapping to a `run.ts` knob (see §11).
-3. **Run items** — make the 6 item slots actually *do* things (consumables).
-4. **Real tile-icon art** (retire the emoji placeholders).
-5. **Weapon-vs-enemy-type gating** (sword=ground, staff=flying) + a richer enemy
+3. **Real tile-icon art** (retire the emoji placeholders).
+4. **Weapon-vs-enemy-type gating** (sword=ground, staff=flying) + a richer enemy
    roster / lane obstacle set.
-6. More biomes (jungle → snow → dungeon) using staged floor/parallax sets.
-7. **Ship polish:** itch.io page, then Capacitor iOS wrap.
+5. More biomes (jungle → snow → dungeon) using staged floor/parallax sets.
+6. **Ship polish:** itch.io page, then Capacitor iOS wrap.
 
 ### Open questions
 - Difficulty curve per world; final pacing of the win condition.
 - Full recruit roster + where recruit/NPC art comes from.
 - Cage tuning (frequency, key cost, on-screen dwell).
 - Art-direction lock (pixel style, palette, hero/enemy identity).
-- Do run items stack / how many can you hold beyond the 6 slots?
+- ~~Do run items stack?~~ → shipped: duplicates allowed across slots; charges
+  and timers stack additively when re-used (§8). Capacity stays 6.
 
 ---
 

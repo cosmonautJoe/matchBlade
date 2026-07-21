@@ -191,10 +191,21 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     unlocked only for the hands-on steps). Plays once via `meta.tutorialSeen`.
     Copy notes: resource tiles are pitched as "spend at camp, more uses coming"
     since tile roles may still change.
+- **Run items (SHIPPED, src/items.ts + main.ts):** 16 tap-to-use consumables
+  fill the 6 HUD slots from chest item-pulls (tiers 60/30/10; the boss hoard
+  rolls 25/45/30 and is the only source of the Cinder Flask trophy). Tooltips
+  on **hover** (mouse) and **press-and-hold** (touch, 380ms — that release
+  doesn't fire the item). Aimed items (Sapper's Charge, Chromatic Prism) enter
+  a targeting mode (gold ring + banner, consumed only when the shot lands);
+  the Hearth Charm auto-fires on death (once, pressure -> 0.5). Live buff
+  readout under the quests (charges/timers/armed keys + the Cartographer's Ink
+  `ROAD ▸` forecast). Pure hooks live in run.ts (`whetstone`/`surgeMult`/
+  `resMult`, shared `dealDamage()`); the strike timer self-schedules so
+  Scout's Spurs can stretch the cadence. Dev: `__mb.debugItem(id?)`.
 - `npm install` then `npm run dev` -> the harness picks a free port (see
   `vite.config.ts` / `.claude/launch.json` `autoPort`).
 - **Still placeholder / TODO:** real tile-icon art, weapon-vs-enemy-type gating
-  (sword vs ground, staff vs flying), locks/chests, meta hub, audio.
+  (sword vs ground, staff vs flying), cages/rescues, more recruits at camp.
 
 ## 9. Suggested build order
 

@@ -42,6 +42,10 @@ export interface RunState {
   resources: Resources;
   over: boolean;
   swordBonus: number; // forge upgrades: extra damage folded into the first sword hit
+  // ---- run-item buffs (src/items.ts; the scene sets these, we honour them) ----
+  whetstone: number; // charges: sword matches that count as full 5-match combos
+  surgeMult: number; // War Horn: multiplies the per-kill pressure surge (default 1)
+  resMult: number; // Merchant's Ledger: multiplies wood/ore/treasure gains (default 1)
 }
 
 // --- tuning knobs (easy to expose as upgrades later, DESIGN.md §5) ---
@@ -85,6 +89,9 @@ export function newRun(swordBonus = 0): RunState {
     resources: { wood: 0, ore: 0, treasure: 0, keys: 0 },
     over: false,
     swordBonus,
+    whetstone: 0,
+    surgeMult: 1,
+    resMult: 1,
   };
 }
 
@@ -93,6 +100,7 @@ export interface MatchOutcome {
   hits: number[]; // per-swing damage, matching the combo animation (for floating numbers)
   killed: boolean;
   gained: Resources;
+  swords: number; // EFFECTIVE sword count driving the swing animation (whetstone can raise it)
 }
 
 /** Split a sword match into per-swing damage: 3 -> [5], 4 -> [5,2], 5+ -> [5,2,2]. */
@@ -110,10 +118,30 @@ function clampPressure(s: RunState) {
   }
 }
 
+/**
+ * Deal direct damage to the current enemy (matches, item blasts, burns all
+ * funnel through here). Handles score, the kill, and the forward surge.
+ */
+export function dealDamage(s: RunState, damage: number): boolean {
+  if (!s.enemy || damage <= 0) return false;
+  s.enemy.hp -= damage;
+  s.score += damage * 5;
+  if (s.enemy.hp <= 0) {
+    s.enemy = null;
+    s.killed += 1;
+    s.score += 100;
+    s.pressure -= ADVANCE_PER_KILL * s.surgeMult; // surge forward, away from the skull
+    clampPressure(s);
+    return true;
+  }
+  return false;
+}
+
 /** Apply one cascade's cleared-tile counts. Returns what happened (for juice). */
 export function applyMatches(s: RunState, counts: Record<number, number>): MatchOutcome {
   const n = (t: number) => counts[t] ?? 0;
-  const gained: Resources = { wood: n(WOOD), ore: n(ORE), treasure: n(TREASURE), keys: n(KEY) };
+  const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay 1:1 — they're tension)
+  const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: n(KEY) };
 
   s.block += n(SHIELD) * BLOCK_PER_SHIELD;
   s.resources.wood += gained.wood;
@@ -122,29 +150,23 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   s.resources.keys += gained.keys;
   s.score += (gained.wood + gained.ore + gained.treasure + gained.keys) * 2;
 
-  const hits = swordHits(n(SWORD));
-  if (hits.length && n(SWORD) >= 3) hits[0] += s.swordBonus; // forged edge bites harder
+  // Wren's Whetstone: a charge turns any sword match into a full 5-match combo.
+  let swords = n(SWORD);
+  if (swords >= 3 && s.whetstone > 0) {
+    s.whetstone--;
+    swords = Math.max(swords, 5);
+  }
+  const hits = swordHits(swords);
+  if (hits.length && swords >= 3) hits[0] += s.swordBonus; // forged edge bites harder
   const staffDmg = n(STAFF) * STAFF_DMG;
   if (staffDmg > 0) {
     if (hits.length) hits[0] += staffDmg;
     else hits.push(staffDmg); // staff-only: one magic hit
   }
   const damage = hits.reduce((a, b) => a + b, 0);
-  let killed = false;
-  if (s.enemy && damage > 0) {
-    s.enemy.hp -= damage;
-    s.score += damage * 5;
-    if (s.enemy.hp <= 0) {
-      killed = true;
-      s.enemy = null;
-      s.killed += 1;
-      s.score += 100;
-      s.pressure -= ADVANCE_PER_KILL; // surge forward, away from the skull
-      clampPressure(s);
-    }
-  }
+  const killed = dealDamage(s, damage);
 
-  return { damage, hits, killed, gained };
+  return { damage, hits, killed, gained, swords: n(SWORD) > 0 ? swords : 0 };
 }
 
 /** Spawn the next enemy — the scene calls this after the death animation. */
