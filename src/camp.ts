@@ -544,7 +544,8 @@ export class CampScene extends Phaser.Scene {
    */
   private cinematicDialog(opts: {
     name: string;
-    lines: { text: string; cue?: () => void }[];
+    speaker?: () => Phaser.GameObjects.Sprite | null; // whose head the bubble rises from
+    lines: { text: string; cue?: () => void; name?: string; speaker?: () => Phaser.GameObjects.Sprite | null }[];
     prelude?: (finish: () => void) => () => void;
     onEnd: (skipped: boolean) => void;
   }) {
@@ -570,51 +571,84 @@ export class CampScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
     cleanup.push(catcher, skip);
 
-    const boxW = Math.min(680, vw - 60);
-    const boxH = 96;
-    const boxY = vh - barH - boxH / 2 - 14;
-    const dlgBg = this.add.rectangle(vw / 2, boxY, boxW, boxH, 0x14171f, 0.96).setStrokeStyle(3, 0x8a6d3a).setDepth(96).setVisible(false);
-    const dlgName = this.add
-      .text(vw / 2 - boxW / 2 + 16, boxY - boxH / 2 + 10, opts.name, { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffd94a" })
-      .setDepth(97)
-      .setVisible(false);
-    const dlgText = this.add
-      .text(vw / 2 - boxW / 2 + 16, boxY - boxH / 2 + 32, "", { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#e6e8ee", wordWrap: { width: boxW - 32 }, lineSpacing: 5 })
-      .setDepth(97)
-      .setVisible(false);
-    const dlgHint = this.add
-      .text(vw / 2 + boxW / 2 - 14, boxY + boxH / 2 - 8, "▾", { fontFamily: "monospace", fontSize: "15px", color: "#8fd0ff" })
-      .setOrigin(1, 1)
-      .setDepth(97)
-      .setVisible(false);
-    this.tweens.add({ targets: dlgHint, alpha: 0.25, duration: 500, yoyo: true, repeat: -1 });
-    cleanup.push(dlgBg, dlgName, dlgText, dlgHint);
+    // --- speech bubble: a parchment pop rising from the speaker's head ---
+    const speakerAnchor = (fn?: () => Phaser.GameObjects.Sprite | null): { x: number; y: number } => {
+      const sp = (fn ?? opts.speaker)?.();
+      if (!sp) return { x: vw / 2, y: barH + 48 };
+      const b = sp.getBounds(); // world/screen bounds — folds in the propBox transform
+      return { x: b.centerX, y: b.top + 4 };
+    };
+
+    let bubble: { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Text; hint: Phaser.GameObjects.Text; full: string } | null = null;
+    const clearBubble = () => {
+      bubble?.root.destroy();
+      bubble = null;
+    };
+
+    const buildBubble = (name: string, anchor: { x: number; y: number }, fullText: string) => {
+      clearBubble();
+      const P = 13;
+      const maxW = Math.min(360, Math.max(220, vw * 0.5));
+      const nameT = this.add.text(0, 0, name, { fontFamily: "monospace", fontStyle: "bold", fontSize: "12px", color: "#7a4a12" });
+      const body = this.add.text(0, 0, fullText, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#26262e", wordWrap: { width: maxW - P * 2 }, lineSpacing: 5 });
+      const bw = Math.min(maxW, Math.max(nameT.width, body.width) + P * 2);
+      const nameH = nameT.height;
+      const bodyH = body.height;
+      const bh = P + nameH + 5 + bodyH + P;
+      const tailH = 15;
+      // centre the bubble over the head, clamped on-screen; container sits at the
+      // bubble centre so it can pop in from its own middle
+      const cx = Phaser.Math.Clamp(anchor.x, 12 + bw / 2, vw - 12 - bw / 2);
+      const topY = Math.max(barH + 10, anchor.y - tailH - bh);
+      const cyc = topY + bh / 2;
+      const lx = -bw / 2;
+      const ty = -bh / 2;
+      const by = bh / 2; // bubble bottom edge (relative)
+      const ax = anchor.x - cx; // head, relative to the container centre
+      const ay = anchor.y - cyc;
+      const tbx = Phaser.Math.Clamp(ax, lx + 20, lx + bw - 20); // tail base, kept on the bubble
+      const tipY = Math.max(ay, by + tailH);
+      const g = this.add.graphics();
+      g.fillStyle(0xf4ecd8, 0.98); // parchment
+      g.fillRoundedRect(lx, ty, bw, bh, 10);
+      g.fillTriangle(tbx - 11, by - 1, tbx + 11, by - 1, ax, tipY); // tail toward the speaker
+      g.lineStyle(3, 0x8a6d3a, 1);
+      g.strokeRoundedRect(lx, ty, bw, bh, 10);
+      g.beginPath();
+      g.moveTo(tbx - 11, by);
+      g.lineTo(ax, tipY);
+      g.lineTo(tbx + 11, by);
+      g.strokePath();
+      nameT.setPosition(lx + P, ty + P - 2);
+      body.setPosition(lx + P, ty + P + nameH + 4).setText(""); // typewriter fills it
+      const hint = this.add.text(bw / 2 - 9, bh / 2 - 6, "▾", { fontFamily: "monospace", fontSize: "14px", color: "#8a6d3a" }).setOrigin(1, 1).setVisible(false);
+      this.tweens.add({ targets: hint, alpha: 0.3, duration: 500, yoyo: true, repeat: -1 });
+      const root = this.add.container(cx, cyc, [g, nameT, body, hint]).setDepth(97).setScale(0.7).setAlpha(0);
+      this.tweens.add({ targets: root, scale: 1, alpha: 1, duration: 200, ease: "Back.easeOut" });
+      bubble = { root, body, hint, full: fullText };
+      return bubble;
+    };
 
     let li = -1;
     let typing = false;
-    let fullText = "";
     let started = false; // prelude finished, dialog running
     let ended = false;
 
     const showLine = (i: number) => {
       const ln = opts.lines[i];
-      dlgBg.setVisible(true);
-      dlgName.setVisible(true);
-      dlgText.setVisible(true).setText("");
-      dlgHint.setVisible(false);
-      fullText = ln.text;
+      const b = buildBubble(ln.name ?? opts.name, speakerAnchor(ln.speaker), ln.text);
       typing = true;
       let ci = 0;
       lineTimer?.remove(false);
       lineTimer = this.time.addEvent({
         delay: 16,
-        repeat: fullText.length - 1,
+        repeat: ln.text.length - 1,
         callback: () => {
           ci++;
-          dlgText.setText(fullText.slice(0, ci));
-          if (ci >= fullText.length) {
+          b.body.setText(ln.text.slice(0, ci));
+          if (ci >= ln.text.length) {
             typing = false;
-            dlgHint.setVisible(true);
+            b.hint.setVisible(true);
           }
         },
       });
@@ -625,6 +659,7 @@ export class CampScene extends Phaser.Scene {
       if (ended) return;
       ended = true;
       lineTimer?.remove(false);
+      clearBubble();
       for (const o of cleanup) o.destroy();
       this.cutscene = false;
       opts.onEnd(skipped);
@@ -634,9 +669,11 @@ export class CampScene extends Phaser.Scene {
       if (ended) return;
       if (typing) {
         lineTimer?.remove(false); // finish the line instantly
-        dlgText.setText(fullText);
+        if (bubble) {
+          bubble.body.setText(bubble.full);
+          bubble.hint.setVisible(true);
+        }
         typing = false;
-        dlgHint.setVisible(true);
         return;
       }
       li++;
@@ -669,6 +706,7 @@ export class CampScene extends Phaser.Scene {
     let walkTween: Phaser.Tweens.Tween | null = null;
     this.cinematicDialog({
       name: "THE WAYFARER",
+      speaker: () => this.goddess,
       lines: [
         { text: "So you're the scout. The caravan can roll no further — the wilds ahead have swallowed the road." },
         {
@@ -778,6 +816,7 @@ export class CampScene extends Phaser.Scene {
     };
     this.cinematicDialog({
       name: "THE PEDDLER",
+      speaker: () => this.peddler,
       lines: [
         { text: "Hold there, scout. Is that the glitter of diamonds I hear in your pockets? Sweetest sound on any road." },
         {
