@@ -198,9 +198,11 @@ Applied in `applyMatches(run, counts)` per resolved cascade:
   Malgrim — spells ×0.5, swords ×1.5); green slimes are plain. `RESIST_MULT`
   0.5 / `WEAK_MULT` 1.5; badge 🛡⚔ / 🛡🪄 by the HP bar; gray "resisted" and
   gold "WEAK!" numbers + a first-hit callout teach the rule.
-- **Shields** bank guard CHARGES (1 per tile): one charge fully turns one enemy
-  strike regardless of its power — guard scales UP in value as foes strengthen —
-  and every block shoves the foe back (`BLOCK_PUSHBACK = 0.05` ground regained).
+- **Shields** bank guard CHARGES (1 per tile), but deep foes hit harder than
+  one shield can turn: a strike costs `guardCost(killed)` charges — 1 early,
+  **2 from depth 8, 3 from depth 16** (the HUD floats `-N🛡` when a block eats
+  more than one). Pay in full and the blow is turned + the foe shoved back
+  (`BLOCK_PUSHBACK = 0.05`); pay short and the uncovered share lands.
 - **Kill surge:** `ADVANCE_PER_KILL = 0.3` pressure removed (hero lunges
   forward), +100 score, then the next enemy spawns.
 - **Scoring:** resources ×2, damage ×5, +100 per kill (+400 per boss).
@@ -587,9 +589,12 @@ Master knobs, current values (edit these to retune the game):
 `SWORD_MAIN=5`, `SWORD_EXTRA=2` (→ 5/7/9 dmg for 3/4/5+),
 `SPELL_DMG={3:9,4:14,5:20}` +`SPELL_EXTRA=3`/tile past 5 (tier 5 burns),
 defenses `RESIST_MULT=0.5`/`WEAK_MULT=1.5` (hide=anti-sword, ward=anti-spell),
-block = CHARGES (1/shield tile; one turns a whole strike + `BLOCK_PUSHBACK=0.05`
-ground — the riposte shove), potion `POTION_GROUND=0.12`/`POTION_GUARD=2` charges,
-Bulwark Brew = 6 charges,
+block = CHARGES (1/shield tile; a full block turns the strike + `BLOCK_PUSHBACK=0.05`
+shove, but strikes COST `guardCost(killed)` = 1 +1/8 depths; short pay = partial),
+potion `POTION_GROUND=0.12`/`POTION_GUARD=2` charges, Bulwark Brew = 6 charges,
+`RUN_COMPLETE_AT=20` (the run ends VICTORIOUS after the second boss + his hoard —
+"THE ROAD IS CLEARED" banks the haul and returns to camp; the pause menu offers
+"return to camp" mid-run, banking as if fallen),
 `ADVANCE_PER_KILL=0.3`, `SAFE_X=PADIN+430` (longer starting runway),
 `ENEMY_BASE_HP=9` (+3/kill), `ENEMY_BASE_POWER=0.075` (+0.015/kill).
 

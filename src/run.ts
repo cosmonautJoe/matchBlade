@@ -100,6 +100,9 @@ export const BOSS_HP_MULT = 1.8;
 export const BOSS_SCROLL_MULT = 0.5;
 export const BOSS_BOUNTY = 8; // treasure showered on the kill
 export const BOSS_SURGE = 0.2; // extra pressure relief on top of ADVANCE_PER_KILL
+// A run's stretch of road ends at the SECOND boss: fell him (and loot his
+// hoard) and the scout returns to camp victorious — runs have a finish line.
+export const RUN_COMPLETE_AT = BOSS_EVERY * 2;
 
 /** What the defense does to each damage school. */
 export function physMult(d: Defense): number {
@@ -270,19 +273,31 @@ export function spawnNext(s: RunState): Enemy | null {
 }
 
 /**
- * The current enemy strikes. With a charge banked, ONE shield turns the whole
- * blow — and the guard answers back, shoving the foe BLOCK_PUSHBACK of ground.
- * With no guard, the full strike shoves the hero toward the skull.
+ * Deeper foes hit harder than one shield can turn: a strike consumes
+ * guardCost(killed) charges — 1 early, 2 from depth 8, 3 from depth 16, and
+ * so on. Come up short and the uncovered share of the blow lands anyway.
+ */
+export function guardCost(killed: number): number {
+  return 1 + Math.floor(killed / 8);
+}
+
+/**
+ * The current enemy strikes. A FULL block (guardCost charges paid) turns the
+ * whole blow and answers back — the foe is shoved BLOCK_PUSHBACK of ground.
+ * A partial guard softens it proportionally; no guard eats the full strike.
  */
 export function enemyStrike(s: RunState): number {
   if (s.over || !s.enemy) return 0;
-  if (s.block > 0) {
-    s.block -= 1; // one charge, one turned strike — regardless of the foe's power
+  const cost = guardCost(s.killed);
+  if (s.block >= cost) {
+    s.block -= cost;
     s.pressure = Math.max(0, s.pressure - BLOCK_PUSHBACK); // the riposte shove
     clampPressure(s);
     return 0;
   }
-  const net = s.enemy.power;
+  const paid = s.block;
+  s.block = 0;
+  const net = s.enemy.power * ((cost - paid) / cost); // what you can't pay for lands
   s.pressure += net;
   clampPressure(s);
   return net;

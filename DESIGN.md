@@ -233,6 +233,12 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
   now roll in run.ts makeEnemy (scene just dresses it); Stormcall respects
   wards via castBlast(). This replaces the old sword-vs-ground/staff-vs-flying
   plan. Tuning: SPELL_DMG {3:9,4:14,5:20}, RESIST_MULT 0.5, WEAK_MULT 1.5.
+- **Run structure (SHIPPED):** a run's stretch ends VICTORIOUS at depth 20 —
+  fell the second boss, loot his hoard, and "THE ROAD IS CLEARED" banks the
+  haul home (RUN_COMPLETE_AT in run.ts). The pause menu offers "return to
+  camp" mid-run (banks as if fallen). Guard scales with depth: strikes cost
+  guardCost(killed) charges (1, then 2 from depth 8, 3 from 16) — deep floors
+  chew through shields again.
 - `npm install` then `npm run dev` -> the harness picks a free port (see
   `vite.config.ts` / `.claude/launch.json` `autoPort`).
 - **Still placeholder / TODO:** cages/rescues, more recruits at camp.

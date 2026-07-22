@@ -120,12 +120,27 @@ export class MenuScene extends Phaser.Scene {
 
   private showMain() {
     this.view = "main";
-    const { box, x, y, w } = this.freshRoot(414);
+    const inRun = this.from === "game"; // retreat only means something mid-run
+    const H = inRun ? 472 : 414;
+    const { box, x, y, w } = this.freshRoot(H);
     this.title(box, x, y, "— PAUSED —");
     const bw = w - 80;
     let by = y + 92;
     const step = 58;
     this.button(box, x, by, bw, "resume", () => this.resume());
+    if (inRun)
+      this.button(box, x, (by += step), bw, "return to camp", () =>
+        this.confirmStep(
+          "Retreat to camp? The run ends here —\nyour haul banks as if you'd fallen.",
+          "retreat",
+          () => {
+            const g = this.scene.get("game") as unknown as { bankAndRetreat?: () => void };
+            g.bankAndRetreat?.(); // the caravan keeps what the scout carried
+            this.restartToCamp();
+          },
+          () => this.showMain(),
+        ),
+      );
     this.button(box, x, (by += step), bw, "new game", () => this.confirmStep(
       "Start over? The caravan's road, oaths, and bank all reset.\n(Save slots are kept.)",
       "start anew",
@@ -140,7 +155,7 @@ export class MenuScene extends Phaser.Scene {
     this.button(box, x, (by += step), bw, "options", () => this.showOptions());
     box.add(
       this.add
-        .text(x, y + 414 - 22, "esc closes · progress auto-saves as you play", { fontFamily: "monospace", fontSize: "11px", color: "#6a707c" })
+        .text(x, y + H - 22, "esc closes · progress auto-saves as you play", { fontFamily: "monospace", fontSize: "11px", color: "#6a707c" })
         .setOrigin(0.5),
     );
   }

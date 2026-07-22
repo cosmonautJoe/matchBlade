@@ -58,6 +58,7 @@ import {
   BOSS_SCROLL_MULT,
   BOSS_BOUNTY,
   BOSS_SURGE,
+  RUN_COMPLETE_AT,
 } from "./run";
 import {
   type ItemDef,
@@ -349,6 +350,7 @@ class GameScene extends Phaser.Scene {
   private resIcons: Phaser.GameObjects.Text[] = []; // 🪵 🪨 💎 🔑 icons (left panel)
   private resVals: Phaser.GameObjects.Text[] = []; // matching counts, positioned tight to each icon
   private overShown = false;
+  private runCompleteShown = false; // the second boss fell — victory banner up
   private lastScoreShown = 0; // pulse the SCORE readout only when it climbs
 
   // responsive shell: the lane + board live in centerBox (design coords), scaled to
@@ -470,6 +472,7 @@ class GameScene extends Phaser.Scene {
     this.rainy = Math.random() < RAIN_CHANCE;
     this.heroLockX = false;
     this.overShown = false;
+    this.runCompleteShown = false;
     this.lastScoreShown = 0;
     this.phase = "advance";
     this.parallax = [];
@@ -1664,6 +1667,13 @@ class GameScene extends Phaser.Scene {
     this.scene.pause();
   }
 
+  /** Menu retreat: end the run early, banking the haul as if the scout had fallen. */
+  public bankAndRetreat() {
+    if (this.run.over || this.overShown || this.runCompleteShown) return; // death/victory paths bank themselves
+    const r = this.run.resources;
+    bankRun(loadMeta(), { wood: r.wood, ore: r.ore, treasure: r.treasure, kills: this.run.killed, chests: this.chestsOpened });
+  }
+
   private clearHint() {
     for (const o of this.hintObjs) o.destroy();
     this.hintObjs = [];
@@ -1795,11 +1805,65 @@ class GameScene extends Phaser.Scene {
         if (chestDue && !chestHasRoom && this.sinceChest === CHEST_EVERY) {
           this.notice("pack full — chest waits", "#ffd0a0");
         }
-        spawnNext(this.run);
-        this.spawnOrc();
+        this.advanceRoad();
       }
       this.refreshHud();
     });
+  }
+
+  /** Next foe — unless this run's stretch of road is done (the second boss fell). */
+  private advanceRoad(walkMs = WALK_IN_MS) {
+    if (this.run.over) return;
+    if (this.run.killed >= RUN_COMPLETE_AT) {
+      this.showRunComplete();
+      return;
+    }
+    spawnNext(this.run);
+    this.spawnOrc(walkMs);
+  }
+
+  /** Victory: the second boss is down, the hoard is looted — home to camp. */
+  private showRunComplete() {
+    if (this.runCompleteShown || this.overShown) return;
+    this.runCompleteShown = true;
+    this.phase = "advance"; // he strides on while the banner flies — a victory walk
+    this.hero.play("hero-walk", true);
+
+    // the caravan keeps everything: bank resources + quest stats, same as a fall
+    const r = this.run.resources;
+    bankRun(loadMeta(), { wood: r.wood, ore: r.ore, treasure: r.treasure, kills: this.run.killed, chests: this.chestsOpened });
+
+    this.sfx("combo6", 0.55);
+    this.time.delayedCall(400, () => this.sfx("coin_pour", 0.5));
+    const w = this.scale.width;
+    const h = this.scale.height;
+    const veil = this.add.rectangle(w / 2, h / 2, w, h, 0x05060a, 0.62).setAlpha(0).setDepth(80);
+    const title = this.add
+      .text(w / 2, h / 2 - 56, "THE ROAD IS CLEARED", { fontFamily: "monospace", fontStyle: "bold", fontSize: "34px", color: "#ffe08a" })
+      .setOrigin(0.5)
+      .setDepth(81)
+      .setAlpha(0);
+    title.setTint(0xfff6c8, 0xffe08a, 0xf2a93b, 0xc9761f);
+    const stats = this.add
+      .text(w / 2, h / 2 - 10, `Depth ${this.run.killed}    Score ${this.run.score}`, { fontFamily: "monospace", fontSize: "20px", color: "#ffe08a" })
+      .setOrigin(0.5)
+      .setDepth(81)
+      .setAlpha(0);
+    const banked = this.add
+      .text(w / 2, h / 2 + 26, `hauled home  🪵 ${r.wood}   🪨 ${r.ore}   💎 ${r.treasure}`, { fontFamily: EMOJI_FONT, fontSize: "17px", color: "#a9e6a9" })
+      .setOrigin(0.5)
+      .setDepth(81)
+      .setAlpha(0);
+    const hint = this.add
+      .text(w / 2, h / 2 + 68, "tap to return to camp", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
+      .setOrigin(0.5)
+      .setDepth(81)
+      .setAlpha(0);
+    this.tweens.add({ targets: veil, alpha: 0.62, duration: 500, delay: 300 });
+    this.tweens.add({ targets: [title, stats, banked], alpha: 1, duration: 400, delay: 500 });
+    this.tweens.add({ targets: hint, alpha: 1, duration: 350, delay: 700 });
+    this.tweens.add({ targets: hint, alpha: 0.3, duration: 700, yoyo: true, repeat: -1, delay: 1100 });
+    this.time.delayedCall(900, () => this.input.once("pointerdown", () => this.scene.start("camp")));
   }
 
   /** The Cindermage falls: flash, quake, treasure bounty, and a chest rolls in next. */
@@ -2125,8 +2189,17 @@ class GameScene extends Phaser.Scene {
   /** One incoming arena hit on the hero: guard turns it, otherwise the skull creeps. */
   private arenaStrikeHero() {
     const hadGuard = this.run.block > 0;
+    const blockBefore = this.run.block;
     const net = enemyStrike(this.run);
     this.refreshHud();
+    const used = blockBefore - this.run.block;
+    if (used > 1)
+      this.floatChip(this.hero.x + 28, GROUND_Y - 100, `-${used}🛡`, {
+        size: 20,
+        tint: [0xeef6ff, 0xbfe0ff, 0x6ea8e0, 0x3a6a9a],
+        stroke: "#050d16",
+        font: EMOJI_FONT,
+      });
     if (hadGuard && net <= 0) {
       this.time.delayedCall(60, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.5));
       this.showBlockImpact(true, true);
@@ -2665,6 +2738,14 @@ class GameScene extends Phaser.Scene {
     if (blocked) // armour soaked some/all of it -> flare + clang on contact
       this.time.delayedCall(90, () => {
         this.sfx(this.pick(["block1", "block2", "block3"]), 0.45);
+        const used = blockBefore - this.run.block;
+        if (used > 1)
+          this.floatChip(this.hero.x + 28, GROUND_Y - 100, `-${used}🛡`, {
+            size: 20,
+            tint: [0xeef6ff, 0xbfe0ff, 0x6ea8e0, 0x3a6a9a],
+            stroke: "#050d16",
+            font: EMOJI_FONT,
+          }); // deep foes chew through the guard — the cost is shown, not hidden
         this.showBlockImpact(isBoss, net <= 0);
       });
     this.orc.play(`${this.orcAnim}-attack`).once("animationcomplete", () => {
@@ -2815,8 +2896,7 @@ class GameScene extends Phaser.Scene {
       this.hero.play("hero-walk", true);
       this.chest = null;
       this.tweens.add({ targets: cont, x: -90, duration: 1500, ease: "Sine.easeIn", onComplete: () => cont.destroy() });
-      spawnNext(this.run);
-      this.spawnOrc(1600);
+      this.advanceRoad(1600);
     });
   }
 
@@ -3001,8 +3081,7 @@ class GameScene extends Phaser.Scene {
     skipBtn.destroy();
     this.chestActive = false;
     if (!this.run.over) {
-      spawnNext(this.run);
-      this.spawnOrc();
+      this.advanceRoad();
       this.refreshHud();
     }
   }

@@ -215,8 +215,9 @@ export const FOREST_QUESTS: Quest[] = [
   { id: "f_wood120", label: "Haul 120 wood back to camp", shortLabel: "haul wood", reward: 20, kind: "delta", stat: "totalWood", target: 120 },
   { id: "f_ore120", label: "Haul 120 ore back to camp", shortLabel: "haul ore", reward: 25, kind: "delta", stat: "totalOre", target: 120 },
   { id: "f_forge3", label: "Have Wren forge 3 more upgrades", shortLabel: "forge x3", reward: 30, kind: "delta", stat: "swordLevel", target: 3 },
-  { id: "f_depth22", label: "Reach depth 22 in a single run", shortLabel: "depth 22 run", reward: 30, kind: "run-depth", target: 22 },
-  { id: "f_depth30", label: "Reach depth 30 in a single run", shortLabel: "depth 30 run", reward: 45, kind: "run-depth", target: 30 },
+  // Runs end victorious at depth 20 (the second boss) — quests fit the road.
+  { id: "f_depth22", label: "Reach depth 18 in a single run", shortLabel: "depth 18 run", reward: 30, kind: "run-depth", target: 18 },
+  { id: "f_depth30", label: "Clear the road to the second boss", shortLabel: "clear the road", reward: 45, kind: "run-depth", target: 20 },
 ];
 
 // Ordered march of the caravan. Each biome has a quest pool that gates the next.
