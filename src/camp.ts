@@ -49,6 +49,12 @@ const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","
 
 // ---- the Peddler (diamond shop; arrives once you bank a gem) ---------------
 const PEDDLER_X = -238; // her pitch, between the tarp tent and the campfire path
+const PEDDLER_SCALE = 1.25; // knight frames hold a 48px figure (vs the hero's 26) — keep her near hero height
+// Feet measured off the sheets (frames are 80 tall with empty space below the
+// boots): idle bottoms out at row 63, the run cycle at row 66 — so each anim
+// gets its own origin or she floats above the ground line.
+const PEDDLER_ORIGIN_IDLE = 63 / 80;
+const PEDDLER_ORIGIN_WALK = 66 / 80;
 const PEDDLER_PRICES: Record<ItemTier, number> = { common: 10, uncommon: 20, rare: 35 };
 const PEDDLER_REROLL = 5; // 💎 to spin fresh wares
 const MAX_STOCKED = 3; // items you can pack for one run
@@ -717,12 +723,17 @@ export class CampScene extends Phaser.Scene {
     this.shopOffers = pool.slice(0, 3);
   }
 
+  /** Play a peddler anim with its matching foot-line origin (the sheets differ). */
+  private peddlerPlay(anim: "peddler-idle" | "peddler-walk") {
+    this.peddler?.setOrigin(0.5, anim === "peddler-walk" ? PEDDLER_ORIGIN_WALK : PEDDLER_ORIGIN_IDLE).play(anim);
+  }
+
   /** Stand her at her pitch with her goods. `entrance` = the arrival ceremony. */
   private buildPeddler(entrance: boolean) {
-    const ped = this.add.sprite(entrance ? -880 : PEDDLER_X, 2, "knight-idle").setOrigin(0.5, 1).setScale(1.9).setDepth(7);
-    ped.play(entrance ? "peddler-walk" : "peddler-idle");
+    const ped = this.add.sprite(entrance ? -880 : PEDDLER_X, 2, "knight-idle").setScale(PEDDLER_SCALE).setDepth(7);
     this.propBox.add(ped);
     this.peddler = ped;
+    this.peddlerPlay(entrance ? "peddler-walk" : "peddler-idle");
     ped.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.peddlerTapped());
     if (!entrance) this.buildPeddlerGoods(false);
   }
@@ -759,7 +770,7 @@ export class CampScene extends Phaser.Scene {
     const unpack = () => {
       if (unpacked) return;
       unpacked = true;
-      this.peddler?.play("peddler-idle");
+      this.peddlerPlay("peddler-idle");
       this.buildPeddlerGoods(true);
     };
     this.cinematicDialog({
@@ -770,7 +781,7 @@ export class CampScene extends Phaser.Scene {
           text: "They call me the Peddler. Gems for gear — have a look at my wares, and your next run leaves camp already armed.",
           cue: () => {
             if (this.peddler)
-              this.tweens.add({ targets: this.peddler, scale: 2.05, duration: 260, yoyo: true, repeat: 1, ease: "Sine.easeInOut" });
+              this.tweens.add({ targets: this.peddler, scale: PEDDLER_SCALE * 1.1, duration: 260, yoyo: true, repeat: 1, ease: "Sine.easeInOut" });
           },
         },
       ],
