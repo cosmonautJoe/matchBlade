@@ -39,6 +39,10 @@ export interface MetaState {
   tutorialSeen: boolean;
   // the camp's arrival cutscene (walk in + the Wayfarer's welcome) has played
   campIntroSeen: boolean;
+  // the Peddler has joined the camp (arrives the first time you bank a diamond)
+  peddlerArrived: boolean;
+  // item ids bought from the Peddler, delivered into slots when the next run starts
+  stockedItems: string[];
   // quest board
   active: ActiveQuest[];
   questsRewarded: string[]; // completed & paid out
@@ -64,6 +68,8 @@ export function defaultMeta(): MetaState {
     bestDepth: 0,
     tutorialSeen: false,
     campIntroSeen: false,
+    peddlerArrived: false,
+    stockedItems: [],
     active: [],
     questsRewarded: [],
     fulfilledRuns: [],

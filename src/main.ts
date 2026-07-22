@@ -465,6 +465,20 @@ class GameScene extends Phaser.Scene {
     this.time.delayedCall(STRIKE_MS, strikeLoop);
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
+    // the Peddler's goods: items bought at camp arrive already packed in slots
+    const stocked = this.meta.stockedItems ?? [];
+    if (stocked.length) {
+      this.meta.stockedItems = [];
+      saveMeta(this.meta);
+      this.time.delayedCall(900, () => {
+        for (const id of stocked) {
+          const def = itemById(id);
+          if (def) this.fillSlot(def);
+        }
+        this.notice("the Peddler's goods ride with you", "#ffe08a");
+      });
+    }
+
     // first time into the puzzle: the guided tutorial runs over the live scene
     // (it gates strikes / scroll / board input itself; see src/tutorial.ts).
     // ?tutorial on the URL force-replays it — handy for testing on devices.

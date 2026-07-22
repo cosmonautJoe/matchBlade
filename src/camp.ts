@@ -35,6 +35,7 @@ import {
   nextBiome,
   MAX_ACTIVE,
 } from "./meta";
+import { ITEMS, type ItemDef, type ItemTier, TIER_COLORS } from "./items";
 
 const DH = 480; // design height for the prop layer (smaller = more zoomed in)
 const DW = 940; // full design width of the camp spread (smaller = more zoomed in; clamps vw/DW)
@@ -45,6 +46,12 @@ const PARALLAX_SRC_H = 216; // vnitti layer source height
 // system emoji font. Leading with an emoji font (as before) made iOS Safari render bare
 // ASCII digits with the emoji font's keycap glyphs — the garbled numbers in the quest UI.
 const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+
+// ---- the Peddler (diamond shop; arrives once you bank a gem) ---------------
+const PEDDLER_X = -238; // her pitch, between the tarp tent and the campfire path
+const PEDDLER_PRICES: Record<ItemTier, number> = { common: 10, uncommon: 20, rare: 35 };
+const PEDDLER_REROLL = 5; // 💎 to spin fresh wares
+const MAX_STOCKED = 3; // items you can pack for one run
 
 type EditableProp = { obj: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject; key: string; frame?: number };
 type LayerDef = { key: string; file: string; drift: number }; // drift px/s (clouds)
@@ -143,6 +150,10 @@ export class CampScene extends Phaser.Scene {
   private departSign: Phaser.GameObjects.Container | null = null;
   private cutscene = false; // arrival cutscene running — camp input held
 
+  // the Peddler: armored road-merchant selling run items for diamonds
+  private peddler: Phaser.GameObjects.Sprite | null = null;
+  private shopOffers: ItemDef[] = []; // this visit's three wares
+
   // dev layout editor: drag props around, then copy the layout as JSON
   private campScale = 1;
   private editMode = false;
@@ -168,6 +179,9 @@ export class CampScene extends Phaser.Scene {
     // NPCs: the blacksmith (WarriorWoman sheet, same layout as the hero) + the quest-giving Wayfarer
     if (!this.textures.exists("smith")) this.load.spritesheet("smith", "sprites/smith.png", { frameWidth: 80, frameHeight: 64 });
     if (!this.textures.exists("goddess")) this.load.spritesheet("goddess", "camp/goddess.png", { frameWidth: 64, frameHeight: 64 });
+    // the Peddler (knight pack — idle 4x64x80, run 8x80x80; measured from the sheets)
+    if (!this.textures.exists("knight-idle")) this.load.spritesheet("knight-idle", "sprites/knight_idle.png", { frameWidth: 64, frameHeight: 80 });
+    if (!this.textures.exists("knight-run")) this.load.spritesheet("knight-run", "sprites/knight_run.png", { frameWidth: 80, frameHeight: 80 });
 
     // camp props
     const P = "camp/";
@@ -208,7 +222,9 @@ export class CampScene extends Phaser.Scene {
     this.furnaceLitObjs = [];
     this.departSign = null;
     this.cutscene = false;
+    this.peddler = null;
     this.meta = loadMeta();
+    this.rollShopOffers();
     const biome = biomeDef(this.meta.biome);
     const groundKey = `camp-ground-${this.meta.biome}`; // per-biome so a road-onward rebuilds it
 
@@ -288,9 +304,11 @@ export class CampScene extends Phaser.Scene {
     this.ambSnd.play();
     this.cameras.main.fadeIn(350, 5, 6, 10);
 
-    // first arrival (or ?intro): the walk-in cutscene, then the marker; else marker now
+    // arrival moments, one per visit: the first-ever walk-in outranks the
+    // Peddler, who turns up the first time you come home with a diamond banked
     const replayIntro = new URLSearchParams(location.search).has("intro");
     if (!this.meta.campIntroSeen || replayIntro) this.playIntro();
+    else if (!this.meta.peddlerArrived && this.meta.treasure >= 1) this.playPeddlerArrival();
     else this.refreshWayfarerMark();
 
     if (import.meta.env.DEV) (globalThis as unknown as { __mbCamp: CampScene }).__mbCamp = this;
@@ -305,6 +323,8 @@ export class CampScene extends Phaser.Scene {
     mk("hero-walk", "warrior", 48, 55, 15);
     mk("smith-idle", "smith", 0, 7, 8);
     mk("smith-walk", "smith", 48, 55, 12);
+    mk("peddler-idle", "knight-idle", 0, 3, 5);
+    mk("peddler-walk", "knight-run", 0, 7, 11);
     // NB: the goddess sheet is a walk cycle (no idle) — the Wayfarer holds a static
     // frame + a gentle float instead (see buildCamp), so she doesn't march in place.
     mk("campfire-burn", "campfire", 0, 9, 10);
@@ -400,6 +420,9 @@ export class CampScene extends Phaser.Scene {
     } else {
       this.furnace.stop().setFrame(0).setTint(0x6f7b8e); // dead coals in the morning light
     }
+
+    // the Peddler's pitch — only once she's followed the glitter into camp
+    if (this.meta.peddlerArrived) this.buildPeddler(false);
 
     // DEPART: humming portal (right side of camp)
     const portal = sprite("portal", "portal-spin", 445, 9, 2.6, 5);
@@ -501,17 +524,27 @@ export class CampScene extends Phaser.Scene {
     this.wayMark.push(t);
   }
 
-  // ===== arrival cutscene: the scout walks into camp, the Wayfarer speaks =====
+  // ===== cutscenes: a shared letterboxed dialog engine + the camp's scenes =====
 
-  private playIntro() {
+  /**
+   * Letterboxed, tap-to-advance, typewriter dialog. Optional `prelude` plays
+   * first (an entrance walk etc.) and must call `finish()` when the speaker is
+   * in place — it returns a fast-forward that snaps the world to that state.
+   * Taps complete the line, then advance; `skip ▸` bails. Cleans itself up and
+   * hands `onEnd(skipped)` the scene-specific consequences.
+   */
+  private cinematicDialog(opts: {
+    name: string;
+    lines: { text: string; cue?: () => void }[];
+    prelude?: (finish: () => void) => () => void;
+    onEnd: (skipped: boolean) => void;
+  }) {
     this.cutscene = true;
     const vw = this.scale.width;
     const vh = this.scale.height;
     const cleanup: Phaser.GameObjects.GameObject[] = [];
     let lineTimer: Phaser.Time.TimerEvent | null = null;
-    let walkTween: Phaser.Tweens.Tween | null = null;
 
-    // letterbox bars ease in — this is a scene, not play
     const barH = Math.round(vh * 0.09);
     const mkBar = (oy: 0 | 1) =>
       this.add.rectangle(0, oy ? vh : 0, vw, barH, 0x05060a, 0.94).setOrigin(0, oy).setDepth(94).setScale(1, 0);
@@ -520,7 +553,6 @@ export class CampScene extends Phaser.Scene {
     this.tweens.add({ targets: [top, bot], scaleY: 1, duration: 500, ease: "Sine.easeOut" });
     cleanup.push(top, bot);
 
-    // full-screen tap-catcher (advances dialog) + skip button above it
     const catcher = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0xffffff, 0.001).setDepth(96).setInteractive();
     const skip = this.add
       .text(vw - 14, barH + 10, "skip ▸", { fontFamily: "monospace", fontSize: "14px", color: "#9aa0ab", backgroundColor: "#14171f", padding: { x: 8, y: 4 } })
@@ -529,13 +561,12 @@ export class CampScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
     cleanup.push(catcher, skip);
 
-    // dialog panel (hidden until the walk lands)
     const boxW = Math.min(680, vw - 60);
     const boxH = 96;
     const boxY = vh - barH - boxH / 2 - 14;
     const dlgBg = this.add.rectangle(vw / 2, boxY, boxW, boxH, 0x14171f, 0.96).setStrokeStyle(3, 0x8a6d3a).setDepth(96).setVisible(false);
     const dlgName = this.add
-      .text(vw / 2 - boxW / 2 + 16, boxY - boxH / 2 + 10, "THE WAYFARER", { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffd94a" })
+      .text(vw / 2 - boxW / 2 + 16, boxY - boxH / 2 + 10, opts.name, { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffd94a" })
       .setDepth(97)
       .setVisible(false);
     const dlgText = this.add
@@ -550,35 +581,14 @@ export class CampScene extends Phaser.Scene {
     this.tweens.add({ targets: dlgHint, alpha: 0.25, duration: 500, yoyo: true, repeat: -1 });
     cleanup.push(dlgBg, dlgName, dlgText, dlgHint);
 
-    // the script — each line can fire a directorial cue when it appears
-    const LINES: { text: string; cue?: () => void }[] = [
-      { text: "So you're the scout. The caravan can roll no further — the wilds ahead have swallowed the road." },
-      {
-        text: "I hold the list of what we lack. Swear my oaths, and haul what I ask back to camp — all of it is found beyond that portal.",
-        cue: () => {
-          if (this.departSign) {
-            this.tweens.add({ targets: this.departSign, scale: 1.3, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
-          }
-          const pg = this.addGlow(445, -60, 3.4, 0.5);
-          this.time.delayedCall(1800, () => pg.destroy());
-        },
-      },
-      {
-        text: "And mind the tarp tent — a smith sulks inside. Past the tenth floor, an unforged blade will not carry you.",
-        cue: () => {
-          for (const o of this.tentMark) {
-            this.tweens.add({ targets: o, scale: (o as Phaser.GameObjects.Text).scale * 1.5, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
-          }
-        },
-      },
-    ];
-
     let li = -1;
     let typing = false;
     let fullText = "";
+    let started = false; // prelude finished, dialog running
+    let ended = false;
 
     const showLine = (i: number) => {
-      const ln = LINES[i];
+      const ln = opts.lines[i];
       dlgBg.setVisible(true);
       dlgName.setVisible(true);
       dlgText.setVisible(true).setText("");
@@ -603,56 +613,288 @@ export class CampScene extends Phaser.Scene {
     };
 
     const end = (skipped: boolean) => {
+      if (ended) return;
+      ended = true;
       lineTimer?.remove(false);
-      walkTween?.stop();
       for (const o of cleanup) o.destroy();
-      this.hero.setX(-47).play("hero-idle");
-      this.meta.campIntroSeen = true;
-      saveMeta(this.meta);
       this.cutscene = false;
-      this.refreshWayfarerMark();
-      if (skipped) this.toast("the Wayfarer waits by the portal");
+      opts.onEnd(skipped);
     };
 
     const advance = () => {
+      if (ended) return;
       if (typing) {
-        // finish the line instantly
-        lineTimer?.remove(false);
+        lineTimer?.remove(false); // finish the line instantly
         dlgText.setText(fullText);
         typing = false;
         dlgHint.setVisible(true);
         return;
       }
       li++;
-      if (li < LINES.length) showLine(li);
+      if (li < opts.lines.length) showLine(li);
       else end(false);
     };
 
-    skip.on("pointerdown", () => end(true));
+    const finish = () => {
+      if (started || ended) return;
+      started = true;
+      advance(); // line 0
+    };
+    const fastForward = opts.prelude ? opts.prelude(finish) : (finish(), () => {});
 
-    // the walk: in from beyond the camp's edge, slow and road-weary
-    this.hero.setX(-860).play("hero-walk");
-    walkTween = this.tweens.add({
-      targets: this.hero,
-      x: -47,
-      duration: 4400,
-      ease: "Sine.easeOut",
-      onComplete: () => {
-        this.hero.play("hero-idle");
-        this.time.delayedCall(600, () => advance()); // a beat, then she speaks
-      },
+    skip.on("pointerdown", () => {
+      if (!started) fastForward(); // snap the entrance into place first
+      end(true);
     });
-    // taps during the walk skip straight to the dialog; after, they advance it
     catcher.on("pointerdown", () => {
-      if (walkTween && walkTween.isPlaying()) {
-        walkTween.stop();
-        this.hero.setX(-47).play("hero-idle");
-        walkTween = null;
-        advance();
+      if (!started) {
+        fastForward(); // hurry the entrance, straight to the first line
         return;
       }
-      if (li >= 0) advance();
+      advance();
     });
+  }
+
+  /** First arrival: the scout walks into camp and the Wayfarer lays out the deal. */
+  private playIntro() {
+    let walkTween: Phaser.Tweens.Tween | null = null;
+    this.cinematicDialog({
+      name: "THE WAYFARER",
+      lines: [
+        { text: "So you're the scout. The caravan can roll no further — the wilds ahead have swallowed the road." },
+        {
+          text: "I hold the list of what we lack. Swear my oaths, and haul what I ask back to camp — all of it is found beyond that portal.",
+          cue: () => {
+            if (this.departSign)
+              this.tweens.add({ targets: this.departSign, scale: 1.3, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
+            const pg = this.addGlow(445, -60, 3.4, 0.5);
+            this.time.delayedCall(1800, () => pg.destroy());
+          },
+        },
+        {
+          text: "And mind the tarp tent — a smith sulks inside. Past the tenth floor, an unforged blade will not carry you.",
+          cue: () => {
+            for (const o of this.tentMark)
+              this.tweens.add({ targets: o, scale: (o as Phaser.GameObjects.Text).scale * 1.5, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
+          },
+        },
+      ],
+      prelude: (finish) => {
+        // the walk: in from beyond the camp's edge, slow and road-weary
+        this.hero.setX(-860).play("hero-walk");
+        walkTween = this.tweens.add({
+          targets: this.hero,
+          x: -47,
+          duration: 4400,
+          ease: "Sine.easeOut",
+          onComplete: () => {
+            this.hero.play("hero-idle");
+            this.time.delayedCall(600, finish);
+          },
+        });
+        return () => {
+          walkTween?.stop();
+          this.hero.setX(-47).play("hero-idle");
+          finish();
+        };
+      },
+      onEnd: (skipped) => {
+        this.hero.setX(-47).play("hero-idle");
+        this.meta.campIntroSeen = true;
+        saveMeta(this.meta);
+        this.refreshWayfarerMark();
+        if (skipped) this.toast("the Wayfarer waits by the portal");
+      },
+    });
+  }
+
+  // ===== the Peddler: gems for gear =====
+
+  /** Roll this visit's three wares (distinct, never boss trophies). */
+  private rollShopOffers() {
+    const pool = ITEMS.filter((i) => !i.bossOnly);
+    Phaser.Utils.Array.Shuffle(pool);
+    this.shopOffers = pool.slice(0, 3);
+  }
+
+  /** Stand her at her pitch with her goods. `entrance` = the arrival ceremony. */
+  private buildPeddler(entrance: boolean) {
+    const ped = this.add.sprite(entrance ? -880 : PEDDLER_X, 2, "knight-idle").setOrigin(0.5, 1).setScale(1.9).setDepth(7);
+    ped.play(entrance ? "peddler-walk" : "peddler-idle");
+    this.propBox.add(ped);
+    this.peddler = ped;
+    ped.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.peddlerTapped());
+    if (!entrance) this.buildPeddlerGoods(false);
+  }
+
+  /** Her stall: a crate, a basket, and the shingle. Pops in during the arrival. */
+  private buildPeddlerGoods(pop: boolean) {
+    const goods: Phaser.GameObjects.GameObject[] = [];
+    const crate = this.add.image(PEDDLER_X - 52, 1, "crate").setOrigin(0.5, 1).setScale(1.4).setDepth(6);
+    const basket = this.add.image(PEDDLER_X + 44, 1, "basket_stack").setOrigin(0.5, 1).setScale(1.5).setDepth(6);
+    this.propBox.add(crate);
+    this.propBox.add(basket);
+    const plq = this.plaque(PEDDLER_X, -132, "💰 PEDDLER");
+    goods.push(crate, basket, plq);
+    for (const g of goods) {
+      const im = g as Phaser.GameObjects.Image;
+      im.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.peddlerTapped());
+    }
+    if (pop) {
+      goods.forEach((g, i) => {
+        const im = g as Phaser.GameObjects.Image;
+        const s = im.scaleX;
+        im.setScale(0);
+        this.tweens.add({ targets: im, scale: s, duration: 300, delay: 150 + i * 140, ease: "Back.easeOut" });
+      });
+      this.sfx("pouch", 0.5);
+    }
+  }
+
+  /** She followed the glitter: walks in, unpacks, and makes her pitch. Once. */
+  private playPeddlerArrival() {
+    this.buildPeddler(true);
+    let walkTween: Phaser.Tweens.Tween | null = null;
+    let unpacked = false;
+    const unpack = () => {
+      if (unpacked) return;
+      unpacked = true;
+      this.peddler?.play("peddler-idle");
+      this.buildPeddlerGoods(true);
+    };
+    this.cinematicDialog({
+      name: "THE PEDDLER",
+      lines: [
+        { text: "Hold there, scout. Is that the glitter of diamonds I hear in your pockets? Sweetest sound on any road." },
+        {
+          text: "They call me the Peddler. Gems for gear — have a look at my wares, and your next run leaves camp already armed.",
+          cue: () => {
+            if (this.peddler)
+              this.tweens.add({ targets: this.peddler, scale: 2.05, duration: 260, yoyo: true, repeat: 1, ease: "Sine.easeInOut" });
+          },
+        },
+      ],
+      prelude: (finish) => {
+        walkTween = this.tweens.add({
+          targets: this.peddler,
+          x: PEDDLER_X,
+          duration: 3600,
+          ease: "Sine.easeOut",
+          onComplete: () => {
+            unpack();
+            this.time.delayedCall(800, finish);
+          },
+        });
+        return () => {
+          walkTween?.stop();
+          this.peddler?.setX(PEDDLER_X);
+          unpack();
+          finish();
+        };
+      },
+      onEnd: () => {
+        this.peddler?.setX(PEDDLER_X);
+        unpack();
+        this.meta.peddlerArrived = true;
+        saveMeta(this.meta);
+        this.refreshWayfarerMark();
+        this.toast("the Peddler has set up shop 💰");
+      },
+    });
+  }
+
+  /** Her shop: three wares for diamonds, packed into your slots for the NEXT run. */
+  private peddlerTapped() {
+    if (this.editMode || this.panelOpen || this.cutscene) return;
+    this.closePanel();
+    this.panelOpen = true;
+
+    const vw = this.scale.width;
+    const vh = this.scale.height;
+    const stocked = this.meta.stockedItems;
+    const W = 600;
+    const H = 176 + this.shopOffers.length * 46 + 64;
+    const box = this.add.container(0, 0).setDepth(90);
+    const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive();
+    const bg = this.add.rectangle(vw / 2, vh / 2, W, H, 0x14171f).setStrokeStyle(3, 0x2a2d38);
+    const title = this.add
+      .text(vw / 2, vh / 2 - H / 2 + 32, "💰 THE PEDDLER", { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
+      .setOrigin(0.5);
+    const bank = this.add
+      .text(vw / 2, vh / 2 - H / 2 + 60, `your gems: 💎 ${this.meta.treasure}`, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#bfe6ff" })
+      .setOrigin(0.5);
+    box.add([veil, bg, title, bank]);
+
+    const left = vw / 2 - W / 2 + 26;
+    let y = vh / 2 - H / 2 + 96;
+    for (const item of this.shopOffers) {
+      const price = PEDDLER_PRICES[item.tier];
+      const afford = this.meta.treasure >= price;
+      const room = stocked.length < MAX_STOCKED;
+      box.add(this.add.text(left, y, `${item.glyph} ${item.name}`, { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#dfe3ea" }));
+      box.add(this.add.text(left + 250, y + 2, item.tier, { fontFamily: "monospace", fontSize: "12px", color: TIER_COLORS[item.tier] }));
+      const bx = vw / 2 + W / 2 - 88;
+      const ok = afford && room;
+      const rect = this.add.rectangle(bx, y + 10, 124, 32, ok ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, ok ? 0x54c26e : 0x3a3f4b);
+      const bt = this.add
+        .text(bx, y + 10, `BUY 💎${price}`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "13px", color: ok ? "#dff5df" : "#6a707c" })
+        .setOrigin(0.5);
+      if (ok)
+        rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+          spend(this.meta, { treasure: price });
+          this.meta.stockedItems.push(item.id);
+          saveMeta(this.meta);
+          this.shopOffers = this.shopOffers.filter((o) => o !== item);
+          this.refreshResources();
+          this.sfx("coin3", 0.55);
+          this.toast(`packed for the road: ${item.glyph} ${item.name}`);
+          this.closePanel();
+          this.peddlerTapped(); // reopen with the ware sold out
+        });
+      box.add([rect, bt]);
+      y += 46;
+    }
+    if (!this.shopOffers.length) {
+      box.add(this.add.text(vw / 2, y + 6, "「 Sold out. The road restocks me — come back after a run. 」", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
+      y += 34;
+    }
+
+    const packLine = stocked.length
+      ? `packed for next run (${stocked.length}/${MAX_STOCKED}):  ${stocked.map((id) => ITEMS.find((i) => i.id === id)?.glyph ?? "?").join(" ")}`
+      : `packed for next run:  — none —  (max ${MAX_STOCKED})`;
+    box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, packLine, { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#a9e6a9" }).setOrigin(0.5));
+
+    // footer: reroll the wares / leave
+    const cby = vh / 2 + H / 2 - 36;
+    const canReroll = this.meta.treasure >= PEDDLER_REROLL && this.shopOffers.length > 0;
+    const rrect = this.add.rectangle(vw / 2 - 90, cby, 160, 36, canReroll ? 0x3a3a5e : 0x2a2d38).setStrokeStyle(2, canReroll ? 0x7a7ad0 : 0x3a3f4b);
+    const rt = this.add
+      .text(vw / 2 - 90, cby, `reroll 💎${PEDDLER_REROLL}`, { fontFamily: EMOJI_FONT, fontSize: "14px", color: canReroll ? "#d0d0ff" : "#6a707c" })
+      .setOrigin(0.5);
+    if (canReroll)
+      rrect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+        spend(this.meta, { treasure: PEDDLER_REROLL });
+        this.rollShopOffers();
+        this.refreshResources();
+        this.sfx("pickup", 0.5);
+        this.closePanel();
+        this.peddlerTapped();
+      });
+    const crect = this.add.rectangle(vw / 2 + 90, cby, 140, 36, 0x2a2d38).setStrokeStyle(2, 0x3a3f4b).setInteractive({ useHandCursor: true });
+    const ct = this.add.text(vw / 2 + 90, cby, "good day", { fontFamily: "monospace", fontSize: "14px", color: "#dfe3ea" }).setOrigin(0.5);
+    crect.on("pointerdown", () => this.closePanel());
+    box.add([rrect, rt, crect, ct]);
+
+    this.panelBox = box;
+  }
+
+  /** Dev: relive the Peddler's arrival (console: __mbCamp.debugPeddler()). */
+  public debugPeddler() {
+    this.meta.treasure = Math.max(this.meta.treasure, 25);
+    this.meta.peddlerArrived = false;
+    this.meta.campIntroSeen = true;
+    saveMeta(this.meta);
+    this.scene.restart();
   }
 
   private toast(msg: string) {
