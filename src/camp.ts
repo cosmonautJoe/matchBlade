@@ -36,6 +36,7 @@ import {
   MAX_ACTIVE,
 } from "./meta";
 import { ITEMS, type ItemDef, type ItemTier, TIER_COLORS } from "./items";
+import { sfxV, ambV } from "./audio";
 
 const DH = 480; // design height for the prop layer (smaller = more zoomed in)
 const DW = 940; // full design width of the camp spread (smaller = more zoomed in; clamps vw/DW)
@@ -169,6 +170,7 @@ export class CampScene extends Phaser.Scene {
   private editable: EditableProp[] = [];
   private editBtn?: Phaser.GameObjects.Text;
   private copyBtn?: Phaser.GameObjects.Text;
+  private menuBtn!: Phaser.GameObjects.Text; // ☰ opens the pause menu (Esc works too)
   private portalHit?: Phaser.GameObjects.Rectangle;
 
   constructor() {
@@ -290,6 +292,12 @@ export class CampScene extends Phaser.Scene {
       .text(14, 34, "", { fontFamily: EMOJI_FONT, fontSize: "17px", color: "#dfe3ea", stroke: "#0a0b0f", strokeThickness: 4 })
       .setDepth(50);
     this.refreshResources();
+    this.menuBtn = this.add
+      .text(0, 0, "☰", { fontFamily: "monospace", fontStyle: "bold", fontSize: "24px", color: "#c7ccd6", stroke: "#0a0b0f", strokeThickness: 4 })
+      .setOrigin(1, 0)
+      .setDepth(70)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerdown", () => this.openMenu());
 
     // NB: quest rewards are no longer auto-paid on arrival — the Wayfarer holds
     // them (her gold "?" invites the visit) and pays when you see her.
@@ -307,10 +315,19 @@ export class CampScene extends Phaser.Scene {
       this.ambSnd = null;
     });
 
-    this.fireSnd = this.sound.add("camp_fire", { volume: 0.22, loop: true });
+    this.fireSnd = this.sound.add("camp_fire", { volume: ambV(0.22), loop: true });
     this.fireSnd.play();
-    this.ambSnd = this.sound.add("amb_night", { volume: 0.16, loop: true }); // the wilds hum past the firelight
+    this.ambSnd = this.sound.add("amb_night", { volume: ambV(0.16), loop: true }); // the wilds hum past the firelight
     this.ambSnd.play();
+    // the ambience fader re-levels the beds live while the options slider moves
+    const onAudio = () => {
+      if (this.fireSnd) (this.fireSnd as unknown as { volume: number }).volume = ambV(0.22);
+      if (this.ambSnd) (this.ambSnd as unknown as { volume: number }).volume = ambV(0.16);
+    };
+    this.game.events.on("audio-changed", onAudio);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.game.events.off("audio-changed", onAudio));
+    // pause menu: Esc (desktop) or the ☰ chip top-right
+    this.input.keyboard?.on("keydown-ESC", () => this.openMenu());
     this.cameras.main.fadeIn(350, 5, 6, 10);
 
     // arrival moments, one per visit: the first-ever walk-in outranks the
@@ -966,7 +983,14 @@ export class CampScene extends Phaser.Scene {
   // ===== meta: resources / blacksmith / forge / quests =====
 
   private sfx(key: string, volume = 0.5) {
-    if (this.cache.audio.exists(key)) this.sound.play(key, { volume });
+    if (this.cache.audio.exists(key)) this.sound.play(key, { volume: sfxV(volume) });
+  }
+
+  /** Pause the camp under the system menu (Esc / ☰). Held while a panel/cutscene runs. */
+  private openMenu() {
+    if (this.scene.isActive("menu") || this.editMode || this.panelOpen || this.cutscene || this.departing) return;
+    this.scene.launch("menu", { from: "camp" });
+    this.scene.pause();
   }
 
   private refreshResources() {
@@ -1365,8 +1389,9 @@ export class CampScene extends Phaser.Scene {
     // offset so the (asymmetric) composition is visually centred: hill far-left, portal right edge
     this.propBox.setPosition(Math.round(vw / 2 - CONTENT_CX * this.campScale), groundY).setScale(this.campScale);
     this.biomeLabel.setPosition(14, 10);
-    this.editBtn?.setPosition(vw - 14, 10);
-    this.copyBtn?.setPosition(vw - 14, 40);
+    this.menuBtn.setPosition(vw - 14, 8);
+    this.editBtn?.setPosition(vw - 14, 44); // dev buttons stack under the menu chip
+    this.copyBtn?.setPosition(vw - 14, 74);
   }
 
   update(_t: number, delta: number) {

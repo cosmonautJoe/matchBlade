@@ -95,6 +95,47 @@ export function saveMeta(m: MetaState): void {
   }
 }
 
+// ---- save slots (the menu's Save/Load) --------------------------------------
+// The ACTIVE save auto-persists on every mutation; slots are snapshots of it —
+// restore points the player takes and returns to deliberately.
+
+export const SAVE_SLOTS = 3;
+const slotKey = (n: number) => `matchblade-save-${n}`;
+
+export interface SlotData {
+  savedAt: number; // epoch ms
+  meta: MetaState;
+}
+
+export function readSlot(n: number): SlotData | null {
+  try {
+    const raw = localStorage.getItem(slotKey(n));
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<SlotData>;
+    if (!p.meta) return null;
+    return { savedAt: p.savedAt ?? 0, meta: { ...defaultMeta(), ...p.meta, version: 1 } };
+  } catch {
+    return null;
+  }
+}
+
+/** Snapshot the active save into a slot. */
+export function saveToSlot(n: number, m: MetaState): void {
+  try {
+    localStorage.setItem(slotKey(n), JSON.stringify({ savedAt: Date.now(), meta: m } satisfies SlotData));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Replace the active save with a slot's snapshot. True on success. */
+export function loadFromSlot(n: number): boolean {
+  const s = readSlot(n);
+  if (!s) return false;
+  saveMeta(s.meta);
+  return true;
+}
+
 /** Fold one finished run into the bank + quest stats. Mutates and saves. */
 export function bankRun(
   m: MetaState,

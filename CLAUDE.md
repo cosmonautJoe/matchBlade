@@ -31,7 +31,13 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
 - `main.ts` — `GameScene`: board + lane + combat + chests + boss + items + HUD
   (~2300 lines; the big one).
 - `camp.ts` — `CampScene`: the between-runs hub. Boots first; DEPART → run;
-  death → back here.
+  death → back here. Wayfarer (quests), blacksmith (forge), Peddler (diamond
+  item shop), arrival cutscenes.
+- `menu.ts` — `MenuScene`: pause/system menu overlay (Esc or ☰). Pauses the
+  scene beneath it. New game / save+load (3 slots) / options (audio faders).
+- `audio.ts` — persisted channel volumes (effects/ambience/music). All sfx
+  route through `sfxV()`, looping beds through `ambV()`; sliders emit
+  `game.events "audio-changed"` so beds re-level live.
 - `tutorial.ts` — first-run overlay (gates the run while active).
 
 ## Dev hooks (DEV builds only)

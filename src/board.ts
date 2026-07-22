@@ -114,13 +114,18 @@ export function swapMakesMatch(g: number[][], a: Coord, b: Coord): boolean {
 
 /** True if any single adjacent swap on the board would create a match. */
 export function hasPossibleMove(g: number[][]): boolean {
+  return findHint(g) !== null;
+}
+
+/** The first adjacent swap that would create a match — the pair the Hint button lights up. */
+export function findHint(g: number[][]): { a: Coord; b: Coord } | null {
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
-      if (c + 1 < W && swapMakesMatch(g, { r, c }, { r, c: c + 1 })) return true;
-      if (r + 1 < H && swapMakesMatch(g, { r, c }, { r: r + 1, c })) return true;
+      if (c + 1 < W && swapMakesMatch(g, { r, c }, { r, c: c + 1 })) return { a: { r, c }, b: { r, c: c + 1 } };
+      if (r + 1 < H && swapMakesMatch(g, { r, c }, { r: r + 1, c })) return { a: { r, c }, b: { r: r + 1, c } };
     }
   }
-  return false;
+  return null;
 }
 
 /**

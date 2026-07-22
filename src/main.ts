@@ -28,6 +28,7 @@ import {
   makeInitialGrid,
   randomType,
   findMatches,
+  findHint,
   swap,
   hasPossibleMove,
 } from "./board";
@@ -74,6 +75,8 @@ import {
   SAPPER_RADIUS,
 } from "./items";
 import { CampScene } from "./camp";
+import { MenuScene } from "./menu";
+import { sfxV, ambV } from "./audio";
 import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
 import { Tutorial } from "./tutorial";
 
@@ -86,7 +89,9 @@ const TILE = 92;
 const GRID_W = W * TILE; // 10*92 = 920
 const GRID_H = H * TILE; // 5*92 = 460
 const PADIN = 12; // inner padding of the centre column
-const LANE_H = 240; // runner strip height (design)
+// Keep the runner as a shallow cinematic strip so the puzzle owns most of a
+// landscape phone. The whole centre can then scale up without stretching tiles.
+const LANE_H = 160; // compact, but tall enough for the combat silhouettes to breathe
 const GRID_GAP = 14; // gap between lane and board
 
 const LANE_Y = PADIN;
@@ -117,21 +122,21 @@ interface ItemSlotUI {
 }
 
 // lane geometry (design-local)
-const FLOOR_H = 40; // grassy ground band the characters stand on
+const FLOOR_H = 32; // grassy ground band the characters stand on
 const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
 // Foot fraction measured from each sheet (lowest opaque pixel) so they sit on the ground.
 const HERO_ORIGIN = 0.734; // WarriorMan feet at y47/64
 const SLIME_ORIGIN = 0.656; // slime base at y41/64
 const SKULL_X = PADIN + 28; // death marker at the far left of the lane
 const SAFE_X = PADIN + 300; // hero x at pressure 0
-const ENGAGE_GAP = 180; // enemy centre sits this far right of the hero when fighting (widened for bigger sprites)
+const ENGAGE_GAP = 160; // combat spacing inside the compact runner strip
 const ENTER_X = CENTER_DW + 80; // enemies walk in from off the right
-const HERO_SCALE = 3.8; // WarriorMan in the taller lane
-const SLIME_SCALE = 3.7; // ground slime
+const HERO_SCALE = 2.7;
+const SLIME_SCALE = 2.7;
 // boss: the Cindermage (Evil Wizard pack, CC0) — 150x150 frames, feet at y101, faces right natively
-const BOSS_SCALE = 3.4;
+const BOSS_SCALE = 1.25;
 const BOSS_ORIGIN = 0.675;
-const BOSS_ENGAGE_GAP = 240; // the big robe (and his fire breath) needs a wider stance
+const BOSS_ENGAGE_GAP = 220; // the robe and fire breath still need a wider stance
 const BOSS_NAME = "MALGRIM THE CINDERMAGE";
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
@@ -271,6 +276,9 @@ class GameScene extends Phaser.Scene {
   private leftPanel!: Phaser.GameObjects.Rectangle;
   private rightPanel!: Phaser.GameObjects.Rectangle;
   private gearText!: Phaser.GameObjects.Text;
+  private menuBtn!: Phaser.GameObjects.Text; // ☰ opens the pause menu (Esc works too)
+  private hintBtn!: Phaser.GameObjects.Text; // 💡 lights up a valid swap on the board
+  private hintObjs: Phaser.GameObjects.GameObject[] = []; // active hint rings (cleared on next move)
   private rotateHint!: Phaser.GameObjects.Text;
 
   // chests
@@ -403,6 +411,7 @@ class GameScene extends Phaser.Scene {
     this.bossChestNext = false;
     this.targeting = null;
     this.targetObjs = [];
+    this.hintObjs = [];
     this.tip = null;
     this.tipFor = -1;
     this.holdTimer = null;
@@ -432,14 +441,26 @@ class GameScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", this.layout, this));
 
     // ambient forest bed under the whole run (rain variant on wet runs); the
-    // sound manager outlives the scene, so stop it when the camp takes over
+    // sound manager outlives the scene, so stop it when the camp takes over.
+    // The ambience fader scales it, live when the options slider moves.
+    const ambBase = this.rainy ? 0.34 : 0.22;
     this.amb = this.sound.add(this.rainy ? "amb_rain" : "amb_day", { volume: 0, loop: true });
     this.amb.play();
-    this.tweens.add({ targets: this.amb, volume: this.rainy ? 0.34 : 0.22, duration: 1400 });
+    this.tweens.add({ targets: this.amb, volume: ambV(ambBase), duration: 1400 });
+    const onAudio = () => {
+      if (!this.amb) return;
+      this.tweens.killTweensOf(this.amb);
+      (this.amb as unknown as { volume: number }).volume = ambV(ambBase);
+    };
+    this.game.events.on("audio-changed", onAudio);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.events.off("audio-changed", onAudio);
       this.amb?.stop();
       this.amb = null;
     });
+
+    // pause menu: Esc (desktop) or the ☰ chip (see buildPanels)
+    this.input.keyboard?.on("keydown-ESC", () => this.openMenu());
 
     this.cameras.main.fadeIn(300, 5, 6, 10);
     // intro: the hero jogs in from off the left edge to meet the first foe.
@@ -591,7 +612,7 @@ class GameScene extends Phaser.Scene {
     };
   }
 
-  /** Reserve the side panels first (they must always show), then fit the centre column between them. */
+  /** Fit a compact HUD + centre shell, keeping square tiles and a shallow runner. */
   private layout() {
     const vw = this.scale.width;
     const vh = this.scale.height;
@@ -601,19 +622,21 @@ class GameScene extends Phaser.Scene {
     const uw = Math.max(120, vw - ins.l - ins.r);
     const uh = Math.max(120, vh - ins.t - ins.b);
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-    const leftW = Math.round(clamp(uw * 0.15, 118, 300));
-    const rightW = Math.round(clamp(uw * 0.1, 84, 220));
+    // Rails are sized for their contents, not used as buckets for spare width.
+    // The resource rail gets extra room for quest and active-buff text.
+    const leftW = Math.round(clamp(uw * 0.14, 160, 220));
+    const rightW = Math.round(clamp(uw * 0.065, 72, 132));
     const availW = Math.max(80, uw - leftW - rightW);
     const s = Math.min(availW / CENTER_DW, uh / CENTER_DH);
     this.centerScale = s;
     const cw = CENTER_DW * s;
     const ch = CENTER_DH * s;
-    const cx = Math.round(x0 + leftW + (availW - cw) / 2);
+    const shellW = leftW + cw + rightW;
+    const shellX = Math.round(x0 + (uw - shellW) / 2);
+    const cx = Math.round(shellX + leftW);
     const cy = Math.round(y0 + (uh - ch) / 2);
     this.centerBox.setScale(s).setPosition(cx, cy);
-    // panels fill from the usable edges up to the centre; the reserve above guarantees
-    // each is at least leftW / rightW wide, so they never vanish.
-    this.layoutPanels(x0, y0, uw, uh, cx, cw);
+    this.layoutPanels(shellX, y0, shellW, uh, cx, cw);
   }
 
   /** Left panel = resources / score / gear; right panel = the vertical item-slot rack. Always visible. */
@@ -628,22 +651,24 @@ class GameScene extends Phaser.Scene {
     this.rotateHint.setPosition(x0 + uw / 2, y0 + 6).setVisible(uw < uh); // portrait hint; panels still show
 
     // resources: icon + number rows, positioned exactly so there's no emoji-spacing drift
-    const padX = lLeft + 18;
-    const rowH = Math.min(48, uh * 0.1);
+    const padX = lLeft + 12;
+    const rowH = Math.min(44, uh * 0.09);
     const topY = y0 + Math.max(26, uh * 0.11);
     for (let i = 0; i < this.resIcons.length; i++) {
       const y = Math.round(topY + i * rowH);
       this.resIcons[i].setPosition(padX, y);
-      this.resVals[i].setPosition(padX + 40, y);
+      this.resVals[i].setPosition(padX + 35, y);
     }
     this.scoreText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 16));
     this.questText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 92));
     this.buffText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 196));
+    this.hintBtn.setPosition(padX, y0 + uh - 52);
     this.gearText.setPosition(padX, y0 + uh - 14);
+    this.menuBtn.setPosition(x0 + uw - 10, y0 + 6);
 
     // right: item slots, vertical, centred
-    const gap = 10;
-    const slot = Math.max(24, Math.min(rw - 22, (uh * 0.92) / SLOT_N - gap));
+    const gap = 8;
+    const slot = Math.max(24, Math.min(rw - 16, (uh * 0.92) / SLOT_N - gap));
     const totalH = SLOT_N * slot + (SLOT_N - 1) * gap;
     for (let i = 0; i < SLOT_N; i++) {
       const x = rLeft + rw / 2;
@@ -683,6 +708,18 @@ class GameScene extends Phaser.Scene {
     this.questText = this.add
       .text(0, 0, "", { fontFamily: "monospace", fontSize: "12px", color: "#a9c8a9", lineSpacing: 7 })
       .setOrigin(0, 0);
+    this.menuBtn = this.add
+      .text(0, 0, "☰", { fontFamily: "monospace", fontStyle: "bold", fontSize: "24px", color: "#c7ccd6", stroke: "#0a0b0f", strokeThickness: 4 })
+      .setOrigin(1, 0)
+      .setDepth(80)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerdown", () => this.openMenu());
+    this.hintBtn = this.add
+      .text(0, 0, "💡 hint", { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "15px", color: "#1a1205", backgroundColor: "#ffd94a", padding: { x: 10, y: 6 } })
+      .setOrigin(0, 1)
+      .setDepth(50)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerdown", () => this.showHint());
     this.gearText = this.add.text(0, 0, "⚙", { fontFamily: EMOJI_FONT, fontSize: "26px", color: "#c7ccd6" }).setOrigin(0, 1);
     // dev-only combo rig — in production an accidental tap here instantly rewrote
     // the whole board mid-run ("my board just reset?!"), so the gear ships hidden
@@ -1207,6 +1244,7 @@ class GameScene extends Phaser.Scene {
 
   private async trySwap(a: Coord, b: Coord) {
     this.busy = true;
+    this.clearHint(); // a move settles the board — any hint is stale now
     const ta = this.tiles[a.r][a.c];
     const tb = this.tiles[b.r][b.c];
     if (!ta || !tb) {
@@ -1370,10 +1408,43 @@ class GameScene extends Phaser.Scene {
 
   // ---- sfx ----
   private sfx(key: string, volume = 0.5, rate = 1) {
-    if (this.cache.audio.exists(key)) this.sound.play(key, { volume, rate });
+    if (this.cache.audio.exists(key)) this.sound.play(key, { volume: sfxV(volume), rate });
   }
   private pick(a: string[]): string {
     return a[(Math.random() * a.length) | 0];
+  }
+
+  /** Pause the run under the system menu (Esc / ☰). Everything holds its breath. */
+  private openMenu() {
+    if (this.scene.isActive("menu")) return;
+    this.scene.launch("menu", { from: "game" });
+    this.scene.pause();
+  }
+
+  private clearHint() {
+    for (const o of this.hintObjs) o.destroy();
+    this.hintObjs = [];
+  }
+
+  /** Light up a valid swap: two pulsing gold rings on the tiles to trade. */
+  private showHint() {
+    if (this.busy || this.run.over || this.chestActive || this.tutorial?.active || this.targeting) return;
+    this.clearHint();
+    const h = findHint(this.grid);
+    if (!h) {
+      this.notice("no moves — the board will refresh", "#9aa0ab");
+      return;
+    }
+    buzz(12);
+    this.sfx("pickup", 0.4, 1.2);
+    for (const cell of [h.a, h.b]) {
+      const ring = this.inBox(
+        this.add.rectangle(this.xFor(cell.c), this.yFor(cell.r), TILE - 4, TILE - 4).setStrokeStyle(4, 0xffe08a, 0.95).setDepth(50),
+      );
+      this.tweens.add({ targets: ring, scaleX: 1.1, scaleY: 1.1, alpha: 0.35, duration: 440, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+      this.hintObjs.push(ring);
+    }
+    this.time.delayedCall(2800, () => this.clearHint()); // fades on its own if unused
   }
   /** Hero footfalls while running to the next foe (dirt on the grass map). */
   private footstep() {
@@ -1532,10 +1603,14 @@ class GameScene extends Phaser.Scene {
     const blockBefore = this.run.block;
     const net = enemyStrike(this.run);
     const isBoss = this.orcAnim === "boss";
+    const blocked = this.run.block < blockBefore;
     if (isBoss) this.sfx(this.pick(["fireball1", "fireball2", "fireball3"]), 0.55); // fire roars across the gap
     else this.sfx("slimeatk", 0.3); // slime lunges
-    if (this.run.block < blockBefore) // armour soaked some/all of it -> clang on contact
-      this.time.delayedCall(90, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.45));
+    if (blocked) // armour soaked some/all of it -> flare + clang on contact
+      this.time.delayedCall(90, () => {
+        this.sfx(this.pick(["block1", "block2", "block3"]), 0.45);
+        this.showBlockImpact(isBoss, net <= 0);
+      });
     this.orc.play(`${this.orcAnim}-attack`).once("animationcomplete", () => {
       if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
     });
@@ -1544,6 +1619,74 @@ class GameScene extends Phaser.Scene {
       this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
       this.time.delayedCall(isBoss ? 200 : 130, () => this.hero.clearTint());
     }
+  }
+
+  /** A clean guard read: luminous crest, contact sparks, and a tiny foe recoil. */
+  private showBlockImpact(isBoss: boolean, fullyBlocked: boolean) {
+    const root = this.inBox(this.add.container(this.hero.x + 13, GROUND_Y - 48).setDepth(47));
+    const halo = this.add
+      .ellipse(0, 0, 70, 90, 0x4aaeff, fullyBlocked ? 0.28 : 0.2)
+      .setStrokeStyle(isBoss ? 5 : 4, 0xc8efff, 0.95)
+      .setBlendMode(Phaser.BlendModes.ADD);
+
+    const crest = this.add.graphics().setBlendMode(Phaser.BlendModes.ADD);
+    crest.fillStyle(0x58bfff, fullyBlocked ? 0.42 : 0.3);
+    crest.lineStyle(3, 0xe7f8ff, 1);
+    crest.beginPath();
+    crest.moveTo(0, -34);
+    crest.lineTo(27, -23);
+    crest.lineTo(23, 13);
+    crest.lineTo(0, 34);
+    crest.lineTo(-23, 13);
+    crest.lineTo(-27, -23);
+    crest.closePath();
+    crest.fillPath();
+    crest.strokePath();
+    crest.lineStyle(3, 0xffffff, 0.9);
+    crest.beginPath();
+    crest.moveTo(-12, -2);
+    crest.lineTo(-2, 9);
+    crest.lineTo(15, -13);
+    crest.strokePath();
+
+    const sparks = this.add.graphics().setBlendMode(Phaser.BlendModes.ADD);
+    sparks.lineStyle(isBoss ? 4 : 3, 0xe7f8ff, 1);
+    for (const [x1, y1, x2, y2] of [
+      [31, -20, 45, -30],
+      [36, 0, 52, 0],
+      [31, 20, 45, 30],
+    ]) {
+      sparks.beginPath();
+      sparks.moveTo(x1, y1);
+      sparks.lineTo(x2, y2);
+      sparks.strokePath();
+    }
+    root.add([halo, crest, sparks]);
+    root.setAlpha(0).setScale(isBoss ? 0.65 : 0.55);
+
+    this.tweens.add({
+      targets: root,
+      alpha: 1,
+      scale: isBoss ? 1.12 : 1,
+      duration: 75,
+      ease: "Back.easeOut",
+      onComplete: () =>
+        this.tweens.add({
+          targets: root,
+          alpha: 0,
+          scale: isBoss ? 1.3 : 1.18,
+          duration: isBoss ? 310 : 240,
+          ease: "Quad.easeOut",
+          onComplete: () => root.destroy(),
+        }),
+    });
+
+    const foe = this.orc;
+    if (foe && !this.orcDying) {
+      const x = foe.x;
+      this.tweens.add({ targets: foe, x: x + (isBoss ? 8 : 12), duration: 70, yoyo: true, ease: "Quad.easeOut" });
+    }
+    if (fullyBlocked) this.cameras.main.shake(isBoss ? 100 : 75, isBoss ? 0.003 : 0.002);
   }
 
   // ================= treasure chests (the dopamine blast) =================
@@ -2590,7 +2733,7 @@ class GameScene extends Phaser.Scene {
       this.anims.create({
         key: TILE_SHINE_ANIM,
         frames: this.anims.generateFrameNumbers(TILE_SHINE_KEY, { start: 0, end: TILE_SHINE_FRAMES - 1 }),
-        frameRate: 20,
+        frameRate: 8,
         repeat: -1,
       });
     }
@@ -2831,14 +2974,50 @@ const game = new Phaser.Game({
   pixelArt: true,
   // RESIZE: canvas fills the #game element (100vw x 100vh); the scene re-lays-out on resize
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
-  scene: [CampScene, GameScene], // boot into camp; DEPART starts the run, death returns
+  scene: [CampScene, GameScene, MenuScene], // boot into camp; DEPART starts the run, death returns; menu overlays either
 });
 
 // Mobile browsers resize the visible viewport when the toolbar shows/hides (and on
 // rotate) without always firing a plain "resize"; re-fit the canvas on those too.
+// Portrait is a hard pause: Safari cannot reliably lock an iPhone's orientation,
+// so the DOM rotate gate covers the canvas while the run stops advancing.
+let portraitPaused = false;
 const refit = () => game.scale.refresh();
-window.visualViewport?.addEventListener("resize", refit);
-window.addEventListener("orientationchange", () => setTimeout(refit, 120));
+const enforceLandscape = () => {
+  const portrait = window.innerHeight > window.innerWidth;
+  if (portrait && !portraitPaused) {
+    portraitPaused = true;
+    game.loop.sleep();
+  } else if (!portrait && portraitPaused) {
+    portraitPaused = false;
+    game.loop.wake();
+    refit();
+  }
+};
+window.visualViewport?.addEventListener("resize", () => {
+  refit();
+  enforceLandscape();
+});
+window.addEventListener("orientationchange", () =>
+  setTimeout(() => {
+    refit();
+    enforceLandscape();
+  }, 120),
+);
+
+// Installed web apps and supporting mobile browsers may grant a real lock after
+// user activation. Failure is expected on ordinary iPhone Safari and is harmless.
+const tryLandscapeLock = () => {
+  const standalone =
+    window.matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+  const orientation = screen.orientation as ScreenOrientation & {
+    lock?: (value: "landscape") => Promise<void>;
+  };
+  if (standalone && orientation?.lock) void orientation.lock("landscape").catch(() => undefined);
+};
+window.addEventListener("pointerdown", tryLandscapeLock, { once: true, passive: true });
+enforceLandscape();
 
 initHaptics(); // set up the iOS haptic fallback element
 
