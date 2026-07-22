@@ -181,14 +181,17 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     fight is **Malgrim's Infernal Shell Game**: phase `"arena"` stops scroll +
     strikes, the puzzle board retracts, burning portals rise (camp portal art,
     fire-tinted) and he hides among red-burning decoys. Tap the REAL one (cyan
-    staff glint) to crack one of **three wards** (the boss bar drains in
-    thirds); decoy taps / timeouts fire a fireball that a single **guard
-    charge** turns (shield play in the puzzle phase = mistakes forgiven).
-    Rounds escalate (`WARD_ROUNDS` in main.ts: 3→6→9 portals, faster windows,
-    ghost feints on the last ward). Third ward down → he staggers back into
-    the lane, exposed — one tap triggers the finishing dash-strike, then the
-    usual spoils (bounty, surge, hoard chest) and the board rises back.
-    Dev: `__mb.debugBoss()` rigs the next foe. Knobs: WARD_ROUNDS + run.ts.
+    staff glint) to crack his **three wards — two deals each, every ward its
+    own mechanic** (`ARENA_WARDS`): I FIND HIM (spot the glint), II TRACK HIM
+    (all figures cloak identical and SHUFFLE — follow him), III SURVIVE HIM
+    (feints + tappable firebolts to defuse midair). His cast is a visible
+    ember bar; hits in its red tail (`ARENA_CRIT_FRAC`) shatter the whole
+    ward at once. Decoy taps / timeouts fire a fireball that a single guard
+    charge turns (shield play = mistakes forgiven); flawless wards refund
+    +1 guard; he taunts between wards. Third ward down → he staggers back
+    into the lane, exposed — one tap triggers the finishing dash-strike, then
+    the usual spoils (bounty, surge, hoard chest) and the board rises back.
+    Dev: `__mb.debugBoss()` rigs the next foe. Knobs: ARENA_WARDS + run.ts.
   - **Ambient soundscape + weather (SHIPPED):** a looping forest bed under
     every run (`amb_day`), with a `RAIN_CHANCE` roll per run that swaps in
     `amb_rain` plus rain streaks + an overcast wash over the lane. Camp adds

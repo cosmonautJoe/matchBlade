@@ -232,14 +232,22 @@ pack, CC0, 150×150, flipped to face left).
   `"arena"`: scroll stops, strikes stop, the puzzle board retracts and burning
   portals rise in its place). He hides among fiery decoys; **tap the REAL one**
   (brief **cyan staff glint**; decoys burn red) before he casts. A correct tap
-  = the hero lunges and **cracks one of three wards** (the boss bar drains in
-  thirds); a decoy tap or timeout fires a **fireball** — one **guard charge**
-  turns it (the puzzle phase's shields matter here), otherwise the hero slides
-  toward the skull. Rounds escalate per `WARD_ROUNDS` (main.ts): 3 portals /
-  no decoys / 2400ms → 6 / 3 / 1800ms → 9 / 5 / 1450ms with two ghost feints.
-  After the third ward: he staggers back into the lane, exposed — **one tap
-  delivers the finishing dash-strike**. Misses re-deal the same ward; the only
-  clock is your own pressure. Hearth Charm revive resumes the game mid-arena.
+  = the hero lunges and cracks his wards; a decoy tap or timeout fires a
+  **fireball** — one **guard charge** turns it (the puzzle phase's shields
+  matter here), otherwise the hero slides toward the skull.
+  **Three wards, TWO deals each, and every ward is its own game**
+  (`ARENA_WARDS` in main.ts): **I FIND HIM** (spot the glint among red decoys),
+  **II TRACK HIM** (he glints, then everyone **cloaks identical and shuffles**
+  — follow him through the swaps), **III SURVIVE HIM** (ghost feints, short
+  windows, and **tappable firebolts** arcing at the hero mid-deal — defuse
+  them midair for +10 or eat a strike). His cast is a **visible ember bar**
+  whose last 32% burns red (`ARENA_CRIT_FRAC=0.68`): a hit in the red
+  **shatters the whole ward at once** — the daring end the fight early. The
+  boss bar is the ward meter (drains per deal of `ARENA_TOTAL_DEALS`); a
+  **flawless ward refunds +1 guard charge** ("your poise holds"), and Malgrim
+  taunts between wards. After the third ward: he staggers back into the lane,
+  exposed — **one tap delivers the finishing dash-strike**. Misses re-deal;
+  the only clock is your own pressure. Hearth revive resumes mid-arena.
 - **Death — the spoils:** flash + camera quake + a **coin/spark eruption**,
   `"CINDERMAGE FELLED!"`, **`BOSS_BOUNTY = 8` treasure**, +400 score, an extra
   **`BOSS_SURGE = 0.2`** pressure relief on top of the kill surge, and a

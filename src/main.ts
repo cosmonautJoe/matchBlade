@@ -148,12 +148,46 @@ const BOSS_NAME = "MALGRIM THE CINDERMAGE";
 // Malgrim hides among decoys. Tap the REAL one (cyan staff glint) before he
 // casts; each correct hit cracks one of his three wards. Decoy taps / timeouts
 // fire a fireball — guard charges from the puzzle phase absorb them.
-const WARD_ROUNDS = [
-  { portals: 3, decoys: 0, windowMs: 2400, hops: 0 }, // one obvious target
-  { portals: 6, decoys: 3, windowMs: 1800, hops: 0 }, // red decoys join the game
-  { portals: 9, decoys: 5, windowMs: 1450, hops: 2 }, // he feints twice before settling
-] as const;
+// Three wards, TWO deals each, and every ward is its own mechanic:
+//   I  FIND HIM    — spot the cyan glint among red decoys (reaction)
+//   II TRACK HIM   — he glints, then everyone cloaks and SHUFFLES (tracking)
+//   III SURVIVE HIM — feints + firebolts you tap out of the air (multitask)
+// His cast is a visible ember bar; a hit in its RED tail (ARENA_CRIT_FRAC)
+// shatters the whole ward at once — the daring end the fight early.
+type ArenaDeal = { portals: number; decoys: number; castMs: number; hops: number; swaps: number; mortars: number };
+const ARENA_WARDS: { title: string; sub: string; taunt: string; deals: ArenaDeal[] }[] = [
+  {
+    title: "WARD I — FIND HIM",
+    sub: "the REAL Cindermage glints cyan — tap him before his cast fills",
+    taunt: "“Amusing, scout. Again!”",
+    deals: [
+      { portals: 4, decoys: 2, castMs: 2600, hops: 0, swaps: 0, mortars: 0 },
+      { portals: 5, decoys: 3, castMs: 2200, hops: 0, swaps: 0, mortars: 0 },
+    ],
+  },
+  {
+    title: "WARD II — TRACK HIM",
+    sub: "watch the glint… then follow him through the shuffle",
+    taunt: "“Your eyes betray you!”",
+    deals: [
+      { portals: 6, decoys: 3, castMs: 2100, hops: 0, swaps: 2, mortars: 0 },
+      { portals: 6, decoys: 4, castMs: 1800, hops: 0, swaps: 3, mortars: 0 },
+    ],
+  },
+  {
+    title: "WARD III — SURVIVE HIM",
+    sub: "tap his firebolts out of the air — and still find the truth",
+    taunt: "“BURN WITH ME!”",
+    deals: [
+      { portals: 9, decoys: 5, castMs: 2000, hops: 2, swaps: 0, mortars: 1 },
+      { portals: 9, decoys: 6, castMs: 1700, hops: 1, swaps: 2, mortars: 2 },
+    ],
+  },
+];
+const ARENA_TOTAL_DEALS = ARENA_WARDS.reduce((s, w) => s + w.deals.length, 0);
+const ARENA_CRIT_FRAC = 0.68; // cast fraction where the bar burns red — hits here break the whole ward
 const ARENA_FIREBALL_MS = 420; // his punishment bolt's flight time
+const ARENA_MORTAR_MS = 1650; // ward III's tappable firebolts — slow enough to shoot down
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
 const HP_W = 70;
@@ -284,11 +318,14 @@ class GameScene extends Phaser.Scene {
   private defenseTaught = false; // first resisted/weak hit per foe shows a callout
   private defBadge!: Phaser.GameObjects.Text; // 🛡⚔ / 🛡🪄 beside the HP bar
 
-  // Malgrim's Infernal Shell Game (boss arena — see WARD_ROUNDS)
+  // Malgrim's Infernal Shell Game (boss arena — see ARENA_WARDS)
   private arenaActive = false;
   private arenaGen = 0; // generation counter: stale arena timers bail out
   private arenaObjs: Phaser.GameObjects.GameObject[] = []; // live portal/figure props
-  private wardsLeft = 3;
+  private arenaWard = 0; // which ward we're breaking (0..2)
+  private arenaDealIdx = 0; // which deal within the ward
+  private arenaDealsDone = 0; // drives the boss bar drain (out of ARENA_TOTAL_DEALS)
+  private arenaWardMissed = false; // a flawless ward refunds a guard charge
   private orcGap = ENGAGE_GAP; // engage distance for the current foe (wider for the boss)
   private orcDying = false;
   private bossBar: { root: Phaser.GameObjects.Container; fill: Phaser.GameObjects.Rectangle } | null = null;
@@ -449,7 +486,10 @@ class GameScene extends Phaser.Scene {
     this.arenaActive = false;
     this.arenaGen++;
     this.arenaObjs = [];
-    this.wardsLeft = 3;
+    this.arenaWard = 0;
+    this.arenaDealIdx = 0;
+    this.arenaDealsDone = 0;
+    this.arenaWardMissed = false;
     this.tip = null;
     this.tipFor = -1;
     this.holdTimer = null;
@@ -1844,7 +1884,10 @@ class GameScene extends Phaser.Scene {
   }
 
   private clearArenaObjs() {
-    for (const o of this.arenaObjs) o.destroy();
+    for (const o of this.arenaObjs) {
+      this.tweens.killTweensOf(o); // killed tweens never fire onComplete — no phantom hits
+      o.destroy();
+    }
     this.arenaObjs = [];
   }
 
@@ -1863,13 +1906,13 @@ class GameScene extends Phaser.Scene {
     this.arenaActive = true;
     const gen = ++this.arenaGen;
     this.phase = "arena"; // stationary arena: no scroll, no strikes, no world pan
-    this.wardsLeft = 3;
+    this.arenaWard = 0;
+    this.arenaDealIdx = 0;
+    this.arenaDealsDone = 0;
+    this.arenaWardMissed = false;
     this.orc?.play("boss-idle");
     this.hero.play("hero-idle", true);
     this.notice("MALGRIM'S INFERNAL SHELL GAME", "#ff9d6a");
-    this.time.delayedCall(1000, () => {
-      if (gen === this.arenaGen) this.notice("tap the REAL Cindermage — watch for the cyan glint", "#ffd7a0");
-    });
 
     // he quits the lane in a burst of embers — the game moves to the portals
     this.time.delayedCall(600, () => {
@@ -1888,14 +1931,29 @@ class GameScene extends Phaser.Scene {
       await this.hideBoard();
       await this.arenaWait(420);
       if (gen !== this.arenaGen || this.run.over) return;
-      this.playArenaRound(gen);
+      this.showWardIntro(gen);
     })();
   }
 
-  /** One deal of the shell game — retried on a miss, advanced on a hit. */
-  private playArenaRound(gen: number) {
+  /** Announce the ward's rules (each ward is a new game), then deal. */
+  private showWardIntro(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-    const cfg = WARD_ROUNDS[3 - this.wardsLeft];
+    const w = ARENA_WARDS[this.arenaWard];
+    this.notice(w.title, "#ffd24a");
+    this.time.delayedCall(850, () => {
+      if (gen !== this.arenaGen) return;
+      this.notice(w.sub, "#ffd7a0");
+    });
+    this.time.delayedCall(1650, () => {
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+      this.playArenaDeal(gen);
+    });
+  }
+
+  /** One deal of the shell game — retried on a miss, advanced on a hit. */
+  private playArenaDeal(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    const cfg = ARENA_WARDS[this.arenaWard].deals[this.arenaDealIdx];
     const spots = this.arenaPortalSpots(cfg.portals);
     const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
       this.arenaObjs.push(o);
@@ -1916,7 +1974,7 @@ class GameScene extends Phaser.Scene {
       await this.arenaWait(520);
       if (gen !== this.arenaGen || this.run.over) return;
 
-      // final-ward feints: ghostly hops before he settles (tapping ghosts does nothing)
+      // feints: ghostly hops before he settles (tapping ghosts does nothing)
       for (let h = 0; h < cfg.hops; h++) {
         const at = spots[(Math.random() * spots.length) | 0];
         const ghost = reg(
@@ -1942,18 +2000,24 @@ class GameScene extends Phaser.Scene {
       const order = Phaser.Utils.Array.Shuffle(spots.map((_, i) => i));
       const realIdx = order[0];
       const decoyIdxs = order.slice(1, 1 + cfg.decoys);
+      type Figure = { fig: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image | null; isReal: boolean };
+      const figures: Figure[] = [];
+      let stage: "watch" | "live" = "watch";
       let settled = false;
+      let castTween: Phaser.Tweens.Tween | null = null;
       const settle = () => {
         if (settled || gen !== this.arenaGen) return false;
         settled = true;
-        timeout.remove(false);
+        castTween?.stop();
         return true;
       };
+      const realOf = () => figures.find((f) => f.isReal)!;
 
-      const mkFigure = (i: number, decoy: boolean) => {
+      const mkFigure = (i: number, isReal: boolean) => {
         const s = spots[i];
-        if (decoy) {
-          const glow = reg(
+        let glow: Phaser.GameObjects.Image | null = null;
+        if (!isReal) {
+          glow = reg(
             this.inBox(this.add.image(s.x, s.y - 14, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff4030).setScale(1.7).setAlpha(0.3).setDepth(40)),
           );
           this.tweens.add({ targets: glow, alpha: 0.14, duration: 420, yoyo: true, repeat: -1 });
@@ -1969,40 +2033,169 @@ class GameScene extends Phaser.Scene {
               .play("boss-idle"),
           ),
         );
-        if (decoy) fig.setTint(0xff6a55); // decoys burn red
+        if (!isReal) fig.setTint(0xff6a55); // decoys burn red (until the cloak)
         this.tweens.add({ targets: fig, scale: 0.85, duration: 200, ease: "Back.easeOut" });
+        const entry: Figure = { fig, glow, isReal };
         fig.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-          if (decoy) this.arenaFail(gen, settle, "decoy", spots[realIdx], s);
-          else this.arenaHit(gen, settle, fig, s);
+          if (stage !== "live") return; // no taps while he's still dealing
+          if (entry.isReal) this.arenaHit(gen, settle, fig, castFrac());
+          else this.arenaFail(gen, settle, "decoy", realOf().fig, fig);
         });
-        return fig;
+        figures.push(entry);
+        return entry;
       };
 
-      for (const d of decoyIdxs) mkFigure(d, true);
-      const realFig = mkFigure(realIdx, false);
+      for (const d of decoyIdxs) mkFigure(d, false);
+      const real = mkFigure(realIdx, true);
       this.sfx(this.pick(["squish1", "squish2"]), 0.2, 1.3);
 
-      // the tell: a brief cyan glint off the true staff
-      this.time.delayedCall(240, () => {
+      // the tell: a cyan glint off the true staff (longer when he's about to shuffle)
+      await this.arenaWait(240);
+      if (gen !== this.arenaGen || settled) return;
+      const glint = reg(
+        this.inBox(
+          this.add.image(real.fig.x + 10, real.fig.y - 58, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0x8ff4ff).setScale(0.6).setAlpha(0).setDepth(43),
+        ),
+      );
+      this.tweens.add({ targets: glint, alpha: 1, scale: 1.6, duration: 130, yoyo: true, repeat: cfg.swaps > 0 ? 4 : 2, onComplete: () => glint.destroy() });
+      this.sfx("pickup", 0.3, 1.5);
+
+      // WARD II+: everyone cloaks to the same flame, then the shuffle — TRACK him
+      if (cfg.swaps > 0) {
+        await this.arenaWait(760); // let the glint be seen
         if (gen !== this.arenaGen || settled) return;
-        const glint = reg(
-          this.inBox(
-            this.add.image(realFig.x + 10, realFig.y - 58, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0x8ff4ff).setScale(0.6).setAlpha(0).setDepth(43),
-          ),
-        );
-        this.tweens.add({ targets: glint, alpha: 1, scale: 1.6, duration: 130, yoyo: true, repeat: 2, onComplete: () => glint.destroy() });
-        this.sfx("pickup", 0.3, 1.5);
+        for (const f of figures) {
+          f.fig.setTint(0xb06a48); // identical cloaks — colour tells you nothing now
+          f.glow?.destroy();
+          f.glow = null;
+        }
+        this.sfx("spell", 0.35, 0.9);
+        for (let sw = 0; sw < cfg.swaps; sw++) {
+          const a = figures[(Math.random() * figures.length) | 0];
+          let b = a;
+          while (b === a) b = figures[(Math.random() * figures.length) | 0];
+          const ax = a.fig.x, ay = a.fig.y, bx = b.fig.x, by = b.fig.y;
+          this.sfx("spell", 0.3, 1.35 + sw * 0.1);
+          // a squash-dip while the pair trade places (position and scale on separate tweens)
+          this.tweens.add({ targets: [a.fig, b.fig], scale: 0.68, duration: 180, yoyo: true, ease: "Sine.easeInOut" });
+          this.tweens.add({ targets: a.fig, x: bx, y: by, duration: 360, ease: "Sine.easeInOut" });
+          this.tweens.add({ targets: b.fig, x: ax, y: ay, duration: 360, ease: "Sine.easeInOut" });
+          await this.arenaWait(420);
+          if (gen !== this.arenaGen || settled) return;
+        }
+      }
+
+      // LIVE: his cast burns up the ember bar — the red tail is the crit gamble
+      stage = "live";
+      const barW = 320;
+      const bx0 = CXC - barW / 2;
+      const by0 = GRID_Y - 4;
+      reg(this.inBox(this.add.rectangle(CXC, by0, barW + 6, 16, 0x0a0b0f, 0.85).setDepth(44)));
+      reg(
+        this.inBox(
+          this.add
+            .rectangle(bx0 + barW * ARENA_CRIT_FRAC, by0, barW * (1 - ARENA_CRIT_FRAC), 12, 0x8a1f1f, 0.9)
+            .setOrigin(0, 0.5)
+            .setDepth(45),
+        ),
+      );
+      const castFill = reg(this.inBox(this.add.rectangle(bx0, by0, barW, 10, 0xffa040).setOrigin(0, 0.5).setScale(0, 1).setDepth(46)));
+      const castFrac = () => castFill.scaleX;
+      castTween = this.tweens.add({
+        targets: castFill,
+        scaleX: 1,
+        duration: cfg.castMs,
+        onComplete: () => this.arenaFail(gen, settle, "timeout", realOf().fig, realOf().fig),
       });
 
-      const timeout = this.time.delayedCall(cfg.windowMs, () => this.arenaFail(gen, settle, "timeout", spots[realIdx], spots[realIdx]));
+      // WARD III: firebolts arc up at the hero mid-deal — tap them down or eat them
+      for (let m = 0; m < cfg.mortars; m++) {
+        this.time.delayedCall(300 + m * Math.max(500, cfg.castMs * 0.4), () => {
+          if (gen !== this.arenaGen || settled) return;
+          this.launchArenaMortar(gen, spots[(Math.random() * spots.length) | 0]);
+        });
+      }
     })();
   }
 
-  /** Found him: lunge, crack a ward, and either re-deal faster or go for the kill. */
-  private arenaHit(gen: number, settle: () => boolean, fig: Phaser.GameObjects.Sprite, at: { x: number; y: number }) {
+  /** A tappable firebolt lobbed at the hero — defuse it midair or take the hit. */
+  private launchArenaMortar(gen: number, from: { x: number; y: number }) {
+    const bolt = this.inBox(
+      this.add.image(from.x, from.y - 20, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(0xffb050).setScale(1.15).setDepth(47),
+    );
+    this.arenaObjs.push(bolt);
+    bolt.setInteractive(new Phaser.Geom.Circle(14, 14, 44), Phaser.Geom.Circle.Contains); // generous tap target
+    this.tweens.add({ targets: bolt, angle: 360, duration: 900, repeat: -1 });
+    this.sfx("fireball1", 0.3, 1.3);
+    let dead = false;
+    bolt.once("pointerdown", () => {
+      if (dead || gen !== this.arenaGen) return;
+      dead = true;
+      this.tweens.killTweensOf(bolt);
+      const burst = this.inBox(
+        this.add
+          .particles(bolt.x, bolt.y, "spark", {
+            speed: { min: 70, max: 220 }, lifespan: { min: 180, max: 420 },
+            scale: { start: 1.0, end: 0 }, blendMode: "ADD", tint: 0xbfefff, emitting: false,
+          })
+          .setDepth(47),
+      );
+      burst.explode(14);
+      this.time.delayedCall(600, () => burst.destroy());
+      this.sfx("hit2", 0.45, 1.2);
+      this.floatScore(bolt.x, bolt.y - 20, 10, { size: 26 });
+      buzz(12);
+      bolt.destroy();
+    });
+    this.tweens.add({
+      targets: bolt,
+      x: this.hero.x + 6,
+      y: GROUND_Y - 40,
+      duration: ARENA_MORTAR_MS,
+      ease: "Sine.easeInOut",
+      onComplete: () => {
+        if (dead || gen !== this.arenaGen || !bolt.scene) return; // cleared rounds spare the hero
+        dead = true;
+        bolt.destroy();
+        this.arenaStrikeHero(); // it lands — a guard charge turns it, or ground is lost
+      },
+    });
+  }
+
+  /** One incoming arena hit on the hero: guard turns it, otherwise the skull creeps. */
+  private arenaStrikeHero() {
+    const hadGuard = this.run.block > 0;
+    const net = enemyStrike(this.run);
+    this.refreshHud();
+    if (hadGuard && net <= 0) {
+      this.time.delayedCall(60, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.5));
+      this.showBlockImpact(true, true);
+    } else {
+      this.cameras.main.shake(260, 0.009);
+      this.hero.setTint(0xffa060);
+      this.time.delayedCall(200, () => this.hero.clearTint());
+      buzz(24);
+    }
+  }
+
+  /** The boss bar is the ward meter — drain it to the current deals-done mark. */
+  private drainBossBar() {
+    if (!this.bossBar) return;
+    this.tweens.killTweensOf(this.bossBar.fill);
+    this.tweens.add({
+      targets: this.bossBar.fill,
+      scaleX: Math.max(0, 1 - this.arenaDealsDone / ARENA_TOTAL_DEALS),
+      duration: 260,
+      ease: "Quad.easeOut",
+    });
+  }
+
+  /** Found him: lunge, land the blow — a red-zone hit shatters the whole ward. */
+  private arenaHit(gen: number, settle: () => boolean, fig: Phaser.GameObjects.Sprite, castFrac: number) {
     if (!settle()) return;
+    const crit = castFrac >= ARENA_CRIT_FRAC; // the daring strike, mid-cast
     this.sfx("hit3", 0.55);
-    buzz(20);
+    buzz(crit ? 30 : 20);
     fig.setTintFill(0xffffff);
     this.time.delayedCall(90, () => fig.clearTint());
 
@@ -2013,54 +2206,108 @@ class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: this.hero, x: this.hero.x + 26, duration: 140, yoyo: true, ease: "Quad.easeOut" });
     const slash = this.inBox(
       this.add
-        .particles(at.x, at.y - 20, "spark", {
+        .particles(fig.x, fig.y - 20, "spark", {
           speed: { min: 120, max: 320 }, lifespan: { min: 200, max: 480 },
-          scale: { start: 1.3, end: 0 }, blendMode: "ADD", tint: 0xbfefff, emitting: false,
+          scale: { start: crit ? 1.8 : 1.3, end: 0 }, blendMode: "ADD", tint: crit ? 0xfff2b0 : 0xbfefff, emitting: false,
         })
         .setDepth(44),
     );
-    slash.explode(22);
+    slash.explode(crit ? 40 : 22);
     this.time.delayedCall(700, () => slash.destroy());
 
     this.time.delayedCall(300, () => {
       if (gen !== this.arenaGen) return;
       this.heroLockX = false;
-      this.wardsLeft--;
-      // the boss bar IS the ward meter — it shatters in thirds
-      if (this.bossBar) {
-        this.tweens.killTweensOf(this.bossBar.fill);
-        this.tweens.add({ targets: this.bossBar.fill, scaleX: this.wardsLeft / 3, duration: 260, ease: "Quad.easeOut" });
+      const ward = ARENA_WARDS[this.arenaWard];
+
+      if (crit) {
+        // struck him with the cast burning red — the ENTIRE ward gives way
+        this.arenaDealsDone += ward.deals.length - this.arenaDealIdx;
+        this.crackWard(gen, true);
+        return;
       }
-      this.cameras.main.shake(200, 0.007);
-      this.sfx(`combo${5 - this.wardsLeft}`, 0.55); // combo3/4/5 as the wards fall
-      this.notice(
-        this.wardsLeft === 2 ? "A WARD SHATTERS!" : this.wardsLeft === 1 ? "ANOTHER WARD BREAKS!" : "HIS LAST WARD FALLS!",
-        "#8ff4ff",
-      );
-      this.clearArenaObjs();
-      this.time.delayedCall(750, () => {
-        if (gen !== this.arenaGen || this.run.over) return;
-        if (this.wardsLeft > 0) this.playArenaRound(gen);
-        else this.arenaExecution(gen);
+
+      this.arenaDealsDone++;
+      this.arenaDealIdx++;
+      this.drainBossBar();
+      if (this.arenaDealIdx >= ward.deals.length) {
+        this.crackWard(gen, false);
+      } else {
+        this.cameras.main.shake(150, 0.005);
+        this.sfx("block3", 0.4, 1.2);
+        this.notice("STAGGERED — once more!", "#bfefff");
+        this.clearArenaObjs();
+        this.time.delayedCall(750, () => {
+          if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+          this.playArenaDeal(gen);
+        });
+      }
+    });
+  }
+
+  /** A ward gives out: fanfare, flawless refund, his taunt, then the next game. */
+  private crackWard(gen: number, whole: boolean) {
+    const flawless = !this.arenaWardMissed;
+    this.drainBossBar();
+    this.cameras.main.shake(whole ? 300 : 220, whole ? 0.01 : 0.007);
+    this.sfx(`combo${3 + this.arenaWard}`, 0.55); // combo3/4/5 as the wards fall
+    this.notice(
+      whole
+        ? "PERFECT — THE WARD SHATTERS WHOLE!"
+        : this.arenaWard === 0
+          ? "A WARD SHATTERS!"
+          : this.arenaWard === 1
+            ? "ANOTHER WARD BREAKS!"
+            : "HIS LAST WARD FALLS!",
+      whole ? "#ffd24a" : "#8ff4ff",
+    );
+    if (flawless) {
+      this.run.block += 1; // your poise holds — a guard charge comes back
+      this.refreshHud();
+      this.time.delayedCall(700, () => {
+        if (gen === this.arenaGen) this.floatGuard(this.hero.x + 24, GROUND_Y - 90, 1);
       });
+    }
+    const taunt = ARENA_WARDS[this.arenaWard].taunt;
+    this.clearArenaObjs();
+
+    this.arenaWard++;
+    this.arenaDealIdx = 0;
+    this.arenaWardMissed = false;
+    const done = this.arenaWard >= ARENA_WARDS.length;
+    if (!done)
+      this.time.delayedCall(950, () => {
+        if (gen === this.arenaGen && this.arenaActive) this.notice(taunt, "#ff9d6a");
+      });
+    this.time.delayedCall(done ? 800 : 1900, () => {
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+      if (done) this.arenaExecution(gen);
+      else this.showWardIntro(gen);
     });
   }
 
   /** A decoy, or too slow: the real Malgrim answers with fire. Guard absorbs it. */
-  private arenaFail(gen: number, settle: () => boolean, why: "decoy" | "timeout", realAt: { x: number; y: number }, from: { x: number; y: number }) {
+  private arenaFail(
+    gen: number,
+    settle: () => boolean,
+    why: "decoy" | "timeout",
+    realFig: Phaser.GameObjects.Sprite,
+    tapped: Phaser.GameObjects.Sprite,
+  ) {
     if (!settle()) return;
+    this.arenaWardMissed = true; // the flawless refund is off the table this ward
     if (why === "decoy") {
       this.notice("a decoy!", "#ff8a6a");
-      const puff = this.inBox(this.add.image(from.x, from.y - 16, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff5030).setScale(1).setDepth(44));
+      const puff = this.inBox(this.add.image(tapped.x, tapped.y - 16, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff5030).setScale(1).setDepth(44));
       this.tweens.add({ targets: puff, scale: 2.6, alpha: 0, duration: 380, onComplete: () => puff.destroy() });
       this.sfx("fireball1", 0.35, 0.8);
     } else {
       this.notice("too slow — he casts!", "#ff8a6a");
     }
 
-    // his punishment bolt streaks from the true portal at the hero
+    // his punishment bolt streaks from wherever he truly stands
     const bolt = this.inBox(
-      this.add.image(realAt.x, realAt.y - 20, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff7733).setScale(1.5).setDepth(46),
+      this.add.image(realFig.x, realFig.y - 20, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff7733).setScale(1.5).setDepth(46),
     );
     this.sfx(this.pick(["fireball2", "fireball3"]), 0.5);
     this.tweens.add({
@@ -2072,22 +2319,11 @@ class GameScene extends Phaser.Scene {
       onComplete: () => {
         bolt.destroy();
         if (gen !== this.arenaGen) return;
-        const hadGuard = this.run.block > 0;
-        const net = enemyStrike(this.run); // one guard charge turns it; else the skull creeps closer
-        this.refreshHud();
-        if (hadGuard && net <= 0) {
-          this.time.delayedCall(60, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.5));
-          this.showBlockImpact(true, true);
-        } else {
-          this.cameras.main.shake(260, 0.009);
-          this.hero.setTint(0xffa060);
-          this.time.delayedCall(200, () => this.hero.clearTint());
-          buzz(24);
-        }
+        this.arenaStrikeHero();
         this.clearArenaObjs();
         this.time.delayedCall(800, () => {
           if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-          this.playArenaRound(gen); // same ward, fresh deal
+          this.playArenaDeal(gen); // same deal, fresh shuffle
         });
       },
     });
