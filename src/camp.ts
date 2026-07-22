@@ -107,9 +107,9 @@ const PROPS: Prop[] = [
   // backdrop
   { key: "tree2", x: -485, y: 3, s: 1.35, depth: 1, flip: true },
   { key: "birch1", x: 308, y: 7, s: 1.5, depth: 2 },
-  { key: "clothesline", x: -94, y: 2, s: 1.35, depth: 2 },
+  { key: "clothesline", x: -337, y: 1, s: 1.35, depth: 2 },
   // homestead
-  { key: "tarp_tent", x: -297, y: 1, s: 2.0, depth: 5 },
+  { key: "tarp_tent", x: -86, y: 2, s: 2.0, depth: 5 },
   { key: "table_apples", x: -434, y: 4, s: 1.5, depth: 5 },
   { key: "barrel", x: -199, y: 1, s: 1.5, depth: 5 },
   { key: "rocks_med", x: -538, y: 2, s: 1.4, depth: 5 },
@@ -121,13 +121,16 @@ const PROPS: Prop[] = [
   // front dressing
   { key: "bush_small", x: 45, y: 0, s: 1.4, depth: 8 },
   { key: "rocks_grass", x: 62, y: 1, s: 1.4, depth: 8 },
-  { key: "rocks_small1", x: -148, y: 1, s: 1.2, depth: 8 },
-  { key: "rocks_small2", x: 25, y: 1, s: 1.2, depth: 8 },
+  { key: "rocks_small1", x: -354, y: 3, s: 1.2, depth: 8 },
+  { key: "rocks_small2", x: 27, y: 3, s: 1.2, depth: 8 },
   { key: "tuft_tiny", x: -203, y: 3, s: 1.5, depth: 8 },
   { key: "tuft_tiny", x: 57, y: 0, s: 1.4, depth: 8 },
   { key: "tall_grass", x: 284, y: 5, s: 1.5, depth: 8, frame: 0 },
   { key: "tall_grass", x: 305, y: 5, s: 1.4, depth: 8, frame: 1 },
 ];
+
+// Wren steps out of the tarp tent when hired — follow it wherever the layout puts it.
+const TENT_X = PROPS.find((p) => p.key === "tarp_tent")?.x ?? -86;
 
 export class CampScene extends Phaser.Scene {
   private parallax: { sprite: Phaser.GameObjects.TileSprite; drift: number }[] = [];
@@ -1012,14 +1015,14 @@ export class CampScene extends Phaser.Scene {
     this.sfx("pouch", 0.6);
     for (const m of this.tentMark) m.destroy(); // the "?" is answered
     this.tentMark = [];
-    // Wren steps out of the tent and walks to her forge
-    const smith = this.add.sprite(-297, 2, "smith").setOrigin(0.5, 0.734).setScale(2.1).setDepth(6).play("smith-walk");
+    // Wren steps out of the tent and walks to her forge (pace scales with the trip)
+    const smith = this.add.sprite(TENT_X, 2, "smith").setOrigin(0.5, 0.734).setScale(2.1).setDepth(6).play("smith-walk");
     this.propBox.add(smith);
     this.smith = smith;
     this.tweens.add({
       targets: smith,
       x: 85,
-      duration: 2600,
+      duration: Math.max(900, Math.abs(85 - TENT_X) * 7),
       ease: "Sine.easeInOut",
       onComplete: () => {
         smith.play("smith-idle");
