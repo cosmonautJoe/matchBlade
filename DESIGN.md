@@ -91,7 +91,7 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
   |-------------|-----------|--------------------------------------------|
   | Blacksmith  | ore       | sword damage (`SWORD_MAIN` / `SWORD_EXTRA`) |
   | Carpenter   | wood      | shield block (`BLOCK_PER_SHIELD`)          |
-  | Hedge-witch | wood+ore  | spell power (`STAFF_DMG`)                  |
+  | Hedge-witch | wood+ore  | spell power (`SPELL_DMG` tiers)            |
   | Cook        | wood      | steadier pace (scroll rate / surge per kill) |
 
 - **Camp scene** between runs: wagons in a line, campfire, tap a recruit to
@@ -213,10 +213,19 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
   `ROAD ▸` forecast). Pure hooks live in run.ts (`whetstone`/`surgeMult`/
   `resMult`, shared `dealDamage()`); the strike timer self-schedules so
   Scout's Spurs can stretch the cadence. Dev: `__mb.debugItem(id?)`.
+- **Spell projectiles + enemy defenses (SHIPPED):** staff matches are their own
+  act — the hero casts and a fireball flies (Firebolt 3 / Fireball 4 /
+  Pyroclasm 5+, which also sets the foe burning); damage, hurt, and even the
+  death land ON IMPACT. Foes carry a defense school: **iron hide** (dark slime
+  — swords x0.5, spells x1.5) or **spell ward** (blue slime + Malgrim — spells
+  x0.5, swords x1.5), badge 🛡⚔/🛡🪄 by the HP bar, taught in-play by gray
+  "resisted" / gold "WEAK!" numbers and a first-hit callout. Variant + defense
+  now roll in run.ts makeEnemy (scene just dresses it); Stormcall respects
+  wards via castBlast(). This replaces the old sword-vs-ground/staff-vs-flying
+  plan. Tuning: SPELL_DMG {3:9,4:14,5:20}, RESIST_MULT 0.5, WEAK_MULT 1.5.
 - `npm install` then `npm run dev` -> the harness picks a free port (see
   `vite.config.ts` / `.claude/launch.json` `autoPort`).
-- **Still placeholder / TODO:** weapon-vs-enemy-type gating (sword vs ground,
-  staff vs flying), cages/rescues, more recruits at camp.
+- **Still placeholder / TODO:** cages/rescues, more recruits at camp.
 
 ## 9. Suggested build order
 

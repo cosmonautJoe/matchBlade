@@ -19,8 +19,20 @@ export const TREASURE = 4;
 export const WOOD = 5;
 export const ORE = 6;
 
+/** Which slime sheet the scene dresses the foe in (boss = the Cindermage). */
+export type EnemyVariant = "green" | "blue" | "dark" | "boss";
+/**
+ * Defenses — the reason tile CHOICE matters (DESIGN: physical vs spell):
+ *   hide — iron hide: swords glance off (x0.5), spells burn through (x1.5)
+ *   ward — spell ward: magic fizzles (x0.5), steel bites deep (x1.5)
+ *   none — plain flesh, everything lands true
+ */
+export type Defense = "none" | "hide" | "ward";
+
 export interface Enemy {
   kind: "orc" | "boss";
+  variant: EnemyVariant;
+  defense: Defense;
   hp: number;
   maxHp: number;
   power: number; // pressure a full strike adds, before block
@@ -53,7 +65,14 @@ export interface RunState {
 // is one solid hit; each extra sword (up to 2) tacks on a small follow-up hit.
 export const SWORD_MAIN = 5; // first swing — a 3-match
 export const SWORD_EXTRA = 2; // each extra sword beyond 3 (max 2 follow-ups)
-export const STAFF_DMG = 3; // magic, folded into the first swing
+// Staff matches are their own act now: the hero CASTS, a fireball flies.
+// Firebolt (3) / Fireball (4) / Pyroclasm (5+, also sets the foe burning).
+export const SPELL_DMG: Record<3 | 4 | 5, number> = { 3: 9, 4: 14, 5: 20 };
+export const SPELL_EXTRA = 3; // each staff tile beyond 5 (double runs in one cascade)
+export const SPELL_BURN_TIER = 5; // a Pyroclasm leaves the foe burning (scene applies it)
+// Defense multipliers — resisted hits still land SOMETHING (min 1 per swing).
+export const RESIST_MULT = 0.5;
+export const WEAK_MULT = 1.5;
 export const BLOCK_PER_SHIELD = 0.05; // pressure absorbed per shield tile
 export const ADVANCE_PER_KILL = 0.3; // pressure removed (hero surge) per kill
 // Damage per match now runs 5 / 7 / 9 (for 3 / 4 / 5+ swords). Base HP sits ~one
@@ -73,10 +92,36 @@ export const BOSS_SCROLL_MULT = 0.5;
 export const BOSS_BOUNTY = 8; // treasure showered on the kill
 export const BOSS_SURGE = 0.2; // extra pressure relief on top of ADVANCE_PER_KILL
 
-export function makeEnemy(killed: number): Enemy {
+/** What the defense does to each damage school. */
+export function physMult(d: Defense): number {
+  return d === "hide" ? RESIST_MULT : d === "ward" ? WEAK_MULT : 1;
+}
+export function spellMult(d: Defense): number {
+  return d === "ward" ? RESIST_MULT : d === "hide" ? WEAK_MULT : 1;
+}
+
+const VARIANT_DEFENSE: Record<EnemyVariant, Defense> = {
+  green: "none", // plain flesh — the tutorial-friendly slime
+  blue: "ward", // arcane sheen: spells fizzle, steel bites deep
+  dark: "hide", // iron hide: swords glance off, spells burn through
+  boss: "ward", // the Cindermage's wards drink magic — bring a blade
+};
+
+export function makeEnemy(killed: number, rand: () => number = Math.random): Enemy {
   const boss = (killed + 1) % BOSS_EVERY === 0;
+  // deeper pools mirror the old scene-side variant roll: green early, the
+  // warded blue joins mid-run, the iron-hided dark slime rules the deeps
+  const pool: EnemyVariant[] = killed < 3 ? ["green"] : killed < 8 ? ["green", "blue"] : ["blue", "dark"];
+  const variant: EnemyVariant = boss ? "boss" : pool[(rand() * pool.length) | 0];
   const hp = Math.round((ENEMY_BASE_HP + killed * ENEMY_HP_GROWTH) * (boss ? BOSS_HP_MULT : 1));
-  return { kind: boss ? "boss" : "orc", hp, maxHp: hp, power: ENEMY_BASE_POWER + killed * ENEMY_POWER_GROWTH };
+  return {
+    kind: boss ? "boss" : "orc",
+    variant,
+    defense: VARIANT_DEFENSE[variant],
+    hp,
+    maxHp: hp,
+    power: ENEMY_BASE_POWER + killed * ENEMY_POWER_GROWTH,
+  };
 }
 
 export function newRun(swordBonus = 0): RunState {
@@ -95,9 +140,21 @@ export function newRun(swordBonus = 0): RunState {
   };
 }
 
+/** "resist" = the defense soaked it, "weak" = it tore through, "none" = plain. */
+export type DamageMod = "none" | "resist" | "weak";
+
+export interface SpellOutcome {
+  dmg: number; // post-defense damage the fireball lands
+  tier: 3 | 4 | 5; // Firebolt / Fireball / Pyroclasm — drives the projectile's size
+  mod: DamageMod;
+  burn: boolean; // Pyroclasm leaves the foe burning (scene applies the DoT)
+}
+
 export interface MatchOutcome {
-  damage: number;
-  hits: number[]; // per-swing damage, matching the combo animation (for floating numbers)
+  damage: number; // total (melee + spell), post-defense
+  hits: number[]; // per-SWING melee damage, matching the combo animation
+  swordMod: DamageMod; // how the foe's defense treated the steel
+  spell: SpellOutcome | null; // the cast, if staff tiles matched
   killed: boolean;
   gained: Resources;
   swords: number; // EFFECTIVE sword count driving the swing animation (whetstone can raise it)
@@ -150,23 +207,50 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   s.resources.keys += gained.keys;
   s.score += (gained.wood + gained.ore + gained.treasure + gained.keys) * 2;
 
-  // Wren's Whetstone: a charge turns any sword match into a full 5-match combo.
+  const defense: Defense = s.enemy?.defense ?? "none";
+
+  // ---- steel: Wren's Whetstone can turn any sword match into a full combo ----
   let swords = n(SWORD);
   if (swords >= 3 && s.whetstone > 0) {
     s.whetstone--;
     swords = Math.max(swords, 5);
   }
-  const hits = swordHits(swords);
-  if (hits.length && swords >= 3) hits[0] += s.swordBonus; // forged edge bites harder
-  const staffDmg = n(STAFF) * STAFF_DMG;
-  if (staffDmg > 0) {
-    if (hits.length) hits[0] += staffDmg;
-    else hits.push(staffDmg); // staff-only: one magic hit
+  const rawHits = swordHits(swords);
+  if (rawHits.length && swords >= 3) rawHits[0] += s.swordBonus; // forged edge bites harder
+  const pM = physMult(defense);
+  const hits = rawHits.map((h) => Math.max(1, Math.round(h * pM))); // even glancing blows land 1
+  const swordMod: DamageMod = !hits.length || pM === 1 ? "none" : pM < 1 ? "resist" : "weak";
+
+  // ---- the cast: staff tiles fire a Firebolt / Fireball / Pyroclasm ----------
+  const staves = n(STAFF);
+  let spell: SpellOutcome | null = null;
+  if (staves >= 3) {
+    const tier: 3 | 4 | 5 = staves >= 5 ? 5 : staves === 4 ? 4 : 3;
+    const raw = SPELL_DMG[tier] + Math.max(0, staves - 5) * SPELL_EXTRA;
+    const sM = spellMult(defense);
+    spell = {
+      dmg: Math.max(1, Math.round(raw * sM)),
+      tier,
+      mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak",
+      burn: tier >= SPELL_BURN_TIER,
+    };
   }
-  const damage = hits.reduce((a, b) => a + b, 0);
+
+  const damage = hits.reduce((a, b) => a + b, 0) + (spell?.dmg ?? 0);
   const killed = dealDamage(s, damage);
 
-  return { damage, hits, killed, gained, swords: n(SWORD) > 0 ? swords : 0 };
+  return { damage, hits, swordMod, spell, killed, gained, swords: n(SWORD) > 0 ? swords : 0 };
+}
+
+/**
+ * A raw spell blast from outside the board (Stormcall etc.) — runs through the
+ * foe's ward like any other magic. Returns what landed.
+ */
+export function castBlast(s: RunState, raw: number): { dmg: number; mod: DamageMod; killed: boolean } {
+  const sM = spellMult(s.enemy?.defense ?? "none");
+  const dmg = Math.max(1, Math.round(raw * sM));
+  const killed = dealDamage(s, dmg);
+  return { dmg, mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak", killed };
 }
 
 /** Spawn the next enemy — the scene calls this after the death animation. */

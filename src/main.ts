@@ -35,6 +35,9 @@ import {
 import {
   type RunState,
   type MatchOutcome,
+  type SpellOutcome,
+  type DamageMod,
+  type Defense,
   SWORD,
   STAFF,
   SHIELD,
@@ -45,6 +48,7 @@ import {
   newRun,
   applyMatches,
   dealDamage,
+  castBlast,
   enemyStrike,
   spawnNext,
   scroll,
@@ -145,6 +149,11 @@ const HP_W = 70;
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
 const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
 const STRIKE_MS = 4800; // enemy strike cadence
+// spell casts (staff matches): the bolt leaves the staff partway into the cast,
+// flies, and everything downstream (damage number, hurt, death) lands on impact
+const CAST_LEAD_MS = 320;
+const BOLT_FLIGHT_MS = 340;
+const SPELL_BURN_SECS = 6; // a Pyroclasm (5-match) leaves the foe burning this long
 const WALK_IN_MS = 850; // time for a new enemy to march into range
 const TILE_SFX = 17; // number of tile-match sound variations (tile1..tileN)
 const FACE = TILE - 8; // 84px tile face — sliced into chaotic shards on a match
@@ -255,6 +264,9 @@ class GameScene extends Phaser.Scene {
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
   private orcAnim = "orc"; // anim-key prefix of the current foe (orc / orc2 / orc3 / boss)
+  private orcDefense: Defense = "none"; // the current foe's armor school (badge + callouts)
+  private defenseTaught = false; // first resisted/weak hit per foe shows a callout
+  private defBadge!: Phaser.GameObjects.Text; // 🛡⚔ / 🛡🪄 beside the HP bar
   private orcGap = ENGAGE_GAP; // engage distance for the current foe (wider for the boss)
   private orcDying = false;
   private bossBar: { root: Phaser.GameObjects.Container; fill: Phaser.GameObjects.Rectangle } | null = null;
@@ -837,6 +849,8 @@ class GameScene extends Phaser.Scene {
 
     this.enemyHpBg = this.inBox(this.add.rectangle(0, 0, HP_W, 10, 0x000000, 0.55).setOrigin(0.5).setVisible(false));
     this.enemyHpBar = this.inBox(this.add.rectangle(0, 0, HP_W, 10, 0xe05a5a).setOrigin(0, 0.5).setVisible(false));
+    // defense badge: what this foe shrugs off (🛡⚔ iron hide / 🛡🪄 spell ward)
+    this.defBadge = this.inBox(this.add.text(0, 0, "", { fontFamily: EMOJI_FONT, fontSize: "13px" }).setOrigin(0, 0.5).setDepth(21).setVisible(false));
 
     // rain streaks fall in front of the actors, dying just above the ground band
     if (this.rainy) {
@@ -950,6 +964,7 @@ class GameScene extends Phaser.Scene {
       const barY = GROUND_Y - 56; // above the slime's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
       this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
+      this.defBadge.setPosition(this.orc.x + HP_W / 2 + 6, barY);
     }
 
     // sliced tile pieces: gravity + tumble, fading out as they fall away
@@ -1115,10 +1130,11 @@ class GameScene extends Phaser.Scene {
     this.orcGap = ENGAGE_GAP;
     this.hero.play("hero-walk", true); // stride forward while the foe approaches
 
-    // pick a slime variant: green early, blue joins mid-run, blue/dark deep (deeper foes look tougher)
-    const k = this.run.killed;
-    const pool = k < 3 ? ["orc"] : k < 8 ? ["orc", "orc2"] : ["orc2", "orc3"];
-    this.orcAnim = Phaser.Utils.Array.GetRandom(pool);
+    // the variant (and its defense) is rolled in run.ts makeEnemy — dress to match
+    const variant = this.run.enemy.variant;
+    this.orcAnim = variant === "green" ? "orc" : variant === "blue" ? "orc2" : "orc3";
+    this.orcDefense = this.run.enemy.defense;
+    this.defenseTaught = false;
     const idleTex = this.orcAnim === "orc" ? "slime-idle" : this.orcAnim === "orc2" ? "slime2-idle" : "slime3-idle";
 
     const orc = this.inBox(
@@ -1128,6 +1144,21 @@ class GameScene extends Phaser.Scene {
     this.sfx(this.pick(["squish1", "squish2"]), 0.32, 0.95 + Math.random() * 0.1); // one squelch as it bounces in
     this.enemyHpBg.setVisible(true);
     this.enemyHpBar.setVisible(true);
+    this.defBadge.setText(this.orcDefense === "hide" ? "🛡⚔" : this.orcDefense === "ward" ? "🛡🪄" : "").setVisible(this.orcDefense !== "none");
+    if (this.orcDefense !== "none") {
+      // a brief tinted shimmer as it bounces in — gray iron vs violet ward
+      const aura = this.inBox(
+        this.add
+          .image(ENTER_X, GROUND_Y - 26, "orb")
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(this.orcDefense === "hide" ? 0xb9c0cc : 0xa06bff)
+          .setScale(1.4)
+          .setAlpha(0.8)
+          .setDepth(22),
+      );
+      this.tweens.add({ targets: aura, x: this.heroXForPressure() + ENGAGE_GAP, duration: WALK_IN_MS, ease: "Sine.easeOut" });
+      this.tweens.add({ targets: aura, alpha: 0, scale: 2.4, duration: WALK_IN_MS + 200, onComplete: () => aura.destroy() });
+    }
     this.updateEnemyBar();
 
     this.tweens.add({
@@ -1152,6 +1183,9 @@ class GameScene extends Phaser.Scene {
     this.orcDying = false;
     this.phase = "advance";
     this.orcAnim = "boss";
+    this.orcDefense = this.run.enemy?.defense ?? "ward"; // his wards drink magic — bring a blade
+    this.defenseTaught = false;
+    this.defBadge.setVisible(false); // the boss bar carries his ward mark instead
     this.orcGap = BOSS_ENGAGE_GAP;
     this.hero.play("hero-walk", true);
     this.sfx("summon", 0.55, 0.9);
@@ -1214,7 +1248,7 @@ class GameScene extends Phaser.Scene {
     const BH = 13;
     const root = this.add.container(CXC, LANE_Y + 30).setDepth(31);
     const label = this.add
-      .text(0, -10, `☠ ${BOSS_NAME}`, { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffb3a0" })
+      .text(0, -10, `☠ ${BOSS_NAME} · 🛡🪄`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "13px", color: "#ffb3a0" })
       .setOrigin(0.5, 1);
     const bg = this.add.rectangle(0, 0, BW, BH, 0x000000, 0.6).setStrokeStyle(2, 0x8a2d2d);
     const fill = this.add.rectangle(-BW / 2 + 2, 0, BW - 4, BH - 4, 0xe05a5a).setOrigin(0, 0.5);
@@ -1274,7 +1308,6 @@ class GameScene extends Phaser.Scene {
   }
 
   private async resolve() {
-    let swordHits = 0; // sword-clearing steps so far this action (1st = combo, 2nd+ = spell)
     let depth = 0; // cascade depth — rising pitch on the match pop
     while (true) {
       const matches = findMatches(this.grid);
@@ -1337,9 +1370,7 @@ class GameScene extends Phaser.Scene {
         this.floatGuard(p.x, p.y, shields, 100);
       }
       this.tutorial?.onCascade(counts);
-      const swords = outcome.swords; // effective count — Wren's Whetstone can upgrade the swing
-      if (swords > 0) swordHits++;
-      this.onCombat(outcome, swords, swordHits);
+      this.onCombat(outcome, outcome.swords); // effective count — Wren's Whetstone can upgrade the swing
       // non-combat clear — a random tile-match sound (1 of TILE_SFX), slight pitch variation
       if (outcome.damage <= 0) this.sfx(`tile${1 + ((Math.random() * TILE_SFX) | 0)}`, 0.4, 0.97 + Math.random() * 0.06);
       this.refreshHud();
@@ -1348,48 +1379,171 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private onCombat(outcome: MatchOutcome, swords: number, swordHits: number) {
+  private onCombat(outcome: MatchOutcome, swords: number) {
     if (outcome.damage <= 0 || !this.orc || this.orcDying) return;
 
     this.updateEnemyBar();
 
-    // Attack scales with the sword match: 3 -> Attack, 4 -> +Attack 2, 5+ -> +Attack 3.
-    // A cascade's SECOND sword hit fires the Spell (blue sword) instead. Staff-only
-    // hits (swords === 0) just do a basic swing.
-    const combo =
-      swords > 0 && swordHits >= 2
-        ? ["hero-spell"]
-        : swords >= 5
-          ? ["hero-attack", "hero-attack2", "hero-attack3"]
-          : swords === 4
-            ? ["hero-attack", "hero-attack2"]
-            : ["hero-attack"];
-
-    this.playComboSfx(combo);
-    this.showHits(outcome.hits, combo);
+    // Melee: the swing combo scales with the sword match (3 / 4 / 5+).
+    // Spells are their own act now — the cast + fireball follow the swings.
+    const hasMelee = outcome.hits.length > 0;
+    const combo = !hasMelee
+      ? []
+      : swords >= 5
+        ? ["hero-attack", "hero-attack2", "hero-attack3"]
+        : swords === 4
+          ? ["hero-attack", "hero-attack2"]
+          : ["hero-attack"];
+    if (hasMelee) {
+      this.playComboSfx(combo);
+      this.showHits(outcome.hits, combo, outcome.swordMod);
+    }
+    const meleeMs = hasMelee ? this.comboMs(combo) : 0;
+    const spell = outcome.spell;
 
     if (outcome.killed) {
-      // Play the full combo IN PLACE (x frozen), then surge forward.
+      // Everything plays IN PLACE (x frozen); the surge waits for the last act.
       this.heroLockX = true;
-      this.playCombo(combo);
-      const ms = this.comboMs(combo);
-      this.time.delayedCall(ms, () => {
-        if (this.run.over) {
-          this.heroLockX = false;
-          return;
-        }
-        this.hero.play("hero-walk", true);
-        this.tweens.add({ targets: this.hero, x: this.heroXForPressure(), duration: 320, ease: "Quad.easeOut" });
-        // Release off a clock timer, not the tween, so x-control always returns to update().
-        this.time.delayedCall(320, () => (this.heroLockX = false));
-      });
-      this.killOrc(ms + 420); // hold the next foe until the combo + surge finishes
+      if (hasMelee) this.playCombo(combo);
+      if (spell) {
+        const impactAt = this.performCast(spell, true, meleeMs);
+        this.surgeAfterKill(impactAt + 120);
+      } else {
+        this.surgeAfterKill(meleeMs);
+        this.killOrc(meleeMs + 420); // hold the next foe until the combo + surge finishes
+      }
     } else {
-      this.playCombo(combo, this.heroBaseAnim()); // combo, then fall back to idle/run
+      if (hasMelee) {
+        this.playCombo(combo, spell ? undefined : this.heroBaseAnim()); // the cast takes over if one follows
+        this.orc.play(`${this.orcAnim}-hurt`).once("animationcomplete", () => {
+          if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-${this.phase === "fight" ? "idle" : "walk"}`);
+        });
+      }
+      if (spell) this.performCast(spell, false, meleeMs);
+    }
+  }
+
+  /** Hero swings done — stride back up to pressure position and hand x back to update(). */
+  private surgeAfterKill(atMs: number) {
+    this.time.delayedCall(atMs, () => {
+      if (this.run.over) {
+        this.heroLockX = false;
+        return;
+      }
+      this.hero.play("hero-walk", true);
+      this.tweens.add({ targets: this.hero, x: this.heroXForPressure(), duration: 320, ease: "Quad.easeOut" });
+      // Release off a clock timer, not the tween, so x-control always returns to update().
+      this.time.delayedCall(320, () => (this.heroLockX = false));
+    });
+  }
+
+  /**
+   * The cast: hero raises the staff, the bolt leaves partway in, and the hit
+   * (number, hurt, burn, even the death) lands ON IMPACT. Returns impact time.
+   * `killed` holds the corpse until the bolt arrives instead of dying early.
+   */
+  private performCast(spell: SpellOutcome, killed: boolean, delayMs: number, tint = 0xffa040): number {
+    if (killed) this.orcDying = true; // freeze hurt/strike reactions; killOrc re-affirms at impact
+    this.time.delayedCall(delayMs, () => {
+      this.playCombo(["hero-spell"], killed ? undefined : this.heroBaseAnim());
+      this.sfx("spell", 0.55);
+      this.time.delayedCall(CAST_LEAD_MS, () => this.launchBolt(spell, killed, tint));
+    });
+    return delayMs + CAST_LEAD_MS + BOLT_FLIGHT_MS;
+  }
+
+  /** The projectile itself — sized by tier, trailing sparks, bursting on arrival. */
+  private launchBolt(spell: SpellOutcome, killed: boolean, tint: number) {
+    const sx = this.hero.x + 28;
+    const sy = GROUND_Y - 44;
+    const tx = (this.orc?.x ?? sx + 220) - 6;
+    const ty = GROUND_Y - 34;
+    const scale = spell.tier >= 5 ? 2.0 : spell.tier === 4 ? 1.45 : 1.0;
+    const ball = this.inBox(this.add.image(sx, sy, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(tint).setScale(scale * 0.5).setDepth(46));
+    this.tweens.add({ targets: ball, scale, duration: 110 });
+    const trail = this.inBox(
+      this.add
+        .particles(0, 0, "spark", {
+          speed: { min: 10, max: 50 },
+          lifespan: { min: 130, max: 280 },
+          scale: { start: 0.8 * scale, end: 0 },
+          blendMode: "ADD",
+          tint,
+          frequency: 16,
+          follow: ball,
+        })
+        .setDepth(45),
+    );
+    this.sfx(spell.tier >= 5 ? "fireball3" : spell.tier === 4 ? "fireball2" : "fireball1", 0.5, 1.12);
+    this.tweens.add({
+      targets: ball,
+      x: tx,
+      y: ty,
+      duration: BOLT_FLIGHT_MS,
+      ease: "Sine.easeIn",
+      onComplete: () => {
+        trail.destroy();
+        ball.destroy();
+        this.spellImpact(spell, killed, tint, tx, ty);
+      },
+    });
+  }
+
+  /** Impact: burst + shake scaled by tier, the damage number, burn, hurt or death. */
+  private spellImpact(spell: SpellOutcome, killed: boolean, tint: number, x: number, y: number) {
+    const t = spell.tier;
+    const burst = this.inBox(
+      this.add
+        .particles(x, y, "spark", {
+          speed: { min: 80, max: t >= 5 ? 360 : t === 4 ? 260 : 190 },
+          lifespan: { min: 200, max: 520 },
+          scale: { start: t >= 5 ? 1.6 : 1.1, end: 0 },
+          blendMode: "ADD",
+          tint,
+          emitting: false,
+        })
+        .setDepth(46),
+    );
+    burst.explode(t >= 5 ? 40 : t === 4 ? 24 : 12);
+    this.time.delayedCall(700, () => burst.destroy());
+    this.cameras.main.shake(t >= 5 ? 260 : t === 4 ? 160 : 90, t >= 5 ? 0.009 : t === 4 ? 0.006 : 0.004);
+    buzz(t >= 5 ? 26 : 14);
+    if (t >= 5) {
+      const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xffd7a0, 0.28).setDepth(45));
+      this.tweens.add({ targets: flash, fillAlpha: 0, duration: 320, onComplete: () => flash.destroy() });
+    }
+    this.floatDamage(spell.dmg, t >= 4, spell.mod);
+    this.teachDefense(spell.mod);
+    if (spell.burn && this.run.enemy && !killed) {
+      this.burnLeft = Math.max(this.burnLeft, SPELL_BURN_SECS); // Pyroclasm sticks
+      this.burnAcc = 0;
+    }
+    if (killed) {
+      this.killOrc(520);
+    } else if (this.orc && !this.orcDying) {
+      this.orc.setTint(0xffa060);
+      this.time.delayedCall(180, () => this.orc?.clearTint());
       this.orc.play(`${this.orcAnim}-hurt`).once("animationcomplete", () => {
         if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-${this.phase === "fight" ? "idle" : "walk"}`);
       });
     }
+  }
+
+  /** First resisted/weak hit on a foe names the rule — the defenses teach themselves. */
+  private teachDefense(mod: DamageMod) {
+    if (mod === "none" || this.defenseTaught || !this.orc) return;
+    this.defenseTaught = true;
+    const label = mod === "weak" ? "WEAK!" : this.orcDefense === "hide" ? "IRON HIDE!" : "SPELL WARD!";
+    const color = mod === "weak" ? "#ffd24a" : this.orcDefense === "hide" ? "#c7ccd6" : "#c9a0ff";
+    const t = this.inBox(
+      this.add
+        .text(this.orc.x, GROUND_Y - 84, label, { fontFamily: "monospace", fontStyle: "bold", fontSize: "17px", color, stroke: "#0a0b0f", strokeThickness: 5 })
+        .setOrigin(0.5)
+        .setDepth(61)
+        .setScale(0.3),
+    );
+    this.tweens.add({ targets: t, scale: 1, duration: 180, ease: "Back.easeOut" });
+    this.tweens.add({ targets: t, y: t.y - 30, alpha: 0, duration: 900, delay: 500, ease: "Quad.easeIn", onComplete: () => t.destroy() });
   }
 
   /** Play a sequence of one-shot anims back-to-back (Phaser chain), optional trailing loop. */
@@ -1452,14 +1606,9 @@ class GameScene extends Phaser.Scene {
     if (this.hero.anims.currentAnim?.key !== "hero-walk") return;
     this.sfx(this.pick(["step1", "step2", "step3", "step4", "step5"]), 0.28, 0.95 + Math.random() * 0.1);
   }
-  /** Swings + impacts synced to the combo (or the spell's whoosh + impact). */
+  /** Swings + impacts synced to the melee combo (casts handle their own audio). */
   private playComboSfx(combo: string[]) {
     const HITS = ["hit1", "hit2", "hit3"];
-    if (combo[0] === "hero-spell") {
-      this.sfx("spell", 0.6);
-      this.time.delayedCall(140, () => this.sfx(this.pick(HITS), 0.5));
-      return;
-    }
     let t = 0;
     combo.forEach((key, i) => {
       this.time.delayedCall(t, () => this.sfx(["swing1", "swing2", "swing3"][Math.min(i, 2)], 0.28));
@@ -1479,6 +1628,7 @@ class GameScene extends Phaser.Scene {
     this.updateEnemyBar();
     this.enemyHpBg.setVisible(false);
     this.enemyHpBar.setVisible(false);
+    this.defBadge.setVisible(false);
     // NB: the hero's swing-then-surge is sequenced in onCombat so the attack plays.
 
     const dying = this.orc;
@@ -2140,10 +2290,16 @@ class GameScene extends Phaser.Scene {
 
   /** Stormcall Scroll: an instant spell blast through the normal combat pipeline. */
   private castStorm() {
-    const killed = dealDamage(this.run, STORMCALL_DMG);
-    const zero = { wood: 0, ore: 0, treasure: 0, keys: 0 };
-    // swords=1 + swordHits=2 routes onCombat into the hero-spell animation
-    this.onCombat({ damage: STORMCALL_DMG, hits: [STORMCALL_DMG], killed, gained: zero, swords: 1 }, 1, 2);
+    const res = castBlast(this.run, STORMCALL_DMG); // storm magic minds the ward like any spell
+    const spell: SpellOutcome = { dmg: res.dmg, tier: 4, mod: res.mod, burn: false };
+    this.updateEnemyBar();
+    if (res.killed) {
+      this.heroLockX = true;
+      const impactAt = this.performCast(spell, true, 0, 0x8fd0ff); // storm-blue bolt
+      this.surgeAfterKill(impactAt + 120);
+    } else {
+      this.performCast(spell, false, 0, 0x8fd0ff);
+    }
     this.notice("STORMCALL!", "#bfe6ff");
     this.refreshHud();
   }
@@ -2289,8 +2445,7 @@ class GameScene extends Phaser.Scene {
     await Promise.all(fades);
     const outcome = applyMatches(this.run, counts);
     this.tutorial?.onCascade(counts);
-    if (outcome.swords > 0) this.onCombat(outcome, outcome.swords, 1);
-    else if (outcome.damage > 0) this.onCombat(outcome, 0, 1); // staff-only blast still swings
+    if (outcome.damage > 0) this.onCombat(outcome, outcome.swords); // swings and/or a cast, as the blast decided
     this.refreshHud();
     await this.collapse();
     await this.resolve();
@@ -2466,16 +2621,15 @@ class GameScene extends Phaser.Scene {
   }
 
   /** Float one damage number per swing, timed so it pops as each hit lands. */
-  private showHits(hits: number[], combo: string[]) {
-    if (combo[0] === "hero-spell") {
-      const total = hits.reduce((a, b) => a + b, 0);
-      this.time.delayedCall(150, () => this.floatDamage(total, true));
-      return;
-    }
+  private showHits(hits: number[], combo: string[], mod: DamageMod) {
     let t = 0;
     combo.forEach((key, i) => {
       const dmg = hits[i] ?? 0;
-      if (dmg > 0) this.time.delayedCall(t + 100, () => this.floatDamage(dmg, i === 0));
+      if (dmg > 0)
+        this.time.delayedCall(t + 100, () => {
+          this.floatDamage(dmg, i === 0, mod);
+          if (i === 0) this.teachDefense(mod); // name the rule as the first blow lands
+        });
       t += this.anims.get(key)?.duration ?? 300;
     });
   }
@@ -2564,16 +2718,20 @@ class GameScene extends Phaser.Scene {
     });
   }
 
-  private floatDamage(n: number, big = true) {
+  private floatDamage(n: number, big = true, mod: DamageMod = "none") {
     const x = (this.orc?.x ?? SAFE_X) + (Math.random() * 26 - 13);
     const y = GROUND_Y - 64 - (big ? 0 : 8);
+    // the defense speaks through the number: gray = soaked, hot gold = tore through
+    const size = (big ? 28 : 18) + (mod === "weak" ? 6 : mod === "resist" ? -3 : 0);
+    const color = mod === "resist" ? "#aab2bd" : mod === "weak" ? "#ffd24a" : big ? "#fff2b0" : "#ffca66";
+    const stroke = mod === "resist" ? "#20242b" : "#38180c";
     const t = this.inBox(this.add
       .text(x, y, `-${n}`, {
         fontFamily: "monospace",
         fontStyle: "bold",
-        fontSize: big ? "28px" : "18px",
-        color: big ? "#fff2b0" : "#ffca66",
-        stroke: "#38180c",
+        fontSize: `${size}px`,
+        color,
+        stroke,
         strokeThickness: big ? 5 : 4,
       })
       .setOrigin(0.5)
@@ -2852,6 +3010,17 @@ class GameScene extends Phaser.Scene {
       gr.addColorStop(1, "rgba(242,193,78,0)");
       g.fillStyle = gr;
       g.fillRect(0, 0, 32, 32);
+    });
+    // spell bolt: near-white core so a runtime tint decides the school
+    // (fire orange for staff matches, storm blue for the Stormcall Scroll)
+    disc(28, "bolt", (g) => {
+      const gr = g.createRadialGradient(14, 14, 0, 14, 14, 14);
+      gr.addColorStop(0, "rgba(255,255,250,1)");
+      gr.addColorStop(0.4, "rgba(255,235,200,0.95)");
+      gr.addColorStop(0.75, "rgba(255,220,170,0.45)");
+      gr.addColorStop(1, "rgba(255,220,170,0)");
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 28, 28);
     });
   }
 

@@ -187,8 +187,14 @@ Applied in `applyMatches(run, counts)` per resolved cascade:
   per match: 5 / 7 / 9** for 3 / 4 / 5+.
 - **Forge bonus** (`swordBonus`, from `meta.swordLevel`) is added to the **first**
   swing — "the forged edge bites harder."
-- **Staff** (`STAFF_DMG = 3` each) folds into the first swing, or lands as one
-  standalone magic hit if no swords matched.
+- **Staff** matches CAST: a fireball flies from the hero and everything lands on
+  impact — **Firebolt (3) 9 dmg / Fireball (4) 14 / Pyroclasm (5+) 20** (+3 per
+  tile beyond 5; a Pyroclasm also sets the foe burning). `SPELL_DMG` in run.ts.
+- **Enemy defenses** (rolled with the variant in `makeEnemy`): **iron hide**
+  (dark slime — swords ×0.5, spells ×1.5) vs **spell ward** (blue slime and
+  Malgrim — spells ×0.5, swords ×1.5); green slimes are plain. `RESIST_MULT`
+  0.5 / `WEAK_MULT` 1.5; badge 🛡⚔ / 🛡🪄 by the HP bar; gray "resisted" and
+  gold "WEAK!" numbers + a first-hit callout teach the rule.
 - **Shields** add block: `BLOCK_PER_SHIELD = 0.05` pressure absorbed per shield,
   stockpiled until spent by a strike.
 - **Kill surge:** `ADVANCE_PER_KILL = 0.3` pressure removed (hero lunges
@@ -550,7 +556,9 @@ Master knobs, current values (edit these to retune the game):
 **Board (`board.ts`):** `W=10`, `H=5`, `TYPES=7`, `SPAWN_WEIGHTS=[4,2,2,2,2,1,1]`.
 
 **Combat (`run.ts`):**
-`SWORD_MAIN=5`, `SWORD_EXTRA=2` (→ 5/7/9 dmg for 3/4/5+), `STAFF_DMG=3`,
+`SWORD_MAIN=5`, `SWORD_EXTRA=2` (→ 5/7/9 dmg for 3/4/5+),
+`SPELL_DMG={3:9,4:14,5:20}` +`SPELL_EXTRA=3`/tile past 5 (tier 5 burns),
+defenses `RESIST_MULT=0.5`/`WEAK_MULT=1.5` (hide=anti-sword, ward=anti-spell),
 `BLOCK_PER_SHIELD=0.05`, `ADVANCE_PER_KILL=0.3`,
 `ENEMY_BASE_HP=9` (+3/kill), `ENEMY_BASE_POWER=0.075` (+0.015/kill).
 
