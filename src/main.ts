@@ -148,24 +148,27 @@ const BOSS_NAME = "MALGRIM THE CINDERMAGE";
 // Malgrim hides among decoys. Tap the REAL one (cyan staff glint) before he
 // casts; each correct hit cracks one of his three wards. Decoy taps / timeouts
 // fire a fireball — guard charges from the puzzle phase absorb them.
-// Three wards, TWO deals each, and every ward is its own mechanic:
-//   I  FIND HIM     — spot the cyan glint among red decoys (reaction)
-//   II TRACK HIM    — he glints, then everyone cloaks and SHUFFLES (tracking)
-//   III THE WHEEL   — the portals form a ring and every figure ORBITS: keep
-//                     your eye locked on him through continuous motion (deal 2
-//                     swings the wheel back AND forth). Hard, but calm — one
-//                     smooth movement, no clutter.
-// His cast is a visible ember bar; a hit in its RED tail (ARENA_CRIT_FRAC)
-// shatters the whole ward at once — the daring end the fight early.
-type ArenaDeal = { portals: number; decoys: number; castMs: number; hops: number; swaps: number; orbitMs: number; orbitYoyo?: boolean };
+// Three wards, and every ward is its own mechanic:
+//   I  FIND HIM         — spot the cyan glint among red decoys (reaction)
+//   II TRACK HIM        — he glints, then everyone cloaks and SHUFFLES (tracking)
+//   III RETURN HIS FIRE — fireball tennis. He takes the far court and serves
+//                         with a shrinking timing ring; tap as the ball meets
+//                         your guard to reflect it into him. Rallies speed up,
+//                         he fakes wind-ups, and the VIOLET ball is a lie — it
+//                         passes harmlessly unless you swing at it. Three
+//                         returns break the final ward.
+// Wards I/II: his cast is a visible ember bar; a hit in its RED tail
+// (ARENA_CRIT_FRAC) shatters the whole ward at once — the daring end early.
+// Ward III entries: castMs = the serve's FLIGHT time; fake/pair are chances.
+type ArenaDeal = { portals: number; decoys: number; castMs: number; hops: number; swaps: number; fake?: number; pair?: number };
 const ARENA_WARDS: { title: string; sub: string; taunt: string; deals: ArenaDeal[] }[] = [
   {
     title: "WARD I — FIND HIM",
     sub: "the REAL Cindermage glints cyan — tap him before his cast fills",
     taunt: "“Amusing, scout. Again!”",
     deals: [
-      { portals: 4, decoys: 2, castMs: 2600, hops: 0, swaps: 0, orbitMs: 0 },
-      { portals: 5, decoys: 3, castMs: 2200, hops: 0, swaps: 0, orbitMs: 0 },
+      { portals: 4, decoys: 2, castMs: 2600, hops: 0, swaps: 0 },
+      { portals: 5, decoys: 3, castMs: 2200, hops: 0, swaps: 0 },
     ],
   },
   {
@@ -173,23 +176,29 @@ const ARENA_WARDS: { title: string; sub: string; taunt: string; deals: ArenaDeal
     sub: "watch the glint… then follow him through the shuffle",
     taunt: "“Your eyes betray you!”",
     deals: [
-      { portals: 6, decoys: 3, castMs: 2100, hops: 0, swaps: 2, orbitMs: 0 },
-      { portals: 6, decoys: 4, castMs: 1800, hops: 0, swaps: 3, orbitMs: 0 },
+      { portals: 6, decoys: 3, castMs: 2100, hops: 0, swaps: 2 },
+      { portals: 6, decoys: 4, castMs: 1800, hops: 0, swaps: 3 },
     ],
   },
   {
-    title: "WARD III — THE WHEEL",
-    sub: "he never settles — hold your eye on him through the turning wheel",
+    title: "WARD III — RETURN HIS FIRE",
+    sub: "tap as his fire meets your guard — and NEVER swing at the violet",
     taunt: "“BURN WITH ME!”",
     deals: [
-      { portals: 9, decoys: 5, castMs: 2300, hops: 2, swaps: 0, orbitMs: 5200 },
-      { portals: 9, decoys: 6, castMs: 2000, hops: 1, swaps: 0, orbitMs: 3800, orbitYoyo: true },
+      { portals: 0, decoys: 0, castMs: 1350, hops: 0, swaps: 0, fake: 0, pair: 0 },
+      { portals: 0, decoys: 0, castMs: 1100, hops: 0, swaps: 0, fake: 0.5, pair: 0 },
+      { portals: 0, decoys: 0, castMs: 950, hops: 0, swaps: 0, fake: 0.25, pair: 0.65 },
     ],
   },
 ];
 const ARENA_TOTAL_DEALS = ARENA_WARDS.reduce((s, w) => s + w.deals.length, 0);
 const ARENA_CRIT_FRAC = 0.68; // cast fraction where the bar burns red — hits here break the whole ward
 const ARENA_FIREBALL_MS = 420; // his punishment bolt's flight time
+// fireball tennis timing (ward III)
+const TENNIS_EARLY_MS = 140; // the tap window opens this early before the ball meets the guard
+const TENNIS_LATE_MS = 110; // ...and forgives this much lateness
+const TENNIS_WHIFF_LOCK_MS = 380; // a swing at nothing leaves you open — mashing loses
+const TENNIS_PAIR_STAGGER_MS = 280; // the violet lie leads, the true fire follows
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
 const HP_W = 70;
@@ -1893,28 +1902,14 @@ class GameScene extends Phaser.Scene {
     this.arenaObjs = [];
   }
 
-  /**
-   * Portal mouths across the retracted board: a grid for the early wards, a
-   * RING for the Wheel (each spot carries its ring angle so figures can orbit).
-   */
-  private arenaPortalSpots(n: number, ring: boolean): { x: number; y: number; ang: number }[] {
-    const out: { x: number; y: number; ang: number }[] = [];
-    if (ring) {
-      const cx0 = GRID_X + GRID_W / 2;
-      const cy0 = GRID_Y + GRID_H / 2;
-      const rx = GRID_W * 0.36;
-      const ry = GRID_H * 0.335;
-      for (let i = 0; i < n; i++) {
-        const ang = -Math.PI / 2 + (i / n) * Math.PI * 2;
-        out.push({ x: cx0 + Math.cos(ang) * rx, y: cy0 + Math.sin(ang) * ry, ang });
-      }
-      return out;
-    }
+  /** Even spread of portal mouths across the retracted board's rect. */
+  private arenaPortalSpots(n: number): { x: number; y: number }[] {
     const rows = n <= 3 ? 1 : n <= 6 ? 2 : 3;
     const cols = 3;
+    const out: { x: number; y: number }[] = [];
     for (let r = 0; r < rows; r++)
       for (let c = 0; c < cols; c++)
-        out.push({ x: GRID_X + ((c + 0.5) / cols) * GRID_W, y: GRID_Y + ((r + 0.5) / rows) * GRID_H, ang: 0 });
+        out.push({ x: GRID_X + ((c + 0.5) / cols) * GRID_W, y: GRID_Y + ((r + 0.5) / rows) * GRID_H });
     return out;
   }
 
@@ -1962,7 +1957,8 @@ class GameScene extends Phaser.Scene {
     });
     this.time.delayedCall(1650, () => {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-      this.playArenaDeal(gen);
+      if (this.arenaWard === 2) this.startTennis(gen); // the final ward is a duel, not a deal
+      else this.playArenaDeal(gen);
     });
   }
 
@@ -1970,7 +1966,7 @@ class GameScene extends Phaser.Scene {
   private playArenaDeal(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     const cfg = ARENA_WARDS[this.arenaWard].deals[this.arenaDealIdx];
-    const spots = this.arenaPortalSpots(cfg.portals, cfg.orbitMs > 0);
+    const spots = this.arenaPortalSpots(cfg.portals);
     const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
       this.arenaObjs.push(o);
       return o;
@@ -2016,17 +2012,15 @@ class GameScene extends Phaser.Scene {
       const order = Phaser.Utils.Array.Shuffle(spots.map((_, i) => i));
       const realIdx = order[0];
       const decoyIdxs = order.slice(1, 1 + cfg.decoys);
-      type Figure = { fig: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image | null; isReal: boolean; baseAng: number };
+      type Figure = { fig: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image | null; isReal: boolean };
       const figures: Figure[] = [];
       let stage: "watch" | "live" = "watch";
       let settled = false;
       let castTween: Phaser.Tweens.Tween | null = null;
-      let orbitTween: Phaser.Tweens.Tween | null = null;
       const settle = () => {
         if (settled || gen !== this.arenaGen) return false;
         settled = true;
         castTween?.stop();
-        orbitTween?.stop(); // the wheel freezes the instant the deal resolves
         return true;
       };
       const realOf = () => figures.find((f) => f.isReal)!;
@@ -2053,7 +2047,7 @@ class GameScene extends Phaser.Scene {
         );
         if (!isReal) fig.setTint(0xff6a55); // decoys burn red (until the cloak)
         this.tweens.add({ targets: fig, scale: 0.85, duration: 200, ease: "Back.easeOut" });
-        const entry: Figure = { fig, glow, isReal, baseAng: spots[i].ang };
+        const entry: Figure = { fig, glow, isReal };
         fig.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
           if (stage !== "live") return; // no taps while he's still dealing
           if (entry.isReal) this.arenaHit(gen, settle, fig, castFrac());
@@ -2078,8 +2072,8 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: glint, alpha: 1, scale: 1.6, duration: 130, yoyo: true, repeat: cfg.swaps > 0 ? 4 : 2, onComplete: () => glint.destroy() });
       this.sfx("pickup", 0.3, 1.5);
 
-      // WARD II+: everyone cloaks to the same flame, then the motion — TRACK him
-      if (cfg.swaps > 0 || cfg.orbitMs > 0) {
+      // WARD II: everyone cloaks to the same flame, then the shuffle — TRACK him
+      if (cfg.swaps > 0) {
         await this.arenaWait(760); // let the glint be seen
         if (gen !== this.arenaGen || settled) return;
         for (const f of figures) {
@@ -2099,33 +2093,6 @@ class GameScene extends Phaser.Scene {
           this.tweens.add({ targets: a.fig, x: bx, y: by, duration: 360, ease: "Sine.easeInOut" });
           this.tweens.add({ targets: b.fig, x: ax, y: ay, duration: 360, ease: "Sine.easeInOut" });
           await this.arenaWait(420);
-          if (gen !== this.arenaGen || settled) return;
-        }
-        // WARD III — THE WHEEL: the whole ring glides, and keeps gliding through
-        // the live window. One smooth motion to track — hard, but never noisy.
-        if (cfg.orbitMs > 0) {
-          const cx0 = GRID_X + GRID_W / 2;
-          const cy0 = GRID_Y + GRID_H / 2;
-          const rx = GRID_W * 0.36;
-          const ry = GRID_H * 0.335;
-          const proxy = { a: 0 };
-          orbitTween = this.tweens.add({
-            targets: proxy,
-            a: Math.PI * 2,
-            duration: cfg.orbitMs,
-            repeat: -1,
-            yoyo: !!cfg.orbitYoyo, // deal two wrenches the wheel back and forth
-            ease: cfg.orbitYoyo ? "Sine.easeInOut" : "Linear",
-            onUpdate: () => {
-              for (const f of figures) {
-                const a = f.baseAng + proxy.a;
-                f.fig.x = cx0 + Math.cos(a) * rx;
-                f.fig.y = cy0 + Math.sin(a) * ry + 24;
-              }
-            },
-          });
-          this.sfx("summon", 0.3, 1.5);
-          await this.arenaWait(300); // the wheel starts turning before his cast begins
           if (gen !== this.arenaGen || settled) return;
         }
       }
@@ -2181,6 +2148,260 @@ class GameScene extends Phaser.Scene {
       duration: 260,
       ease: "Quad.easeOut",
     });
+  }
+
+  // ---- WARD III: FIREBALL TENNIS — return his fire ---------------------------
+  // He serves from the far court; every ball carries a shrinking timing ring.
+  // Tap (anywhere — the screen is your racket) as the ball meets the guard ring
+  // to reflect it back into him. Whiffs lock the swing briefly, so mashing
+  // loses; his wind-up sometimes throws NOTHING; and the violet ball is a lie
+  // that only hurts you if you swing at it. Three returns break the last ward.
+  private startTennis(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
+      this.arenaObjs.push(o);
+      return o;
+    };
+    const shots = ARENA_WARDS[2].deals;
+    const MX = PADIN + UI_W - 96; // his end of the court
+
+    // Malgrim re-materialises across the lane, staff raised
+    if (this.orc) {
+      this.tweens.killTweensOf(this.orc);
+      this.orc.setPosition(MX, GROUND_Y).setFlipX(true).setAlpha(0).play("boss-idle");
+      this.tweens.add({ targets: this.orc, alpha: 1, duration: 380 });
+      const puff = this.inBox(
+        this.add.image(MX, GROUND_Y - 44, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff8a4a).setScale(0.8).setDepth(30),
+      );
+      this.tweens.add({ targets: puff, scale: 2.6, alpha: 0, duration: 420, onComplete: () => puff.destroy() });
+      this.sfx("spell", 0.45, 0.85);
+    }
+
+    // the guard ring: meet the ball HERE
+    const zone = reg(this.inBox(this.add.ellipse(this.hero.x + 64, GROUND_Y - 42, 66, 66).setStrokeStyle(4, 0x8ff4ff, 0.9).setDepth(43)));
+    this.tweens.add({ targets: zone, alpha: 0.45, duration: 480, yoyo: true, repeat: -1 });
+
+    // the racket: a full-court tap catcher (timing is everything)
+    const catcher = reg(this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0xffffff, 0.001).setDepth(60).setInteractive()));
+
+    type Ball = { img: Phaser.GameObjects.Image; ring: Phaser.GameObjects.Ellipse; arrival: number; kind: "fire" | "violet"; alive: boolean };
+    let balls: Ball[] = [];
+    let lockoutUntil = 0;
+    let resolving = false; // between serves / while a return flies
+
+    const clearBalls = () => {
+      for (const b of balls) {
+        this.tweens.killTweensOf(b.img);
+        this.tweens.killTweensOf(b.ring);
+        b.img.destroy();
+        b.ring.destroy();
+      }
+      balls = [];
+    };
+
+    const failContinue = (msg: string) => {
+      if (gen !== this.arenaGen) return;
+      resolving = true;
+      this.arenaWardMissed = true;
+      clearBalls();
+      this.arenaStrikeHero();
+      this.notice(msg, "#ff8a6a");
+      this.time.delayedCall(1000, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+        throwShot();
+      });
+    };
+
+    const reflected = (b: Ball) => {
+      resolving = true;
+      b.alive = false;
+      this.tweens.killTweensOf(b.img);
+      b.ring.destroy();
+      this.playCombo(["hero-attack2"], "hero-idle");
+      this.sfx("swing2", 0.4);
+      this.sfx(this.pick(["block1", "block2", "block3"]), 0.5);
+      this.tweens.add({ targets: zone, scaleX: 1.35, scaleY: 1.35, duration: 110, yoyo: true, ease: "Quad.easeOut" });
+      buzz(22);
+      b.img.setTint(0xffe0a0); // struck true — it flies back hot
+      clearBalls_except(b);
+      this.tweens.add({
+        targets: b.img,
+        x: MX - 22,
+        y: GROUND_Y - 52,
+        duration: Math.max(320, shots[Math.min(this.arenaDealIdx, shots.length - 1)].castMs * 0.5),
+        ease: "Quad.easeIn",
+        onComplete: () => {
+          b.img.destroy();
+          if (gen !== this.arenaGen) return;
+          const burst = this.inBox(
+            this.add
+              .particles(MX - 20, GROUND_Y - 50, "spark", {
+                speed: { min: 100, max: 300 }, lifespan: { min: 200, max: 480 },
+                scale: { start: 1.4, end: 0 }, blendMode: "ADD", tint: 0xffc070, emitting: false,
+              })
+              .setDepth(46),
+          );
+          burst.explode(24);
+          this.time.delayedCall(600, () => burst.destroy());
+          this.cameras.main.shake(220, 0.007);
+          this.sfx("hit3", 0.55);
+          if (this.orc && !this.orcDying) {
+            this.orc.play("boss-hurt").once("animationcomplete", () => {
+              if (this.orc && this.orcAnim === "boss" && !this.orcDying) this.orc.play("boss-idle");
+            });
+          }
+          this.arenaDealsDone++;
+          this.arenaDealIdx++;
+          this.drainBossBar();
+          if (this.arenaDealIdx >= shots.length) {
+            this.time.delayedCall(650, () => {
+              if (gen !== this.arenaGen || this.run.over) return;
+              this.crackWard(gen, false);
+            });
+          } else {
+            this.notice(this.arenaDealIdx === 1 ? "RETURNED!" : "AGAIN — FASTER!", "#8ff4ff");
+            this.time.delayedCall(1100, () => {
+              if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+              throwShot();
+            });
+          }
+        },
+      });
+    };
+    const clearBalls_except = (keep: Ball) => {
+      for (const b of balls) {
+        if (b === keep) continue;
+        this.tweens.killTweensOf(b.img);
+        this.tweens.killTweensOf(b.ring);
+        b.img.destroy();
+        b.ring.destroy();
+      }
+      balls = [keep];
+    };
+
+    const onTap = () => {
+      if (gen !== this.arenaGen || !this.arenaActive || resolving || this.run.over) return;
+      const now = this.time.now;
+      if (now < lockoutUntil) return; // still recovering from the whiff
+      const inWin = balls.find((b) => b.alive && now >= b.arrival - TENNIS_EARLY_MS && now <= b.arrival + TENNIS_LATE_MS);
+      if (!inWin) {
+        // a swing at nothing — his fakes and your nerves conspire
+        lockoutUntil = now + TENNIS_WHIFF_LOCK_MS;
+        this.playCombo(["hero-attack"], "hero-idle");
+        this.sfx("swing1", 0.25);
+        if (balls.some((b) => b.alive))
+          this.floatChip(this.hero.x + 30, GROUND_Y - 96, "early!", { size: 18, tint: [0xd0d4dc, 0xb9c0cc, 0x8a8f98, 0x6a707c], stroke: "#14171f" });
+        return;
+      }
+      if (inWin.kind === "violet") {
+        // he sold you the lie — it detonates in your swing
+        const burst = this.inBox(
+          this.add
+            .particles(inWin.img.x, inWin.img.y, "spark", {
+              speed: { min: 80, max: 240 }, lifespan: { min: 200, max: 460 },
+              scale: { start: 1.2, end: 0 }, blendMode: "ADD", tint: 0xb06aff, emitting: false,
+            })
+            .setDepth(47),
+        );
+        burst.explode(20);
+        this.time.delayedCall(600, () => burst.destroy());
+        failContinue("the VIOLET was a lie!");
+        return;
+      }
+      reflected(inWin);
+    };
+    catcher.on("pointerdown", onTap);
+
+    const launch = (kind: "fire" | "violet", flightMs: number, delayMs: number) => {
+      this.time.delayedCall(delayMs, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive || resolving) return;
+        const zx = this.hero.x + 64;
+        const zy = GROUND_Y - 42;
+        const color = kind === "fire" ? 0xff7733 : 0xb06aff;
+        const img = reg(this.inBox(this.add.image(MX - 34, GROUND_Y - 54, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(color).setScale(1.5).setDepth(46)));
+        const ring = reg(this.inBox(this.add.ellipse(img.x, img.y, 130, 130).setStrokeStyle(3, color, 0.85).setDepth(46)));
+        const b: Ball = { img, ring, arrival: this.time.now + flightMs, kind, alive: true };
+        balls.push(b);
+        this.sfx(kind === "fire" ? "fireball2" : "fireball3", 0.4, kind === "violet" ? 1.3 : 1);
+        this.tweens.add({ targets: ring, scaleX: 0.42, scaleY: 0.42, duration: flightMs, ease: "Linear" }); // the timing ring closes at the guard
+        this.tweens.add({
+          targets: img,
+          x: zx,
+          y: zy,
+          duration: flightMs,
+          ease: "Linear",
+          onUpdate: () => ring.setPosition(img.x, img.y),
+          onComplete: () => {
+            ring.destroy();
+            if (!b.alive || gen !== this.arenaGen || !img.scene) return;
+            // past the guard: the late window still lives while it closes the gap
+            this.tweens.add({
+              targets: img,
+              x: this.hero.x + 4,
+              y: GROUND_Y - 40,
+              duration: 130,
+              ease: "Linear",
+              onComplete: () => {
+                if (!b.alive || gen !== this.arenaGen || !img.scene) return;
+                b.alive = false;
+                if (b.kind === "fire") {
+                  const burst = this.inBox(
+                    this.add
+                      .particles(img.x, img.y, "spark", {
+                        speed: { min: 80, max: 260 }, lifespan: { min: 200, max: 460 },
+                        scale: { start: 1.2, end: 0 }, blendMode: "ADD", tint: 0xff8844, emitting: false,
+                      })
+                      .setDepth(47),
+                  );
+                  burst.explode(18);
+                  this.time.delayedCall(600, () => burst.destroy());
+                  img.destroy();
+                  failContinue("his fire finds you!");
+                } else {
+                  // the violet drifts past, revealed as nothing — well left alone
+                  this.tweens.add({ targets: img, x: img.x - 90, alpha: 0, duration: 280, onComplete: () => img.destroy() });
+                  this.sfx("swap", 0.25, 1.4);
+                }
+              },
+            });
+          },
+        });
+      });
+    };
+
+    const throwShot = () => {
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+      resolving = false;
+      clearBalls();
+      const cfg = shots[Math.min(this.arenaDealIdx, shots.length - 1)];
+      zone.setPosition(this.hero.x + 64, GROUND_Y - 42); // the guard follows the hero's ground
+      const doFake = Math.random() < (cfg.fake ?? 0);
+      const doPair = !doFake && Math.random() < (cfg.pair ?? 0);
+      if (this.orc && !this.orcDying) {
+        this.orc.play("boss-attack").once("animationcomplete", () => {
+          if (this.orc && this.orcAnim === "boss" && !this.orcDying) this.orc.play("boss-idle");
+        });
+      }
+      this.sfx("fireball1", 0.3, 0.85);
+      this.time.delayedCall(240, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+        if (doFake) {
+          // nothing leaves his hand — then the REAL serve, fast and mean
+          this.time.delayedCall(460, () => {
+            if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+            if (this.orc && !this.orcDying) this.orc.play("boss-attack");
+            launch("fire", cfg.castMs * 0.85, 180);
+          });
+        } else if (doPair) {
+          launch("violet", cfg.castMs, 0);
+          launch("fire", cfg.castMs, TENNIS_PAIR_STAGGER_MS);
+        } else {
+          launch("fire", cfg.castMs, 0);
+        }
+      });
+    };
+
+    throwShot();
   }
 
   /** Found him: lunge, land the blow — a red-zone hit shatters the whole ward. */
