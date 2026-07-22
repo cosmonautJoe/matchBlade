@@ -149,20 +149,23 @@ const BOSS_NAME = "MALGRIM THE CINDERMAGE";
 // casts; each correct hit cracks one of his three wards. Decoy taps / timeouts
 // fire a fireball — guard charges from the puzzle phase absorb them.
 // Three wards, TWO deals each, and every ward is its own mechanic:
-//   I  FIND HIM    — spot the cyan glint among red decoys (reaction)
-//   II TRACK HIM   — he glints, then everyone cloaks and SHUFFLES (tracking)
-//   III SURVIVE HIM — feints + firebolts you tap out of the air (multitask)
+//   I  FIND HIM     — spot the cyan glint among red decoys (reaction)
+//   II TRACK HIM    — he glints, then everyone cloaks and SHUFFLES (tracking)
+//   III THE WHEEL   — the portals form a ring and every figure ORBITS: keep
+//                     your eye locked on him through continuous motion (deal 2
+//                     swings the wheel back AND forth). Hard, but calm — one
+//                     smooth movement, no clutter.
 // His cast is a visible ember bar; a hit in its RED tail (ARENA_CRIT_FRAC)
 // shatters the whole ward at once — the daring end the fight early.
-type ArenaDeal = { portals: number; decoys: number; castMs: number; hops: number; swaps: number; mortars: number };
+type ArenaDeal = { portals: number; decoys: number; castMs: number; hops: number; swaps: number; orbitMs: number; orbitYoyo?: boolean };
 const ARENA_WARDS: { title: string; sub: string; taunt: string; deals: ArenaDeal[] }[] = [
   {
     title: "WARD I — FIND HIM",
     sub: "the REAL Cindermage glints cyan — tap him before his cast fills",
     taunt: "“Amusing, scout. Again!”",
     deals: [
-      { portals: 4, decoys: 2, castMs: 2600, hops: 0, swaps: 0, mortars: 0 },
-      { portals: 5, decoys: 3, castMs: 2200, hops: 0, swaps: 0, mortars: 0 },
+      { portals: 4, decoys: 2, castMs: 2600, hops: 0, swaps: 0, orbitMs: 0 },
+      { portals: 5, decoys: 3, castMs: 2200, hops: 0, swaps: 0, orbitMs: 0 },
     ],
   },
   {
@@ -170,24 +173,23 @@ const ARENA_WARDS: { title: string; sub: string; taunt: string; deals: ArenaDeal
     sub: "watch the glint… then follow him through the shuffle",
     taunt: "“Your eyes betray you!”",
     deals: [
-      { portals: 6, decoys: 3, castMs: 2100, hops: 0, swaps: 2, mortars: 0 },
-      { portals: 6, decoys: 4, castMs: 1800, hops: 0, swaps: 3, mortars: 0 },
+      { portals: 6, decoys: 3, castMs: 2100, hops: 0, swaps: 2, orbitMs: 0 },
+      { portals: 6, decoys: 4, castMs: 1800, hops: 0, swaps: 3, orbitMs: 0 },
     ],
   },
   {
-    title: "WARD III — SURVIVE HIM",
-    sub: "tap his firebolts out of the air — and still find the truth",
+    title: "WARD III — THE WHEEL",
+    sub: "he never settles — hold your eye on him through the turning wheel",
     taunt: "“BURN WITH ME!”",
     deals: [
-      { portals: 9, decoys: 5, castMs: 2000, hops: 2, swaps: 0, mortars: 1 },
-      { portals: 9, decoys: 6, castMs: 1700, hops: 1, swaps: 2, mortars: 2 },
+      { portals: 9, decoys: 5, castMs: 2300, hops: 2, swaps: 0, orbitMs: 5200 },
+      { portals: 9, decoys: 6, castMs: 2000, hops: 1, swaps: 0, orbitMs: 3800, orbitYoyo: true },
     ],
   },
 ];
 const ARENA_TOTAL_DEALS = ARENA_WARDS.reduce((s, w) => s + w.deals.length, 0);
 const ARENA_CRIT_FRAC = 0.68; // cast fraction where the bar burns red — hits here break the whole ward
 const ARENA_FIREBALL_MS = 420; // his punishment bolt's flight time
-const ARENA_MORTAR_MS = 1650; // ward III's tappable firebolts — slow enough to shoot down
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
 const HP_W = 70;
@@ -1891,14 +1893,28 @@ class GameScene extends Phaser.Scene {
     this.arenaObjs = [];
   }
 
-  /** Even spread of portal mouths across the retracted board's rect. */
-  private arenaPortalSpots(n: number): { x: number; y: number }[] {
+  /**
+   * Portal mouths across the retracted board: a grid for the early wards, a
+   * RING for the Wheel (each spot carries its ring angle so figures can orbit).
+   */
+  private arenaPortalSpots(n: number, ring: boolean): { x: number; y: number; ang: number }[] {
+    const out: { x: number; y: number; ang: number }[] = [];
+    if (ring) {
+      const cx0 = GRID_X + GRID_W / 2;
+      const cy0 = GRID_Y + GRID_H / 2;
+      const rx = GRID_W * 0.36;
+      const ry = GRID_H * 0.335;
+      for (let i = 0; i < n; i++) {
+        const ang = -Math.PI / 2 + (i / n) * Math.PI * 2;
+        out.push({ x: cx0 + Math.cos(ang) * rx, y: cy0 + Math.sin(ang) * ry, ang });
+      }
+      return out;
+    }
     const rows = n <= 3 ? 1 : n <= 6 ? 2 : 3;
     const cols = 3;
-    const out: { x: number; y: number }[] = [];
     for (let r = 0; r < rows; r++)
       for (let c = 0; c < cols; c++)
-        out.push({ x: GRID_X + ((c + 0.5) / cols) * GRID_W, y: GRID_Y + ((r + 0.5) / rows) * GRID_H });
+        out.push({ x: GRID_X + ((c + 0.5) / cols) * GRID_W, y: GRID_Y + ((r + 0.5) / rows) * GRID_H, ang: 0 });
     return out;
   }
 
@@ -1954,7 +1970,7 @@ class GameScene extends Phaser.Scene {
   private playArenaDeal(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     const cfg = ARENA_WARDS[this.arenaWard].deals[this.arenaDealIdx];
-    const spots = this.arenaPortalSpots(cfg.portals);
+    const spots = this.arenaPortalSpots(cfg.portals, cfg.orbitMs > 0);
     const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
       this.arenaObjs.push(o);
       return o;
@@ -2000,15 +2016,17 @@ class GameScene extends Phaser.Scene {
       const order = Phaser.Utils.Array.Shuffle(spots.map((_, i) => i));
       const realIdx = order[0];
       const decoyIdxs = order.slice(1, 1 + cfg.decoys);
-      type Figure = { fig: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image | null; isReal: boolean };
+      type Figure = { fig: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image | null; isReal: boolean; baseAng: number };
       const figures: Figure[] = [];
       let stage: "watch" | "live" = "watch";
       let settled = false;
       let castTween: Phaser.Tweens.Tween | null = null;
+      let orbitTween: Phaser.Tweens.Tween | null = null;
       const settle = () => {
         if (settled || gen !== this.arenaGen) return false;
         settled = true;
         castTween?.stop();
+        orbitTween?.stop(); // the wheel freezes the instant the deal resolves
         return true;
       };
       const realOf = () => figures.find((f) => f.isReal)!;
@@ -2035,7 +2053,7 @@ class GameScene extends Phaser.Scene {
         );
         if (!isReal) fig.setTint(0xff6a55); // decoys burn red (until the cloak)
         this.tweens.add({ targets: fig, scale: 0.85, duration: 200, ease: "Back.easeOut" });
-        const entry: Figure = { fig, glow, isReal };
+        const entry: Figure = { fig, glow, isReal, baseAng: spots[i].ang };
         fig.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
           if (stage !== "live") return; // no taps while he's still dealing
           if (entry.isReal) this.arenaHit(gen, settle, fig, castFrac());
@@ -2060,8 +2078,8 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: glint, alpha: 1, scale: 1.6, duration: 130, yoyo: true, repeat: cfg.swaps > 0 ? 4 : 2, onComplete: () => glint.destroy() });
       this.sfx("pickup", 0.3, 1.5);
 
-      // WARD II+: everyone cloaks to the same flame, then the shuffle — TRACK him
-      if (cfg.swaps > 0) {
+      // WARD II+: everyone cloaks to the same flame, then the motion — TRACK him
+      if (cfg.swaps > 0 || cfg.orbitMs > 0) {
         await this.arenaWait(760); // let the glint be seen
         if (gen !== this.arenaGen || settled) return;
         for (const f of figures) {
@@ -2081,6 +2099,33 @@ class GameScene extends Phaser.Scene {
           this.tweens.add({ targets: a.fig, x: bx, y: by, duration: 360, ease: "Sine.easeInOut" });
           this.tweens.add({ targets: b.fig, x: ax, y: ay, duration: 360, ease: "Sine.easeInOut" });
           await this.arenaWait(420);
+          if (gen !== this.arenaGen || settled) return;
+        }
+        // WARD III — THE WHEEL: the whole ring glides, and keeps gliding through
+        // the live window. One smooth motion to track — hard, but never noisy.
+        if (cfg.orbitMs > 0) {
+          const cx0 = GRID_X + GRID_W / 2;
+          const cy0 = GRID_Y + GRID_H / 2;
+          const rx = GRID_W * 0.36;
+          const ry = GRID_H * 0.335;
+          const proxy = { a: 0 };
+          orbitTween = this.tweens.add({
+            targets: proxy,
+            a: Math.PI * 2,
+            duration: cfg.orbitMs,
+            repeat: -1,
+            yoyo: !!cfg.orbitYoyo, // deal two wrenches the wheel back and forth
+            ease: cfg.orbitYoyo ? "Sine.easeInOut" : "Linear",
+            onUpdate: () => {
+              for (const f of figures) {
+                const a = f.baseAng + proxy.a;
+                f.fig.x = cx0 + Math.cos(a) * rx;
+                f.fig.y = cy0 + Math.sin(a) * ry + 24;
+              }
+            },
+          });
+          this.sfx("summon", 0.3, 1.5);
+          await this.arenaWait(300); // the wheel starts turning before his cast begins
           if (gen !== this.arenaGen || settled) return;
         }
       }
@@ -2107,59 +2152,7 @@ class GameScene extends Phaser.Scene {
         duration: cfg.castMs,
         onComplete: () => this.arenaFail(gen, settle, "timeout", realOf().fig, realOf().fig),
       });
-
-      // WARD III: firebolts arc up at the hero mid-deal — tap them down or eat them
-      for (let m = 0; m < cfg.mortars; m++) {
-        this.time.delayedCall(300 + m * Math.max(500, cfg.castMs * 0.4), () => {
-          if (gen !== this.arenaGen || settled) return;
-          this.launchArenaMortar(gen, spots[(Math.random() * spots.length) | 0]);
-        });
-      }
     })();
-  }
-
-  /** A tappable firebolt lobbed at the hero — defuse it midair or take the hit. */
-  private launchArenaMortar(gen: number, from: { x: number; y: number }) {
-    const bolt = this.inBox(
-      this.add.image(from.x, from.y - 20, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(0xffb050).setScale(1.15).setDepth(47),
-    );
-    this.arenaObjs.push(bolt);
-    bolt.setInteractive(new Phaser.Geom.Circle(14, 14, 44), Phaser.Geom.Circle.Contains); // generous tap target
-    this.tweens.add({ targets: bolt, angle: 360, duration: 900, repeat: -1 });
-    this.sfx("fireball1", 0.3, 1.3);
-    let dead = false;
-    bolt.once("pointerdown", () => {
-      if (dead || gen !== this.arenaGen) return;
-      dead = true;
-      this.tweens.killTweensOf(bolt);
-      const burst = this.inBox(
-        this.add
-          .particles(bolt.x, bolt.y, "spark", {
-            speed: { min: 70, max: 220 }, lifespan: { min: 180, max: 420 },
-            scale: { start: 1.0, end: 0 }, blendMode: "ADD", tint: 0xbfefff, emitting: false,
-          })
-          .setDepth(47),
-      );
-      burst.explode(14);
-      this.time.delayedCall(600, () => burst.destroy());
-      this.sfx("hit2", 0.45, 1.2);
-      this.floatScore(bolt.x, bolt.y - 20, 10, { size: 26 });
-      buzz(12);
-      bolt.destroy();
-    });
-    this.tweens.add({
-      targets: bolt,
-      x: this.hero.x + 6,
-      y: GROUND_Y - 40,
-      duration: ARENA_MORTAR_MS,
-      ease: "Sine.easeInOut",
-      onComplete: () => {
-        if (dead || gen !== this.arenaGen || !bolt.scene) return; // cleared rounds spare the hero
-        dead = true;
-        bolt.destroy();
-        this.arenaStrikeHero(); // it lands — a guard charge turns it, or ground is lost
-      },
-    });
   }
 
   /** One incoming arena hit on the hero: guard turns it, otherwise the skull creeps. */

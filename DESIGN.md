@@ -183,8 +183,9 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     fire-tinted) and he hides among red-burning decoys. Tap the REAL one (cyan
     staff glint) to crack his **three wards — two deals each, every ward its
     own mechanic** (`ARENA_WARDS`): I FIND HIM (spot the glint), II TRACK HIM
-    (all figures cloak identical and SHUFFLE — follow him), III SURVIVE HIM
-    (feints + tappable firebolts to defuse midair). His cast is a visible
+    (all figures cloak identical and SHUFFLE — follow him), III THE WHEEL
+    (portals form a ring; every cloaked figure orbits continuously, deal two
+    swings back and forth — hard but calm). His cast is a visible
     ember bar; hits in its red tail (`ARENA_CRIT_FRAC`) shatter the whole
     ward at once. Decoy taps / timeouts fire a fireball that a single guard
     charge turns (shield play = mistakes forgiven); flawless wards refund

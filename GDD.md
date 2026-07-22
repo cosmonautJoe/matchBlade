@@ -238,9 +238,10 @@ pack, CC0, 150×150, flipped to face left).
   **Three wards, TWO deals each, and every ward is its own game**
   (`ARENA_WARDS` in main.ts): **I FIND HIM** (spot the glint among red decoys),
   **II TRACK HIM** (he glints, then everyone **cloaks identical and shuffles**
-  — follow him through the swaps), **III SURVIVE HIM** (ghost feints, short
-  windows, and **tappable firebolts** arcing at the hero mid-deal — defuse
-  them midair for +10 or eat a strike). His cast is a **visible ember bar**
+  — follow him through the swaps), **III THE WHEEL** (the portals form a RING
+  and every cloaked figure **orbits continuously** — ghost feints first, and
+  deal two swings the wheel back and forth; hard but calm, one smooth motion
+  to track). His cast is a **visible ember bar**
   whose last 32% burns red (`ARENA_CRIT_FRAC=0.68`): a hit in the red
   **shatters the whole ward at once** — the daring end the fight early. The
   boss bar is the ward meter (drains per deal of `ARENA_TOTAL_DEALS`); a
