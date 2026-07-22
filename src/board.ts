@@ -21,9 +21,9 @@ export const EMPTY = -1;
 // Spawn weights per tile id (sword, staff, shield, key, treasure, wood, ore, potion).
 // The board favours fighting: sword drops twice as often as a baseline tile and
 // raw resources (wood/ore) half as often, so matches lean toward damage over
-// stockpiling. The potion is a RARE gift (~1 in 43 spawns — usually 0-2 on a
-// full board): tapped, not matched. Tweak these to retune the economy.
-export const SPAWN_WEIGHTS = [12, 6, 6, 6, 6, 3, 3, 1];
+// stockpiling. The potion is a VERY RARE gift (~1 in 121 spawns — usually 0 on
+// a full 50-cell board, occasionally 1): tapped, not matched. Tweak to retune.
+export const SPAWN_WEIGHTS = [36, 18, 18, 18, 18, 9, 9, 1];
 const WEIGHT_SUM = SPAWN_WEIGHTS.reduce((a, b) => a + b, 0);
 
 /** Pick a tile id weighted by SPAWN_WEIGHTS (not a uniform 1/TYPES draw). */

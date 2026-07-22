@@ -301,7 +301,7 @@ class GameScene extends Phaser.Scene {
   // chests
   private chest: Phaser.GameObjects.Container | null = null; // the lane chest (body + key tag)
   private chestActive = false; // takeover sequence running — board input is frozen
-  private chestFast = false; // tap-to-skip: shortens every remaining beat
+  private chestFast = false; // the skip ▸ button shortens every remaining beat
   private sinceChest = 0; // kills since the last chest
   private chestsOpened = 0; // opened this run (banked into meta quest stats on death)
   private meta!: MetaState; // snapshot at run start — drives the in-run quest HUD
@@ -1978,8 +1978,20 @@ class GameScene extends Phaser.Scene {
     this.chestActive = true;
     this.chestsOpened++;
     this.chestFast = false;
-    const skip = () => (this.chestFast = true); // any tap fast-forwards the remaining beats
-    this.input.on("pointerdown", skip);
+    // a dedicated SKIP button (not "tap anywhere") — random taps during the
+    // reveal no longer accidentally fast-forward the payout
+    const skipBtn = this.add
+      .text(this.scale.width - 14, 14, "skip ▸", {
+        fontFamily: "monospace", fontStyle: "bold", fontSize: "14px", color: "#dfe3ea",
+        backgroundColor: "#14171f", padding: { x: 10, y: 6 },
+      })
+      .setOrigin(1, 0)
+      .setDepth(98)
+      .setScrollFactor(0)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerdown", () => (this.chestFast = true));
+    const repositionSkip = () => skipBtn.setPosition(this.scale.width - 14, 14);
+    this.scale.on("resize", repositionSkip);
 
     // the banked key flies from the HUD down into the lock — unless a Skeleton
     // Key is armed, in which case a ghostly one turns the lock for free
@@ -2137,7 +2149,8 @@ class GameScene extends Phaser.Scene {
     sparks.destroy();
 
     // back to the road
-    this.input.off("pointerdown", skip);
+    this.scale.off("resize", repositionSkip);
+    skipBtn.destroy();
     this.chestActive = false;
     if (!this.run.over) {
       spawnNext(this.run);

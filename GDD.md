@@ -103,7 +103,7 @@ is in `src/main.ts` (`GameScene`).
 ### 4.1 Dimensions & tiles
 - **Grid:** `W = 10` columns × `H = 5` rows (landscape board). `EMPTY = -1`.
 - **8 tile types** (`TYPES = 8` — the 7 matchables plus the RARE potion, id 7,
-  ~1/43 spawns: **tapped in place, not matched** → `POTION_GROUND = 0.12`
+  ~1/121 spawns: **tapped in place, not matched** → `POTION_GROUND = 0.12`
   pressure regained + `POTION_GUARD = 0.1` block; face composited at runtime
   from the treasure frame until real art lands), rendered as custom **84×84 ironbound pixel-art
   faces** loaded from `public/tiles/`:
