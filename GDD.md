@@ -227,18 +227,30 @@ pack, CC0, 150×150, flipped to face left).
 
 - **Entrance:** `summon` sting + haptic; the lane **darkens** (a veil); Malgrim
   walks in over ~2.1s; an **ember-gradient name banner** flies in and floats out;
-  a **wide named HP bar** (`☠ MALGRIM THE CINDERMAGE`) fills up dramatically
-  (the first hit cancels the intro fill).
-- **The fight:** he throws **fireballs** (`fireball1/2/3`) with harder shake and
-  a hotter seared tint. **Scroll pressure halves** during the fight
-  (`BOSS_SCROLL_MULT = 0.5`) — there are no intermediate kills to relieve
-  pressure, so the world "holds its breath."
-- **HP:** `BOSS_HP_MULT = 1.8` over a same-depth foe.
+  a **wide named bar** (`☠ MALGRIM THE CINDERMAGE · 🛡🪄`) fills up dramatically.
+- **The fight is a MODE BREAK — Malgrim's Infernal Shell Game** (phase
+  `"arena"`: scroll stops, strikes stop, the puzzle board retracts and burning
+  portals rise in its place). He hides among fiery decoys; **tap the REAL one**
+  (brief **cyan staff glint**; decoys burn red) before he casts. A correct tap
+  = the hero lunges and **cracks one of three wards** (the boss bar drains in
+  thirds); a decoy tap or timeout fires a **fireball** — one **guard charge**
+  turns it (the puzzle phase's shields matter here), otherwise the hero slides
+  toward the skull. Rounds escalate per `WARD_ROUNDS` (main.ts): 3 portals /
+  no decoys / 2400ms → 6 / 3 / 1800ms → 9 / 5 / 1450ms with two ghost feints.
+  After the third ward: he staggers back into the lane, exposed — **one tap
+  delivers the finishing dash-strike**. Misses re-deal the same ward; the only
+  clock is your own pressure. Hearth Charm revive resumes the game mid-arena.
 - **Death — the spoils:** flash + camera quake + a **coin/spark eruption**,
   `"CINDERMAGE FELLED!"`, **`BOSS_BOUNTY = 8` treasure**, +400 score, an extra
   **`BOSS_SURGE = 0.2`** pressure relief on top of the kill surge, and a
   **guaranteed chest** becomes due next (and waits if the item pack is full).
 - **Dev:** `__mb.debugBoss()` rigs the next foe as the boss.
+- **Future boss-minigame ideas** (for later biome bosses, so each boss breaks
+  the rules differently): Reflect the Fireballs (swipe projectiles back into
+  his wards) · Rune Sequence (Simon-style pattern repeat) · Shield the Caravan
+  (move a shield between fire-rain lanes) · Destroy the Ritual (hit glowing
+  stones, avoid cursed ones) · Spell Duel (read his cast colour, counter with
+  the sword/staff button before it completes).
 
 ---
 

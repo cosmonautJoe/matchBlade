@@ -143,6 +143,17 @@ const BOSS_SCALE = 1.25;
 const BOSS_ORIGIN = 0.675;
 const BOSS_ENGAGE_GAP = 220; // the robe and fire breath still need a wider stance
 const BOSS_NAME = "MALGRIM THE CINDERMAGE";
+// ---- Malgrim's Infernal Shell Game (the boss is a MODE BREAK) ---------------
+// The scroll stops, the board retracts, burning portals rise in its place and
+// Malgrim hides among decoys. Tap the REAL one (cyan staff glint) before he
+// casts; each correct hit cracks one of his three wards. Decoy taps / timeouts
+// fire a fireball — guard charges from the puzzle phase absorb them.
+const WARD_ROUNDS = [
+  { portals: 3, decoys: 0, windowMs: 2400, hops: 0 }, // one obvious target
+  { portals: 6, decoys: 3, windowMs: 1800, hops: 0 }, // red decoys join the game
+  { portals: 9, decoys: 5, windowMs: 1450, hops: 2 }, // he feints twice before settling
+] as const;
+const ARENA_FIREBALL_MS = 420; // his punishment bolt's flight time
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
 const HP_W = 70;
@@ -262,7 +273,7 @@ class GameScene extends Phaser.Scene {
 
   // runner
   private run!: RunState;
-  private phase: "advance" | "fight" | "chest" = "advance";
+  private phase: "advance" | "fight" | "chest" | "arena" = "advance"; // arena = boss shell game (no scroll/strikes/pan)
   private parallax: { sprite: Phaser.GameObjects.TileSprite; scroll: number }[] = [];
   private world: RunBiome = RUN_BIOMES.plains; // backdrop set for the current biome
   private floor!: Phaser.GameObjects.TileSprite;
@@ -272,6 +283,12 @@ class GameScene extends Phaser.Scene {
   private orcDefense: Defense = "none"; // the current foe's armor school (badge + callouts)
   private defenseTaught = false; // first resisted/weak hit per foe shows a callout
   private defBadge!: Phaser.GameObjects.Text; // 🛡⚔ / 🛡🪄 beside the HP bar
+
+  // Malgrim's Infernal Shell Game (boss arena — see WARD_ROUNDS)
+  private arenaActive = false;
+  private arenaGen = 0; // generation counter: stale arena timers bail out
+  private arenaObjs: Phaser.GameObjects.GameObject[] = []; // live portal/figure props
+  private wardsLeft = 3;
   private orcGap = ENGAGE_GAP; // engage distance for the current foe (wider for the boss)
   private orcDying = false;
   private bossBar: { root: Phaser.GameObjects.Container; fill: Phaser.GameObjects.Rectangle } | null = null;
@@ -429,6 +446,10 @@ class GameScene extends Phaser.Scene {
     this.targeting = null;
     this.targetObjs = [];
     this.hintObjs = [];
+    this.arenaActive = false;
+    this.arenaGen++;
+    this.arenaObjs = [];
+    this.wardsLeft = 3;
     this.tip = null;
     this.tipFor = -1;
     this.holdTimer = null;
@@ -921,7 +942,7 @@ class GameScene extends Phaser.Scene {
         this.onTargetTap(p); // an armed item is waiting for its board tap
         return;
       }
-      if (this.busy || this.run.over || this.chestActive || this.tutorial?.lockBoard) return;
+      if (this.busy || this.run.over || this.chestActive || this.arenaActive || this.tutorial?.lockBoard) return;
       const coord = this.cellAt(p.x, p.y);
       if (coord) this.down = { coord, x: p.x, y: p.y };
     });
@@ -997,7 +1018,8 @@ class GameScene extends Phaser.Scene {
     }
 
     if (this.run.over && !this.overShown) {
-      if (this.tryHearthRevive()) return; // the charm burns so you don't
+      if (this.tryHearthRevive()) return; // the charm burns so you don't (mid-arena, the game resumes)
+      if (this.arenaActive) this.teardownArena();
       this.showGameOver();
     }
   }
@@ -1030,7 +1052,8 @@ class GameScene extends Phaser.Scene {
     }
 
     // Cinder Flask: the foe burns — one tick per second while it lives
-    if (this.burnLeft > 0) {
+    // (held during the boss arena: wards fall to taps there, not to fire)
+    if (this.burnLeft > 0 && !this.arenaActive) {
       if (this.run.enemy && this.orc && !this.orcDying) {
         this.burnLeft = Math.max(0, this.burnLeft - dts);
         this.burnAcc += dts;
@@ -1183,6 +1206,10 @@ class GameScene extends Phaser.Scene {
 
   private enterFight() {
     if (this.run.over || !this.orc || this.orcDying) return;
+    if (this.orcAnim === "boss") {
+      this.startBossArena(); // Malgrim doesn't trade blows — he plays his shell game
+      return;
+    }
     this.phase = "fight";
     this.orc.play(`${this.orcAnim}-idle`);
     this.hero.play("hero-idle", true);
@@ -1640,7 +1667,7 @@ class GameScene extends Phaser.Scene {
 
   /** Light up a valid swap: two pulsing gold rings on the tiles to trade. */
   private showHint() {
-    if (this.busy || this.run.over || this.chestActive || this.tutorial?.active || this.targeting) return;
+    if (this.busy || this.run.over || this.chestActive || this.arenaActive || this.tutorial?.active || this.targeting) return;
     this.clearHint();
     const h = findHint(this.grid);
     if (!h) {
@@ -1803,6 +1830,377 @@ class GameScene extends Phaser.Scene {
       this.run.enemy = null;
       this.killOrc(0);
     }
+  }
+
+  // ================= MALGRIM'S INFERNAL SHELL GAME (boss arena) =================
+  // A mode break: the scroll stops (phase "arena"), the board retracts, burning
+  // portals rise where it stood and Malgrim hides among fiery decoys. Tap the
+  // REAL one (cyan staff glint) before he casts to crack a ward; wrong taps and
+  // timeouts fire a fireball that the puzzle phase's guard charges can absorb.
+  // Three wards, each round faster and busier, then a finishing strike.
+
+  private arenaWait(ms: number): Promise<void> {
+    return new Promise((res) => this.time.delayedCall(ms, res));
+  }
+
+  private clearArenaObjs() {
+    for (const o of this.arenaObjs) o.destroy();
+    this.arenaObjs = [];
+  }
+
+  /** Even spread of portal mouths across the retracted board's rect. */
+  private arenaPortalSpots(n: number): { x: number; y: number }[] {
+    const rows = n <= 3 ? 1 : n <= 6 ? 2 : 3;
+    const cols = 3;
+    const out: { x: number; y: number }[] = [];
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++)
+        out.push({ x: GRID_X + ((c + 0.5) / cols) * GRID_W, y: GRID_Y + ((r + 0.5) / rows) * GRID_H });
+    return out;
+  }
+
+  private startBossArena() {
+    this.arenaActive = true;
+    const gen = ++this.arenaGen;
+    this.phase = "arena"; // stationary arena: no scroll, no strikes, no world pan
+    this.wardsLeft = 3;
+    this.orc?.play("boss-idle");
+    this.hero.play("hero-idle", true);
+    this.notice("MALGRIM'S INFERNAL SHELL GAME", "#ff9d6a");
+    this.time.delayedCall(1000, () => {
+      if (gen === this.arenaGen) this.notice("tap the REAL Cindermage — watch for the cyan glint", "#ffd7a0");
+    });
+
+    // he quits the lane in a burst of embers — the game moves to the portals
+    this.time.delayedCall(600, () => {
+      if (gen !== this.arenaGen || !this.orc) return;
+      this.sfx("spell", 0.5, 0.8);
+      const puff = this.inBox(
+        this.add.image(this.orc.x, GROUND_Y - 40, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff8a4a).setScale(1).setDepth(30),
+      );
+      this.tweens.add({ targets: puff, scale: 3, alpha: 0, duration: 450, onComplete: () => puff.destroy() });
+      this.tweens.add({ targets: this.orc, alpha: 0, duration: 300 });
+    });
+
+    void (async () => {
+      while (this.busy) await this.arenaWait(120); // let any final cascade settle first
+      if (gen !== this.arenaGen || this.run.over) return;
+      await this.hideBoard();
+      await this.arenaWait(420);
+      if (gen !== this.arenaGen || this.run.over) return;
+      this.playArenaRound(gen);
+    })();
+  }
+
+  /** One deal of the shell game — retried on a miss, advanced on a hit. */
+  private playArenaRound(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    const cfg = WARD_ROUNDS[3 - this.wardsLeft];
+    const spots = this.arenaPortalSpots(cfg.portals);
+    const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
+      this.arenaObjs.push(o);
+      return o;
+    };
+
+    // burning portals flare up across the retracted board
+    const havePortalTex = this.textures.exists("portal");
+    spots.forEach((s, i) => {
+      const p = havePortalTex
+        ? reg(this.inBox(this.add.sprite(s.x, s.y + 26, "portal").setTint(0xff9a5a).setScale(0).setDepth(40).play("portal-spin")))
+        : reg(this.inBox(this.add.image(s.x, s.y + 26, "orb").setTint(0xff7a3a).setScale(0).setDepth(40)));
+      this.tweens.add({ targets: p, scale: havePortalTex ? 1.6 : 2.2, duration: 260, delay: i * 40, ease: "Back.easeOut" });
+    });
+    this.sfx("summon", 0.35, 1.25);
+
+    void (async () => {
+      await this.arenaWait(520);
+      if (gen !== this.arenaGen || this.run.over) return;
+
+      // final-ward feints: ghostly hops before he settles (tapping ghosts does nothing)
+      for (let h = 0; h < cfg.hops; h++) {
+        const at = spots[(Math.random() * spots.length) | 0];
+        const ghost = reg(
+          this.inBox(
+            this.add
+              .sprite(at.x, at.y + 24, "boss-idle")
+              .setOrigin(0.5, BOSS_ORIGIN)
+              .setScale(0.8)
+              .setFlipX(true)
+              .setAlpha(0.45)
+              .setTint(0xffc9a0)
+              .setDepth(41),
+          ),
+        );
+        this.sfx("spell", 0.3, 1.3 + h * 0.15);
+        this.tweens.add({ targets: ghost, alpha: 0, duration: 300, delay: 120 });
+        await this.arenaWait(340);
+        ghost.destroy();
+        if (gen !== this.arenaGen || this.run.over) return;
+      }
+
+      // the deal: one real Malgrim, cfg.decoys burning fakes
+      const order = Phaser.Utils.Array.Shuffle(spots.map((_, i) => i));
+      const realIdx = order[0];
+      const decoyIdxs = order.slice(1, 1 + cfg.decoys);
+      let settled = false;
+      const settle = () => {
+        if (settled || gen !== this.arenaGen) return false;
+        settled = true;
+        timeout.remove(false);
+        return true;
+      };
+
+      const mkFigure = (i: number, decoy: boolean) => {
+        const s = spots[i];
+        if (decoy) {
+          const glow = reg(
+            this.inBox(this.add.image(s.x, s.y - 14, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff4030).setScale(1.7).setAlpha(0.3).setDepth(40)),
+          );
+          this.tweens.add({ targets: glow, alpha: 0.14, duration: 420, yoyo: true, repeat: -1 });
+        }
+        const fig = reg(
+          this.inBox(
+            this.add
+              .sprite(s.x, s.y + 24, "boss-idle")
+              .setOrigin(0.5, BOSS_ORIGIN)
+              .setScale(0.4)
+              .setFlipX(true)
+              .setDepth(42)
+              .play("boss-idle"),
+          ),
+        );
+        if (decoy) fig.setTint(0xff6a55); // decoys burn red
+        this.tweens.add({ targets: fig, scale: 0.85, duration: 200, ease: "Back.easeOut" });
+        fig.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+          if (decoy) this.arenaFail(gen, settle, "decoy", spots[realIdx], s);
+          else this.arenaHit(gen, settle, fig, s);
+        });
+        return fig;
+      };
+
+      for (const d of decoyIdxs) mkFigure(d, true);
+      const realFig = mkFigure(realIdx, false);
+      this.sfx(this.pick(["squish1", "squish2"]), 0.2, 1.3);
+
+      // the tell: a brief cyan glint off the true staff
+      this.time.delayedCall(240, () => {
+        if (gen !== this.arenaGen || settled) return;
+        const glint = reg(
+          this.inBox(
+            this.add.image(realFig.x + 10, realFig.y - 58, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0x8ff4ff).setScale(0.6).setAlpha(0).setDepth(43),
+          ),
+        );
+        this.tweens.add({ targets: glint, alpha: 1, scale: 1.6, duration: 130, yoyo: true, repeat: 2, onComplete: () => glint.destroy() });
+        this.sfx("pickup", 0.3, 1.5);
+      });
+
+      const timeout = this.time.delayedCall(cfg.windowMs, () => this.arenaFail(gen, settle, "timeout", spots[realIdx], spots[realIdx]));
+    })();
+  }
+
+  /** Found him: lunge, crack a ward, and either re-deal faster or go for the kill. */
+  private arenaHit(gen: number, settle: () => boolean, fig: Phaser.GameObjects.Sprite, at: { x: number; y: number }) {
+    if (!settle()) return;
+    this.sfx("hit3", 0.55);
+    buzz(20);
+    fig.setTintFill(0xffffff);
+    this.time.delayedCall(90, () => fig.clearTint());
+
+    // the hero lunges from the lane; the blow lands as sparks at the portal
+    this.heroLockX = true;
+    this.playCombo(["hero-attack2"], "hero-idle");
+    this.sfx("swing2", 0.35);
+    this.tweens.add({ targets: this.hero, x: this.hero.x + 26, duration: 140, yoyo: true, ease: "Quad.easeOut" });
+    const slash = this.inBox(
+      this.add
+        .particles(at.x, at.y - 20, "spark", {
+          speed: { min: 120, max: 320 }, lifespan: { min: 200, max: 480 },
+          scale: { start: 1.3, end: 0 }, blendMode: "ADD", tint: 0xbfefff, emitting: false,
+        })
+        .setDepth(44),
+    );
+    slash.explode(22);
+    this.time.delayedCall(700, () => slash.destroy());
+
+    this.time.delayedCall(300, () => {
+      if (gen !== this.arenaGen) return;
+      this.heroLockX = false;
+      this.wardsLeft--;
+      // the boss bar IS the ward meter — it shatters in thirds
+      if (this.bossBar) {
+        this.tweens.killTweensOf(this.bossBar.fill);
+        this.tweens.add({ targets: this.bossBar.fill, scaleX: this.wardsLeft / 3, duration: 260, ease: "Quad.easeOut" });
+      }
+      this.cameras.main.shake(200, 0.007);
+      this.sfx(`combo${5 - this.wardsLeft}`, 0.55); // combo3/4/5 as the wards fall
+      this.notice(
+        this.wardsLeft === 2 ? "A WARD SHATTERS!" : this.wardsLeft === 1 ? "ANOTHER WARD BREAKS!" : "HIS LAST WARD FALLS!",
+        "#8ff4ff",
+      );
+      this.clearArenaObjs();
+      this.time.delayedCall(750, () => {
+        if (gen !== this.arenaGen || this.run.over) return;
+        if (this.wardsLeft > 0) this.playArenaRound(gen);
+        else this.arenaExecution(gen);
+      });
+    });
+  }
+
+  /** A decoy, or too slow: the real Malgrim answers with fire. Guard absorbs it. */
+  private arenaFail(gen: number, settle: () => boolean, why: "decoy" | "timeout", realAt: { x: number; y: number }, from: { x: number; y: number }) {
+    if (!settle()) return;
+    if (why === "decoy") {
+      this.notice("a decoy!", "#ff8a6a");
+      const puff = this.inBox(this.add.image(from.x, from.y - 16, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff5030).setScale(1).setDepth(44));
+      this.tweens.add({ targets: puff, scale: 2.6, alpha: 0, duration: 380, onComplete: () => puff.destroy() });
+      this.sfx("fireball1", 0.35, 0.8);
+    } else {
+      this.notice("too slow — he casts!", "#ff8a6a");
+    }
+
+    // his punishment bolt streaks from the true portal at the hero
+    const bolt = this.inBox(
+      this.add.image(realAt.x, realAt.y - 20, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff7733).setScale(1.5).setDepth(46),
+    );
+    this.sfx(this.pick(["fireball2", "fireball3"]), 0.5);
+    this.tweens.add({
+      targets: bolt,
+      x: this.hero.x + 8,
+      y: GROUND_Y - 40,
+      duration: ARENA_FIREBALL_MS,
+      ease: "Sine.easeIn",
+      onComplete: () => {
+        bolt.destroy();
+        if (gen !== this.arenaGen) return;
+        const hadGuard = this.run.block > 0;
+        const net = enemyStrike(this.run); // one guard charge turns it; else the skull creeps closer
+        this.refreshHud();
+        if (hadGuard && net <= 0) {
+          this.time.delayedCall(60, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.5));
+          this.showBlockImpact(true, true);
+        } else {
+          this.cameras.main.shake(260, 0.009);
+          this.hero.setTint(0xffa060);
+          this.time.delayedCall(200, () => this.hero.clearTint());
+          buzz(24);
+        }
+        this.clearArenaObjs();
+        this.time.delayedCall(800, () => {
+          if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+          this.playArenaRound(gen); // same ward, fresh deal
+        });
+      },
+    });
+  }
+
+  /** Third ward down: he staggers back into the lane, helpless. One tap ends it. */
+  private arenaExecution(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.orc) return;
+    this.clearArenaObjs();
+    this.notice("HE IS EXPOSED — STRIKE HIM DOWN!", "#ffd24a");
+    this.sfx("summon", 0.45, 0.8);
+
+    // he re-materialises in the lane, drained and flickering
+    this.orc.setAlpha(0).setTint(0x9a94b8).play("boss-hurt");
+    this.tweens.add({ targets: this.orc, alpha: 1, duration: 420 });
+    this.orc.once("animationcomplete", () => {
+      if (this.orc && this.orcAnim === "boss") this.orc.play("boss-idle");
+    });
+
+    const ring = this.arenaObjs[this.arenaObjs.push(
+      this.inBox(this.add.ellipse(this.orc.x, GROUND_Y - 34, 96, 116).setStrokeStyle(4, 0xffd24a, 0.95).setDepth(44)),
+    ) - 1] as Phaser.GameObjects.Ellipse;
+    this.tweens.add({ targets: ring, scaleX: 1.18, scaleY: 1.18, alpha: 0.4, duration: 480, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+
+    const zone = this.arenaObjs[this.arenaObjs.push(
+      this.inBox(this.add.rectangle(this.orc.x, GROUND_Y - 40, 150, 170, 0xffffff, 0.001).setDepth(45).setInteractive({ useHandCursor: true })),
+    ) - 1] as Phaser.GameObjects.Rectangle;
+    zone.on("pointerdown", () => this.arenaFinisher(gen));
+  }
+
+  /** The finishing strike: dash across the arena and end him. */
+  private arenaFinisher(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.orc || this.orcDying) return;
+    this.clearArenaObjs(); // ring + tap zone
+    this.heroLockX = true;
+    this.hero.play("hero-walk", true);
+    this.sfx("swing3", 0.5);
+    this.tweens.add({
+      targets: this.hero,
+      x: this.orc.x - 52,
+      duration: 260,
+      ease: "Quad.easeIn",
+      onComplete: () => {
+        if (gen !== this.arenaGen || this.run.over) {
+          this.heroLockX = false;
+          return;
+        }
+        this.playCombo(["hero-attack3"]);
+        this.sfx("combo6", 0.6);
+        buzz(40);
+        this.cameras.main.shake(320, 0.012);
+        const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xfff2d8, 0.85).setDepth(48));
+        this.tweens.add({ targets: flash, fillAlpha: 0, duration: 420, onComplete: () => flash.destroy() });
+        this.time.delayedCall(260, () => {
+          if (gen !== this.arenaGen) return;
+          if (this.run.enemy) dealDamage(this.run, this.run.enemy.hp); // the killing blow: score, surge, the lot
+          this.killOrc(700); // death + bossSpoils + the road onward
+          this.surgeAfterKill(800);
+          this.arenaActive = false;
+          this.time.delayedCall(1100, () => this.showBoard()); // the puzzle rises back as the coins rain
+        });
+      },
+    });
+  }
+
+  /** Retract the puzzle — the tiles sink away so the portals own the space. */
+  private hideBoard(): Promise<void> {
+    return new Promise((res) => {
+      let pending = 0;
+      for (let r = 0; r < H; r++)
+        for (let c = 0; c < W; c++) {
+          const t = this.tiles[r][c];
+          if (!t) continue;
+          pending++;
+          this.tweens.add({
+            targets: t,
+            alpha: 0,
+            y: t.y + 30,
+            duration: 240,
+            delay: c * 16,
+            ease: "Quad.easeIn",
+            onComplete: () => {
+              t.y -= 30; // park it back on its cell, just invisible
+              if (--pending === 0) res();
+            },
+          });
+        }
+      if (pending === 0) res();
+    });
+  }
+
+  /** The board rises back into play. */
+  private showBoard() {
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++) {
+        const t = this.tiles[r][c];
+        if (!t) continue;
+        this.tweens.killTweensOf(t);
+        t.setAlpha(0).setPosition(this.xFor(c), this.yFor(r));
+        this.tweens.add({ targets: t, alpha: 1, duration: 280, delay: (c + r) * 12 });
+      }
+  }
+
+  /** Death (or scene teardown) mid-game: clear the props, restore the board. */
+  private teardownArena() {
+    this.arenaGen++;
+    this.clearArenaObjs();
+    this.arenaActive = false;
+    if (this.orc) {
+      this.tweens.killTweensOf(this.orc);
+      this.orc.setAlpha(1);
+    }
+    this.showBoard();
   }
 
   private strike(force = false) {
@@ -2259,6 +2657,10 @@ class GameScene extends Phaser.Scene {
     const def = slot.item;
     if (!def) return;
     if (this.run.over || this.chestActive || this.tutorial?.active) return;
+    if (this.arenaActive) {
+      this.notice("not while Malgrim plays his game", "#9aa0ab");
+      return;
+    }
     this.hideTip();
     if (this.targeting) {
       // tapping the armed slot again (or any slot) backs out of aiming

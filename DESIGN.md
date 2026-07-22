@@ -175,16 +175,20 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
     enemy art (boar/bee/snail) is staged for later.
   - Runner state is a pure, unit-tested module (`src/run.ts`); a single
     `pressure` value in [0,1] is the fail axis (see §4).
-  - **Boss encounters (SHIPPED):** every `BOSS_EVERY`th (10th) foe is **MALGRIM
-    THE CINDERMAGE** (Evil Wizard pack, CC0, flipped to face left). Entrance:
-    summon sting, the lane darkens, ember-gradient name banner, wide named HP
-    bar with a dramatic fill-up. He fights with fireball strikes (harder shake,
-    seared tint); scroll pressure halves during the fight (`BOSS_SCROLL_MULT` —
-    no intermediate kills means no relief). Death: flash + quake + coin/spark
-    eruption, "CINDERMAGE FELLED!", `BOSS_BOUNTY` treasure, an extra
-    `BOSS_SURGE` of pressure relief, and a guaranteed chest becomes due next
-    (it waits if all 6 item slots are occupied).
-    Dev: `__mb.debugBoss()` rigs the next foe. Knobs live in run.ts.
+  - **Boss encounters (SHIPPED — now a MODE BREAK):** every `BOSS_EVERY`th
+    (10th) foe is **MALGRIM THE CINDERMAGE** (Evil Wizard pack, CC0). His
+    dramatic entrance stays (veil, ember name banner, wide named bar), but the
+    fight is **Malgrim's Infernal Shell Game**: phase `"arena"` stops scroll +
+    strikes, the puzzle board retracts, burning portals rise (camp portal art,
+    fire-tinted) and he hides among red-burning decoys. Tap the REAL one (cyan
+    staff glint) to crack one of **three wards** (the boss bar drains in
+    thirds); decoy taps / timeouts fire a fireball that a single **guard
+    charge** turns (shield play in the puzzle phase = mistakes forgiven).
+    Rounds escalate (`WARD_ROUNDS` in main.ts: 3→6→9 portals, faster windows,
+    ghost feints on the last ward). Third ward down → he staggers back into
+    the lane, exposed — one tap triggers the finishing dash-strike, then the
+    usual spoils (bounty, surge, hoard chest) and the board rises back.
+    Dev: `__mb.debugBoss()` rigs the next foe. Knobs: WARD_ROUNDS + run.ts.
   - **Ambient soundscape + weather (SHIPPED):** a looping forest bed under
     every run (`amb_day`), with a `RAIN_CHANCE` roll per run that swaps in
     `amb_rain` plus rain streaks + an overcast wash over the lane. Camp adds
