@@ -198,8 +198,9 @@ Applied in `applyMatches(run, counts)` per resolved cascade:
   Malgrim — spells ×0.5, swords ×1.5); green slimes are plain. `RESIST_MULT`
   0.5 / `WEAK_MULT` 1.5; badge 🛡⚔ / 🛡🪄 by the HP bar; gray "resisted" and
   gold "WEAK!" numbers + a first-hit callout teach the rule.
-- **Shields** add block: `BLOCK_PER_SHIELD = 0.05` pressure absorbed per shield,
-  stockpiled until spent by a strike.
+- **Shields** bank guard CHARGES (1 per tile): one charge fully turns one enemy
+  strike regardless of its power — guard scales UP in value as foes strengthen —
+  and every block shoves the foe back (`BLOCK_PUSHBACK = 0.05` ground regained).
 - **Kill surge:** `ADVANCE_PER_KILL = 0.3` pressure removed (hero lunges
   forward), +100 score, then the next enemy spawns.
 - **Scoring:** resources ×2, damage ×5, +100 per kill (+400 per boss).
@@ -562,8 +563,9 @@ Master knobs, current values (edit these to retune the game):
 `SWORD_MAIN=5`, `SWORD_EXTRA=2` (→ 5/7/9 dmg for 3/4/5+),
 `SPELL_DMG={3:9,4:14,5:20}` +`SPELL_EXTRA=3`/tile past 5 (tier 5 burns),
 defenses `RESIST_MULT=0.5`/`WEAK_MULT=1.5` (hide=anti-sword, ward=anti-spell),
-`BLOCK_PER_SHIELD=0.05` (+`BLOCK_PUSHBACK=0.05` ground on a PERFECT block —
-the riposte shove), potion `POTION_GROUND=0.12`/`POTION_GUARD=0.1`,
+block = CHARGES (1/shield tile; one turns a whole strike + `BLOCK_PUSHBACK=0.05`
+ground — the riposte shove), potion `POTION_GROUND=0.12`/`POTION_GUARD=2` charges,
+Bulwark Brew = 6 charges,
 `ADVANCE_PER_KILL=0.3`, `SAFE_X=PADIN+430` (longer starting runway),
 `ENEMY_BASE_HP=9` (+3/kill), `ENEMY_BASE_POWER=0.075` (+0.015/kill).
 

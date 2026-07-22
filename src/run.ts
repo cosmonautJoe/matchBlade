@@ -48,7 +48,7 @@ export interface Resources {
 
 export interface RunState {
   pressure: number; // 0 safe .. 1 dead
-  block: number; // shield stockpile, mitigates the next strike (pressure units)
+  block: number; // shield CHARGES banked — each one fully turns one enemy strike
   enemy: Enemy | null;
   killed: number; // enemies defeated this run
   score: number;
@@ -74,13 +74,15 @@ export const SPELL_BURN_TIER = 5; // a Pyroclasm leaves the foe burning (scene a
 // Defense multipliers — resisted hits still land SOMETHING (min 1 per swing).
 export const RESIST_MULT = 0.5;
 export const WEAK_MULT = 1.5;
-export const BLOCK_PER_SHIELD = 0.05; // pressure absorbed per shield tile
-// A PERFECT block (guard soaks the whole strike) also shoves the foe back —
-// shields stop being purely defensive and win ground.
+// Blocking is CHARGES, not a pressure pool: every shield tile banks one charge,
+// and one charge fully turns one strike no matter how hard it lands — so guard
+// grows MORE valuable as foes grow stronger, never less. (The old pool model
+// silently ate 3-4 shields per mid-run strike, which read as a bug.)
+// A block also shoves the foe back — shields win ground, not just hold it.
 export const BLOCK_PUSHBACK = 0.05;
 // The potion tile, drunk on tap: a stride of ground regained + a swig of guard.
 export const POTION_GROUND = 0.12;
-export const POTION_GUARD = 0.1; // two shields' worth
+export const POTION_GUARD = 2; // charges
 export const ADVANCE_PER_KILL = 0.3; // pressure removed (hero surge) per kill
 // Damage per match now runs 5 / 7 / 9 (for 3 / 4 / 5+ swords). Base HP sits ~one
 // strong combo so early foes fall fast; a couple of small matches also do it.
@@ -207,7 +209,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay 1:1 — they're tension)
   const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: n(KEY) };
 
-  s.block += n(SHIELD) * BLOCK_PER_SHIELD;
+  s.block += n(SHIELD); // one charge per shield tile
   s.resources.wood += gained.wood;
   s.resources.ore += gained.ore;
   s.resources.treasure += gained.treasure;
@@ -268,18 +270,20 @@ export function spawnNext(s: RunState): Enemy | null {
 }
 
 /**
- * The current enemy strikes: block absorbs first, remainder shoves pressure.
- * A PERFECT block answers back — the guard turns the blow and shoves the foe,
- * so the hero gains BLOCK_PUSHBACK of ground instead of just standing firm.
+ * The current enemy strikes. With a charge banked, ONE shield turns the whole
+ * blow — and the guard answers back, shoving the foe BLOCK_PUSHBACK of ground.
+ * With no guard, the full strike shoves the hero toward the skull.
  */
 export function enemyStrike(s: RunState): number {
   if (s.over || !s.enemy) return 0;
-  const raw = s.enemy.power;
-  const absorbed = Math.min(s.block, raw);
-  s.block -= absorbed;
-  const net = raw - absorbed;
+  if (s.block > 0) {
+    s.block -= 1; // one charge, one turned strike — regardless of the foe's power
+    s.pressure = Math.max(0, s.pressure - BLOCK_PUSHBACK); // the riposte shove
+    clampPressure(s);
+    return 0;
+  }
+  const net = s.enemy.power;
   s.pressure += net;
-  if (absorbed > 0 && net <= 0) s.pressure = Math.max(0, s.pressure - BLOCK_PUSHBACK); // the riposte shove
   clampPressure(s);
   return net;
 }

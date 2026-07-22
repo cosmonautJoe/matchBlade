@@ -54,7 +54,6 @@ import {
   enemyStrike,
   spawnNext,
   scroll,
-  BLOCK_PER_SHIELD,
   BOSS_EVERY,
   BOSS_SCROLL_MULT,
   BOSS_BOUNTY,
@@ -1061,7 +1060,7 @@ class GameScene extends Phaser.Scene {
   /** The buff readout under the quests: charges, timers, armed keys, the road ahead. */
   private renderBuffs() {
     const parts: string[] = [];
-    if (this.run.block >= BLOCK_PER_SHIELD / 2) parts.push(`🛡️×${Math.ceil(this.run.block / BLOCK_PER_SHIELD)}`);
+    if (this.run.block > 0) parts.push(`🛡️×${this.run.block}`); // guard charges, 1:1
     if (this.run.whetstone > 0) parts.push(`🗡️×${this.run.whetstone}`);
     if (this.hornLeft > 0) parts.push(`📯${Math.ceil(this.hornLeft)}s`);
     if (this.freezeLeft > 0) parts.push(`🗿${Math.ceil(this.freezeLeft)}s`);

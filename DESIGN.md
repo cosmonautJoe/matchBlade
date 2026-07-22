@@ -91,7 +91,7 @@ caravan follows, world by world (grass → forest → jungle → snow → dungeo
   | recruit     | wants     | upgrades                                   |
   |-------------|-----------|--------------------------------------------|
   | Blacksmith  | ore       | sword damage (`SWORD_MAIN` / `SWORD_EXTRA`) |
-  | Carpenter   | wood      | shield block (`BLOCK_PER_SHIELD`)          |
+  | Carpenter   | wood      | guard (e.g. bonus charges / stronger shove) |
   | Hedge-witch | wood+ore  | spell power (`SPELL_DMG` tiers)            |
   | Cook        | wood      | steadier pace (scroll rate / surge per kill) |
 
