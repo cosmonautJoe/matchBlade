@@ -18,6 +18,7 @@ export const KEY = 3;
 export const TREASURE = 4;
 export const WOOD = 5;
 export const ORE = 6;
+export const POTION = 7; // rare board gift: tapped (not matched) to drink
 
 /** Which slime sheet the scene dresses the foe in (boss = the Cindermage). */
 export type EnemyVariant = "green" | "blue" | "dark" | "boss";
@@ -74,6 +75,12 @@ export const SPELL_BURN_TIER = 5; // a Pyroclasm leaves the foe burning (scene a
 export const RESIST_MULT = 0.5;
 export const WEAK_MULT = 1.5;
 export const BLOCK_PER_SHIELD = 0.05; // pressure absorbed per shield tile
+// A PERFECT block (guard soaks the whole strike) also shoves the foe back —
+// shields stop being purely defensive and win ground.
+export const BLOCK_PUSHBACK = 0.05;
+// The potion tile, drunk on tap: a stride of ground regained + a swig of guard.
+export const POTION_GROUND = 0.12;
+export const POTION_GUARD = 0.1; // two shields' worth
 export const ADVANCE_PER_KILL = 0.3; // pressure removed (hero surge) per kill
 // Damage per match now runs 5 / 7 / 9 (for 3 / 4 / 5+ swords). Base HP sits ~one
 // strong combo so early foes fall fast; a couple of small matches also do it.
@@ -260,7 +267,11 @@ export function spawnNext(s: RunState): Enemy | null {
   return s.enemy;
 }
 
-/** The current enemy strikes: block absorbs first, remainder shoves pressure. */
+/**
+ * The current enemy strikes: block absorbs first, remainder shoves pressure.
+ * A PERFECT block answers back — the guard turns the blow and shoves the foe,
+ * so the hero gains BLOCK_PUSHBACK of ground instead of just standing firm.
+ */
 export function enemyStrike(s: RunState): number {
   if (s.over || !s.enemy) return 0;
   const raw = s.enemy.power;
@@ -268,8 +279,18 @@ export function enemyStrike(s: RunState): number {
   s.block -= absorbed;
   const net = raw - absorbed;
   s.pressure += net;
+  if (absorbed > 0 && net <= 0) s.pressure = Math.max(0, s.pressure - BLOCK_PUSHBACK); // the riposte shove
   clampPressure(s);
   return net;
+}
+
+/** Drink a tapped potion tile: regain ground, raise the guard, small score nip. */
+export function drinkPotion(s: RunState): void {
+  if (s.over) return;
+  s.pressure = Math.max(0, s.pressure - POTION_GROUND);
+  s.block += POTION_GUARD;
+  s.score += 30;
+  clampPressure(s);
 }
 
 /** Constant scroll pressure for a frame; `dp` is the pressure to add. */

@@ -102,7 +102,10 @@ is in `src/main.ts` (`GameScene`).
 
 ### 4.1 Dimensions & tiles
 - **Grid:** `W = 10` columns × `H = 5` rows (landscape board). `EMPTY = -1`.
-- **7 tile types** (`TYPES = 7`), rendered as custom **84×84 ironbound pixel-art
+- **8 tile types** (`TYPES = 8` — the 7 matchables plus the RARE potion, id 7,
+  ~1/43 spawns: **tapped in place, not matched** → `POTION_GROUND = 0.12`
+  pressure regained + `POTION_GUARD = 0.1` block; face composited at runtime
+  from the treasure frame until real art lands), rendered as custom **84×84 ironbound pixel-art
   faces** loaded from `public/tiles/`:
 
 | id | tile | visual | effect (context-sensitive) |
@@ -559,7 +562,9 @@ Master knobs, current values (edit these to retune the game):
 `SWORD_MAIN=5`, `SWORD_EXTRA=2` (→ 5/7/9 dmg for 3/4/5+),
 `SPELL_DMG={3:9,4:14,5:20}` +`SPELL_EXTRA=3`/tile past 5 (tier 5 burns),
 defenses `RESIST_MULT=0.5`/`WEAK_MULT=1.5` (hide=anti-sword, ward=anti-spell),
-`BLOCK_PER_SHIELD=0.05`, `ADVANCE_PER_KILL=0.3`,
+`BLOCK_PER_SHIELD=0.05` (+`BLOCK_PUSHBACK=0.05` ground on a PERFECT block —
+the riposte shove), potion `POTION_GROUND=0.12`/`POTION_GUARD=0.1`,
+`ADVANCE_PER_KILL=0.3`, `SAFE_X=PADIN+430` (longer starting runway),
 `ENEMY_BASE_HP=9` (+3/kill), `ENEMY_BASE_POWER=0.075` (+0.015/kill).
 
 **Bosses (`run.ts`):** `BOSS_EVERY=10`, `BOSS_HP_MULT=1.8`, `BOSS_SCROLL_MULT=0.5`,

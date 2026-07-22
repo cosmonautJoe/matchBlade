@@ -48,6 +48,7 @@ facing an enemy; keys only when at a lock; resources always stockpile.
 | 4  | treasure  | diamonds — rare currency: hire certain recruits, premium tiers |
 | 5  | wood      | crafting resource (spent at the caravan camp)                 |
 | 6  | ore       | crafting resource (spent at the caravan camp)                 |
+| 7  | potion    | RARE (~1/43 spawn); **tapped, not matched** — regain ground + a swig of guard |
 
 Production tile faces are 84×84 transparent pixel-art PNGs in `public/tiles/`.
 `TILE_ART` in `src/main.ts` maps each logical type to its preloaded texture.

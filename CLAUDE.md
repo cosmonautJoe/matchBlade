@@ -21,7 +21,8 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
   Deploy only when the user asks (it publishes).
 
 ## Architecture (src/)
-- `board.ts` — pure match-3 grid logic (no Phaser). W=10 x H=5, 7 tile types,
+- `board.ts` — pure match-3 grid logic (no Phaser). W=10 x H=5, 8 tile types
+  (incl. the rare tap-to-drink potion, id 7),
   weighted spawns (`SPAWN_WEIGHTS`).
 - `run.ts` — pure run/combat state. Single fail axis: `pressure` 0→1 (skull).
   All combat/boss tuning knobs live here.

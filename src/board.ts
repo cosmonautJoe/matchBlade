@@ -14,15 +14,16 @@
 export const W = 10; // columns
 export const H = 5; // rows  (landscape dungeon-runner board is 10 wide x 5 tall)
 
-// Tile types: sword, staff, shield, key, treasure, wood, ore  (see DESIGN.md)
-export const TYPES = 7;
+// Tile types: sword, staff, shield, key, treasure, wood, ore, potion (see DESIGN.md)
+export const TYPES = 8;
 export const EMPTY = -1;
 
-// Spawn weights per tile id (sword, staff, shield, key, treasure, wood, ore).
+// Spawn weights per tile id (sword, staff, shield, key, treasure, wood, ore, potion).
 // The board favours fighting: sword drops twice as often as a baseline tile and
 // raw resources (wood/ore) half as often, so matches lean toward damage over
-// stockpiling. Tweak these to retune the economy. Must have TYPES entries.
-export const SPAWN_WEIGHTS = [4, 2, 2, 2, 2, 1, 1];
+// stockpiling. The potion is a RARE gift (~1 in 43 spawns — usually 0-2 on a
+// full board): tapped, not matched. Tweak these to retune the economy.
+export const SPAWN_WEIGHTS = [12, 6, 6, 6, 6, 3, 3, 1];
 const WEIGHT_SUM = SPAWN_WEIGHTS.reduce((a, b) => a + b, 0);
 
 /** Pick a tile id weighted by SPAWN_WEIGHTS (not a uniform 1/TYPES draw). */

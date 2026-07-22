@@ -45,10 +45,12 @@ import {
   TREASURE,
   WOOD,
   ORE,
+  POTION,
   newRun,
   applyMatches,
   dealDamage,
   castBlast,
+  drinkPotion,
   enemyStrike,
   spawnNext,
   scroll,
@@ -132,7 +134,7 @@ const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
 const HERO_ORIGIN = 0.734; // WarriorMan feet at y47/64
 const SLIME_ORIGIN = 0.656; // slime base at y41/64
 const SKULL_X = PADIN + 28; // death marker at the far left of the lane
-const SAFE_X = PADIN + 300; // hero x at pressure 0
+const SAFE_X = PADIN + 430; // hero x at pressure 0 — a longer runway to the skull reads as more starting health
 const ENGAGE_GAP = 160; // combat spacing inside the compact runner strip
 const ENTER_X = CENTER_DW + 80; // enemies walk in from off the right
 const HERO_SCALE = 2.7;
@@ -212,6 +214,10 @@ const TILE_ART = [
   { key: "tile-wood", file: "tiles/wood.png" },
   { key: "tile-ore", file: "tiles/ore.png" },
 ] as const;
+// The potion face is composited at runtime from the treasure tile's ironbound
+// frame (buildPotionArt) — swap for a real tiles/potion.png when one is drawn.
+const POTION_ART_KEY = "tile-potion";
+const tileArtKey = (type: number) => (type === POTION ? POTION_ART_KEY : TILE_ART[type].key);
 const TILE_SHINE_KEY = "tile-shine";
 const TILE_SHINE_ANIM = "tile-shine-sweep";
 const TILE_SHINE_FRAMES = 11; // empty bookends + 9-frame diagonal glint
@@ -429,10 +435,12 @@ class GameScene extends Phaser.Scene {
     this.holdTimer = null;
     this.holdShown = false;
     this.buffStr = "";
+    this.buildPotionArt(); // before the filter pass + shard baking so it's a full citizen
     // The rest of the game keeps crisp nearest-neighbour sampling, but these
     // detailed composite faces need linear minification when the responsive
     // shell displays them below their native 84px size.
     for (const tile of TILE_ART) this.textures.get(tile.key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    this.textures.get(POTION_ART_KEY).setFilter(Phaser.Textures.FilterMode.LINEAR);
     this.buildTilePolish();
     this.buildTileFaces();
     this.buildChestArt();
@@ -891,7 +899,7 @@ class GameScene extends Phaser.Scene {
       for (let c = 0; c < W; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
   }
   private makeTile(r: number, c: number, type: number): Phaser.GameObjects.Container {
-    const face = this.add.image(0, 0, TILE_ART[type].key).setDisplaySize(FACE, FACE);
+    const face = this.add.image(0, 0, tileArtKey(type)).setDisplaySize(FACE, FACE);
     const shine = this.add
       .sprite(0, 0, TILE_SHINE_KEY, 0)
       .setDisplaySize(FACE, FACE)
@@ -927,7 +935,11 @@ class GameScene extends Phaser.Scene {
       this.down = null;
       const dx = p.x - x;
       const dy = p.y - y;
-      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) {
+        // a TAP (not a drag): the rare potion tile is drunk in place
+        if (this.grid[coord.r][coord.c] === POTION) void this.drinkPotionAt(coord);
+        return;
+      }
       const target: Coord =
         Math.abs(dx) > Math.abs(dy)
           ? { r: coord.r, c: coord.c + (dx > 0 ? 1 : -1) }
@@ -1580,6 +1592,53 @@ class GameScene extends Phaser.Scene {
     this.hintObjs = [];
   }
 
+  /** Drink a tapped potion tile: ground regained + guard raised, in green. */
+  private async drinkPotionAt(cell: Coord) {
+    this.busy = true;
+    this.clearHint();
+    this.sfx("pickup", 0.55, 0.85);
+    buzz(16);
+
+    // the tile shatters like any match...
+    const t = this.tiles[cell.r][cell.c];
+    if (t) void this.shatter(t, POTION);
+    this.tiles[cell.r][cell.c] = null;
+    this.grid[cell.r][cell.c] = EMPTY;
+
+    // ...and the tonic hits: pressure relief (hero strides right via update) + guard
+    drinkPotion(this.run);
+    this.refreshHud();
+
+    // green surge on the hero: rising glow + a heal chip + guard chip
+    const glow = this.inBox(
+      this.add.image(this.hero.x, GROUND_Y - 36, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0x6dff9e).setScale(0.7).setAlpha(0.95).setDepth(47),
+    );
+    this.tweens.add({ targets: glow, scale: 2.8, alpha: 0, y: glow.y - 46, duration: 620, ease: "Quad.easeOut", onComplete: () => glow.destroy() });
+    const sparks = this.inBox(
+      this.add
+        .particles(this.hero.x, GROUND_Y - 30, "spark", {
+          speed: { min: 40, max: 150 }, angle: { min: 230, max: 310 }, lifespan: { min: 300, max: 650 },
+          scale: { start: 1.0, end: 0 }, blendMode: "ADD", tint: 0x6dff9e, emitting: false,
+        })
+        .setDepth(46),
+    );
+    sparks.explode(16);
+    this.time.delayedCall(800, () => sparks.destroy());
+    this.floatChip(this.hero.x, GROUND_Y - 104, "+♥", {
+      size: 32,
+      tint: [0xeafff0, 0xa9f5c0, 0x54c26e, 0x2e7a44],
+      stroke: "#052a12",
+      font: EMOJI_FONT,
+    });
+    this.floatGuard(this.hero.x + 30, GROUND_Y - 76, 2, 220); // the tonic hardens the guard too
+    this.notice("the tonic takes hold — ground regained", "#a9f5c0");
+
+    await this.collapse();
+    await this.resolve(); // the refill can cascade like any clear
+    if (!this.run.over && !hasPossibleMove(this.grid)) await this.animatedReshuffle("no moves left — fresh tiles");
+    this.busy = false;
+  }
+
   /** Light up a valid swap: two pulsing gold rings on the tiles to trade. */
   private showHint() {
     if (this.busy || this.run.over || this.chestActive || this.tutorial?.active || this.targeting) return;
@@ -1768,6 +1827,28 @@ class GameScene extends Phaser.Scene {
       this.cameras.main.shake(isBoss ? 260 : 150, isBoss ? 0.009 : 0.006);
       this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
       this.time.delayedCall(isBoss ? 200 : 130, () => this.hero.clearTint());
+    } else if (blocked) {
+      // PERFECT block: run.ts already banked the riposte shove (BLOCK_PUSHBACK)
+      // — the hero steps up via update(); sell the foe being knocked away too
+      this.time.delayedCall(120, () => {
+        if (!this.orc || this.orcDying) return;
+        const rest = this.orcGap; // strikes are seconds apart — no overlap to guard
+
+        this.tweens.add({
+          targets: this,
+          orcGap: rest + 34,
+          duration: 150,
+          yoyo: true,
+          ease: "Quad.easeOut",
+          onComplete: () => (this.orcGap = rest),
+        });
+        buzz(18);
+        this.floatChip(this.hero.x + 34, GROUND_Y - 96, "SHOVE!", {
+          size: 22,
+          tint: [0xeef6ff, 0xbfe0ff, 0x6ea8e0, 0x3a6a9a],
+          stroke: "#050d16",
+        });
+      });
     }
   }
 
@@ -2897,6 +2978,39 @@ class GameScene extends Phaser.Scene {
     }
   }
   /** Copy one composite tile face to an offscreen canvas for crack slicing. */
+  /**
+   * Composite the potion tile face: the treasure tile's ironbound frame with
+   * its inset repainted dark and a glowing flask stamped in. Placeholder until
+   * a real tiles/potion.png is drawn — keeps the shared frame silhouette.
+   */
+  private buildPotionArt() {
+    if (this.textures.exists(POTION_ART_KEY)) return;
+    const src = this.textures.get("tile-treasure").getSourceImage() as HTMLImageElement;
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = 84;
+    const g = cv.getContext("2d")!;
+    g.drawImage(src, 0, 0, 84, 84);
+    // repaint the inset so the treasure icon vanishes beneath a dark apothecary green
+    g.beginPath();
+    g.roundRect(15, 15, 54, 54, 9);
+    g.fillStyle = "#101712";
+    g.fill();
+    g.strokeStyle = "rgba(140,220,170,0.14)";
+    g.lineWidth = 2;
+    g.stroke();
+    // a soft green glow behind the flask so it reads as the special tile it is
+    const gr = g.createRadialGradient(42, 44, 2, 42, 44, 27);
+    gr.addColorStop(0, "rgba(120,255,170,0.55)");
+    gr.addColorStop(1, "rgba(120,255,170,0)");
+    g.fillStyle = gr;
+    g.fillRect(15, 15, 54, 54);
+    g.font = '34px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText("🧪", 42, 46);
+    this.textures.addCanvas(POTION_ART_KEY, cv);
+  }
+
   private faceCanvas(type: number, S: number): HTMLCanvasElement {
     const cv = document.createElement("canvas");
     cv.width = S;
@@ -2904,7 +3018,7 @@ class GameScene extends Phaser.Scene {
     const cx = cv.getContext("2d")!;
     cx.imageSmoothingEnabled = true;
     cx.imageSmoothingQuality = "high";
-    const src = this.textures.get(TILE_ART[type].key).getSourceImage() as CanvasImageSource;
+    const src = this.textures.get(tileArtKey(type)).getSourceImage() as CanvasImageSource;
     cx.drawImage(src, 0, 0, S, S);
     return cv;
   }
