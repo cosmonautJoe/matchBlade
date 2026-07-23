@@ -171,7 +171,7 @@ export function forgeCost(level: number): number {
  * The next zone raises the ceiling (and fields foes that demand it).
  */
 export function forgeCap(biome: string): number {
-  return biome === "forest" ? 5 : 2;
+  return biome === "forest" ? 6 : 3;
 }
 
 export function canAfford(m: MetaState, cost: { wood?: number; ore?: number; treasure?: number }): boolean {
@@ -211,7 +211,7 @@ export const PLAINS_QUESTS: Quest[] = [
   { id: "depth10", label: "Reach depth 10 in a single run", shortLabel: "depth 10 run", reward: 15, kind: "run-depth", target: 10 },
   { id: "slay60", label: "Slay 60 more slimes", shortLabel: "slay slimes II", reward: 15, kind: "delta", stat: "slain", target: 60 },
   { id: "ore80", label: "Haul 80 ore back to camp", shortLabel: "haul ore", reward: 15, kind: "delta", stat: "totalOre", target: 80 },
-  { id: "forge2", label: "Forge the blade to its plains peak", shortLabel: "peak blade", reward: 20, kind: "delta", stat: "swordLevel", target: 2 },
+  { id: "forge2", label: "Forge the blade to its plains peak", shortLabel: "peak blade", reward: 20, kind: "delta", stat: "swordLevel", target: 3 },
   { id: "chests12", label: "Crack open 12 more chests", shortLabel: "open chests II", reward: 15, kind: "delta", stat: "chestsOpened", target: 12 },
   { id: "depth16", label: "Reach depth 16 in a single run", shortLabel: "depth 16 run", reward: 25, kind: "run-depth", target: 16 },
 ];
@@ -222,7 +222,7 @@ export const FOREST_QUESTS: Quest[] = [
   { id: "f_chests10", label: "Crack open 10 treasure chests", shortLabel: "open chests", reward: 20, kind: "delta", stat: "chestsOpened", target: 10 },
   { id: "f_wood120", label: "Haul 120 wood back to camp", shortLabel: "haul wood", reward: 20, kind: "delta", stat: "totalWood", target: 120 },
   { id: "f_ore120", label: "Haul 120 ore back to camp", shortLabel: "haul ore", reward: 25, kind: "delta", stat: "totalOre", target: 120 },
-  { id: "f_forge3", label: "Forge the blade to its forest peak", shortLabel: "forest peak", reward: 30, kind: "delta", stat: "swordLevel", target: 5 },
+  { id: "f_forge3", label: "Forge the blade to its forest peak", shortLabel: "forest peak", reward: 30, kind: "delta", stat: "swordLevel", target: 6 },
   // Runs end victorious at depth 20 (the second boss) — quests fit the road.
   { id: "f_depth22", label: "Reach depth 18 in a single run", shortLabel: "depth 18 run", reward: 30, kind: "run-depth", target: 18 },
   { id: "f_depth30", label: "Clear the road to the second boss", shortLabel: "clear the road", reward: 45, kind: "run-depth", target: 20 },

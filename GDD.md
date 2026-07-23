@@ -411,8 +411,8 @@ enter; departs by walking the hero into the portal (`scene.start("game")`).
   (~2–3 good runs). On hire she **walks out of the tent to the forge** (2.6s) and
   joins the caravan.
 - **The Forge** (tap Wren/furnace once hired): sells sword levels (**+5
-  first-strike damage each**), capped per zone — **`forgeCap`: plains 2,
-  forest 5**. At the cap the blade **sunders** (one sword match = one dead
+  first-strike damage each**), capped per zone — **`forgeCap`: plains 3,
+  forest 6**. At the cap the blade **sunders** (one sword match = one dead
   common foe) and the panel closes shop: "a harder land will ask for a harder
   edge." Cost curve **`forgeCost(level) = 20 + level × 15` ore** (20, 35, …).
   Forge quests measure the blade's absolute level (deltas break under caps).
@@ -460,7 +460,7 @@ through:
 - **The Wizard** — the forest's hireable recruit, mirroring Wren: found in
   camp, hired for banked resources, then sells **magic upgrades** (spell
   damage / cast tiers) with its own per-zone cap, the way the forge sells
-  sword levels. Wren's forge cap rises to 5 in the forest (already wired),
+  sword levels. Wren's forge cap rises to 6 in the forest (already wired),
   so both schools climb side by side.
 - Same character budget as Wren: one sprite, a name, one line — no dialogue
   trees.
