@@ -811,16 +811,18 @@ class GameScene extends Phaser.Scene {
     }
     this.rotateHint.setPosition(x0 + uw / 2, y0 + 6).setVisible(uw < uh); // portrait hint; panels still show
 
-    // resources: icon + number rows, positioned exactly so there's no emoji-spacing drift
+    // resources: icon + number rows — the ~76px table sits centred in the rail
+    // (fixed column offsets off centre, so growing digits don't shuffle rows)
     const padX = lLeft + 12;
+    const lcx = lLeft + lw / 2;
     const rowH = Math.min(44, uh * 0.09);
     const topY = y0 + Math.max(26, uh * 0.11);
     for (let i = 0; i < this.resIcons.length; i++) {
       const y = Math.round(topY + i * rowH);
-      this.resIcons[i].setPosition(padX, y);
-      this.resVals[i].setPosition(padX + 35, y);
+      this.resIcons[i].setPosition(Math.round(lcx - 38), y);
+      this.resVals[i].setPosition(Math.round(lcx - 3), y);
     }
-    this.scoreText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 16));
+    this.scoreText.setPosition(Math.round(lcx), Math.round(topY + this.resIcons.length * rowH + 16));
     this.questText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 92));
     this.buffText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 196));
     this.hintBtn.setPosition(padX, y0 + uh - 52);
@@ -874,8 +876,8 @@ class GameScene extends Phaser.Scene {
       );
     }
     this.scoreText = this.add
-      .text(0, 0, "", { fontFamily: "monospace", fontSize: "15px", color: "#ffe08a", lineSpacing: 8 })
-      .setOrigin(0, 0);
+      .text(0, 0, "", { fontFamily: "monospace", fontSize: "15px", color: "#ffe08a", lineSpacing: 8, align: "center" })
+      .setOrigin(0.5, 0); // centred in the rail (layoutPanels feeds it the panel centre)
     this.questText = this.add
       .text(0, 0, "", { fontFamily: "monospace", fontSize: "12px", color: "#a9c8a9", lineSpacing: 7 })
       .setOrigin(0, 0);
