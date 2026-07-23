@@ -83,7 +83,7 @@ import {
 import { CampScene } from "./camp";
 import { MenuScene } from "./menu";
 import { TitleScene } from "./title";
-import { sfxV, ambV } from "./audio";
+import { sfxV, ambV, musicV } from "./audio";
 import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
 import { Tutorial } from "./tutorial";
 
@@ -350,6 +350,8 @@ class GameScene extends Phaser.Scene {
   private bossBar: { root: Phaser.GameObjects.Container; fill: Phaser.GameObjects.Rectangle } | null = null;
   private rainy = false; // rolled per run: rain ambience + streaks over the lane
   private amb: Phaser.Sound.BaseSound | null = null; // looping forest bed under the run
+  private music: Phaser.Sound.BaseSound | null = null; // the run's song (journey on the road, war-drums at the boss)
+  private musicBase = 0; // current track's design volume — audio-changed re-levels against it
   private heroLockX = false; // freeze hero x while a killing swing lands, then surge
   private enemyHpBar!: Phaser.GameObjects.Rectangle;
   private enemyHpBg!: Phaser.GameObjects.Rectangle;
@@ -408,6 +410,9 @@ class GameScene extends Phaser.Scene {
   private vignette: Phaser.GameObjects.Image | null = null; // full-viewport red edge-glow
   private vignetteA = 0; // eased alpha (lerps toward the pressure-driven target)
   private heartPhase = 0; // heartbeat accumulator — beats faster as the skull nears
+  private laneGuard!: Phaser.GameObjects.Container; // in-lane 🛡️×N badge (top-left)
+  private laneGuardText!: Phaser.GameObjects.Text;
+  private laneGuardLast = -1; // last shown count — drives the gain-bounce / spend-flash
 
   constructor() {
     super("game");
@@ -465,6 +470,8 @@ class GameScene extends Phaser.Scene {
       summon: "summon.wav", fireball1: "fireball1.wav", fireball2: "fireball2.wav", fireball3: "fireball3.wav",
       // ambient forest bed under the run (rain variant on wet runs)
       amb_day: "amb_day.mp3", amb_rain: "amb_rain.mp3",
+      // music (xDeviruchi, CC-BY): the road's song + the boss's war-drums
+      music_journey: "music_journey.mp3", music_boss: "music_boss.mp3",
     };
     for (const [k, f] of Object.entries(audio)) if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
     for (let i = 1; i <= TILE_SFX; i++)
@@ -536,7 +543,9 @@ class GameScene extends Phaser.Scene {
     this.vignetteA = 0;
     this.heartPhase = 0;
 
-    this.sound.volume = 0.7; // master sfx level
+    // (master volume is set once at boot, below the game config — setting it
+    // here made the first camp visit of a session 43% louder than everything
+    // after it, since the global manager started at 1.0 until the first run)
 
     this.buildAnims();
     this.buildGrassGround();
@@ -560,16 +569,26 @@ class GameScene extends Phaser.Scene {
     this.amb = this.sound.add(this.rainy ? "amb_rain" : "amb_day", { volume: 0, loop: true });
     this.amb.play();
     this.tweens.add({ targets: this.amb, volume: ambV(ambBase), duration: 1400 });
+    // the road's song under it all (the boss swaps in his own war-drums)
+    this.music = null;
+    this.playMusic("music_journey", 0.26, 1600);
     const onAudio = () => {
-      if (!this.amb) return;
-      this.tweens.killTweensOf(this.amb);
-      (this.amb as unknown as { volume: number }).volume = ambV(ambBase);
+      if (this.amb) {
+        this.tweens.killTweensOf(this.amb);
+        (this.amb as unknown as { volume: number }).volume = ambV(ambBase);
+      }
+      if (this.music) {
+        this.tweens.killTweensOf(this.music);
+        (this.music as unknown as { volume: number }).volume = musicV(this.musicBase);
+      }
     };
     this.game.events.on("audio-changed", onAudio);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off("audio-changed", onAudio);
       this.amb?.stop();
       this.amb = null;
+      this.music?.stop();
+      this.music = null;
     });
 
     // pause menu: Esc (desktop) or the ☰ chip (see buildPanels)
@@ -949,6 +968,16 @@ class GameScene extends Phaser.Scene {
     this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H).setStrokeStyle(2, 0x2a2d38)); // border
     this.inBox(this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "48px", color: "#c0424a" }).setOrigin(0.5, 1));
 
+    // guard badge, top-left of the lane: the shield count lives IN the fight,
+    // right where the strikes it answers land (renderBuffs keeps it current)
+    const gbBg = this.add.rectangle(0, 0, 74, 30, 0x0c1018, 0.72).setOrigin(0, 0.5).setStrokeStyle(2, 0x3a5a7a, 0.9);
+    const gbIcon = this.add.text(8, 0, "🛡️", { fontFamily: EMOJI_FONT, fontSize: "17px" }).setOrigin(0, 0.5);
+    this.laneGuardText = this.add
+      .text(34, 1, "×0", { fontFamily: "monospace", fontStyle: "bold", fontSize: "18px", color: "#6a707c", stroke: "#0a0b0f", strokeThickness: 4 })
+      .setOrigin(0, 0.5);
+    this.laneGuard = this.inBox(this.add.container(GRID_X + 8, LANE_Y + 22, [gbBg, gbIcon, this.laneGuardText]).setDepth(30));
+    this.laneGuardLast = -1;
+
     this.hero = this.inBox(
       this.add.sprite(SAFE_X, GROUND_Y, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(HERO_SCALE).play("hero-idle"),
     );
@@ -1069,7 +1098,11 @@ class GameScene extends Phaser.Scene {
 
     const heroX = this.heroXForPressure();
     if (!this.heroLockX) this.hero.x = heroX; // held put while a killing swing lands
-    if (this.orc && this.phase === "fight") this.orc.x = heroX + this.orcGap; // enemy pushes the hero toward the skull
+    // enemy pushes the hero toward the skull. NOT while it's dying: a killing
+    // blow drops pressure instantly, and chaining the corpse to the new heroX
+    // would teleport it forward (visible during a spell kill's bolt flight) —
+    // the dead stay where they fell; the hero surges up past them instead.
+    if (this.orc && this.phase === "fight" && !this.orcDying) this.orc.x = heroX + this.orcGap;
     if (this.orc) {
       const barY = GROUND_Y - 56; // above the slime's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
@@ -1179,8 +1212,24 @@ class GameScene extends Phaser.Scene {
 
   /** The buff readout under the quests: charges, timers, armed keys, the road ahead. */
   private renderBuffs() {
+    // lane guard badge: count + a bounce on gain / red flash on spend
+    if (this.run.block !== this.laneGuardLast) {
+      const gained = this.run.block > this.laneGuardLast && this.laneGuardLast >= 0;
+      const spent = this.run.block < this.laneGuardLast;
+      this.laneGuardLast = this.run.block;
+      this.laneGuardText.setText(`×${this.run.block}`).setColor(this.run.block > 0 ? "#bfe0ff" : "#6a707c");
+      if (gained || spent) {
+        this.tweens.killTweensOf(this.laneGuard);
+        this.laneGuard.setScale(1);
+        this.tweens.add({ targets: this.laneGuard, scale: gained ? 1.22 : 0.86, duration: 100, yoyo: true, ease: "Quad.easeOut" });
+        if (spent) {
+          this.laneGuardText.setTint(0xff7a6a);
+          this.time.delayedCall(240, () => this.laneGuardText.clearTint());
+        }
+      }
+    }
     const parts: string[] = [];
-    if (this.run.block > 0) parts.push(`🛡️×${this.run.block}`); // guard charges, 1:1
+    // (guard charges live on the in-lane badge now, not in this readout)
     if (this.run.whetstone > 0) parts.push(`🗡️×${this.run.whetstone}`);
     if (this.hornLeft > 0) parts.push(`📯${Math.ceil(this.hornLeft)}s`);
     if (this.freezeLeft > 0) parts.push(`🗿${Math.ceil(this.freezeLeft)}s`);
@@ -1325,6 +1374,7 @@ class GameScene extends Phaser.Scene {
     this.hero.play("hero-walk", true);
     this.sfx("summon", 0.55, 0.9);
     buzz(30);
+    this.playMusic("music_boss", 0.32, 1200); // his war-drums drown the road's song
 
     // the lane darkens for his approach; the veil lifts as he plants his staff
     const veil = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x1a0505, 0).setDepth(20));
@@ -1468,12 +1518,15 @@ class GameScene extends Phaser.Scene {
       const shdCells: { x: number; y: number }[] = []; // shields        -> steel guard chip
       const swordCells: { x: number; y: number }[] = []; // launch points for the spectral blades
       const staffCells: { x: number; y: number }[] = []; // gather points for the spell cast
+      const resFly: Record<number, { x: number; y: number }[]> = {}; // per-type launch points -> the resource rail
       cleared.forEach((key) => {
         const [r, c] = key.split(",").map(Number);
         const ty = this.grid[r][c];
         const at = { x: this.xFor(c), y: this.yFor(r) };
-        if (ty === WOOD || ty === ORE || ty === TREASURE || ty === KEY) resCells.push(at);
-        else if (ty === SWORD || ty === STAFF) cmbCells.push(at);
+        if (ty === WOOD || ty === ORE || ty === TREASURE || ty === KEY) {
+          resCells.push(at);
+          (resFly[ty] ??= []).push(at);
+        } else if (ty === SWORD || ty === STAFF) cmbCells.push(at);
         else if (ty === SHIELD) shdCells.push(at);
         if (ty === SWORD) swordCells.push(at);
         else if (ty === STAFF) staffCells.push(at);
@@ -1503,12 +1556,14 @@ class GameScene extends Phaser.Scene {
         this.floatScore(p.x, p.y, combatScore, { delay: 140, size: Math.min(52, 32 + Math.floor(combatScore / 4) + depth * 3) });
       }
       // shields: no points, but the guard gained answers back in steel-blue
-      const shields = counts[SHIELD] ?? 0;
-      if (shields > 0 && shdCells.length) {
+      if (outcome.guard > 0 && shdCells.length) {
         const p = centroid(shdCells);
-        this.floatGuard(p.x, p.y, shields, 100);
+        this.floatGuard(p.x, p.y, outcome.guard, 100);
       }
       this.tutorial?.onCascade(counts);
+      // keys bank per MATCH, not per tile — fly only as many chips as were kept
+      if (resFly[KEY]) resFly[KEY] = resFly[KEY].slice(0, outcome.gained.keys);
+      this.flyResources(resFly); // the goods themselves stream off the board into the rail
       this.onCombat(outcome, outcome.swords, swordCells, staffCells); // effective count — Wren's Whetstone can upgrade the swing
       // non-combat clear — a random tile-match sound (1 of TILE_SFX), slight pitch variation
       if (outcome.damage <= 0) this.sfx(`tile${1 + ((Math.random() * TILE_SFX) | 0)}`, 0.4, 0.97 + Math.random() * 0.06);
@@ -1750,6 +1805,56 @@ class GameScene extends Phaser.Scene {
   }
 
   /**
+   * Resource matches ship out: a shrunken copy of each matched tile lifts off
+   * the board and swoops into its row on the resource rail, which bounces as
+   * the goods land — banked WHERE the counter lives, not just as a number.
+   */
+  private flyResources(groups: Record<number, { x: number; y: number }[]>) {
+    const iconIdx: Record<number, number> = { [WOOD]: 0, [ORE]: 1, [TREASURE]: 2, [KEY]: 3 };
+    for (const [tyStr, cells] of Object.entries(groups)) {
+      const ty = Number(tyStr);
+      const icon = this.resIcons[iconIdx[ty]];
+      const val = this.resVals[iconIdx[ty]];
+      if (!icon) continue;
+      cells.slice(0, 6).forEach((cell, i) => {
+        this.time.delayedCall(i * 60, () => {
+          if (this.run.over) return;
+          // target computed at launch, so a mid-cascade resize still lands on the row
+          const tgt = this.toLocal(icon.x + 14, icon.y);
+          const chip = this.inBox(this.add.image(cell.x, cell.y, tileArtKey(ty)).setDepth(66).setScale(0.34).setAngle(Math.random() * 20 - 10));
+          // a quick lift first, then the swoop — reads as "plucked, then carried off"
+          const mx = (cell.x + tgt.x) / 2 + (Math.random() * 50 - 25);
+          const my = Math.min(cell.y, tgt.y) - 90 - Math.random() * 50;
+          this.tweens.add({ targets: chip, scale: 0.42, duration: 90, yoyo: true });
+          this.tweens.add({ targets: chip, angle: chip.angle + (Math.random() < 0.5 ? -1 : 1) * 140, duration: 460, ease: "Sine.easeIn" });
+          this.tweens.addCounter({
+            from: 0,
+            to: 1,
+            duration: 460,
+            ease: "Cubic.easeIn",
+            onUpdate: (tw) => {
+              const u = tw.getValue() ?? 0;
+              const a = 1 - u;
+              chip.setPosition(a * a * cell.x + 2 * a * u * mx + u * u * tgt.x, a * a * cell.y + 2 * a * u * my + u * u * tgt.y);
+              if (u > 0.55) chip.setScale(0.42 - (u - 0.55) * 0.45); // shrink into the rail
+            },
+            onComplete: () => {
+              chip.destroy();
+              // the row answers: icon + count bounce as the goods thunk in
+              for (const o of [icon, val]) {
+                this.tweens.killTweensOf(o);
+                o.setScale(1);
+                this.tweens.add({ targets: o, scale: 1.3, duration: 90, yoyo: true, ease: "Quad.easeOut" });
+              }
+              if (i === 0) this.sfx(this.pick(["coin1", "coin3"]), 0.22, 1.15); // one soft thunk per group, not per chip
+            },
+          });
+        });
+      });
+    }
+  }
+
+  /**
    * Staff matches feed the cast: motes stream out of the matched tiles and
    * converge on the staff tip during the cast lead — THEN the bolt leaves.
    * The player sees their tiles become the fireball.
@@ -1814,9 +1919,33 @@ class GameScene extends Phaser.Scene {
     return keys.reduce((s, k) => s + (this.anims.get(k)?.duration ?? 300), 0);
   }
 
-  // ---- sfx ----
+  // ---- sfx / music ----
   private sfx(key: string, volume = 0.5, rate = 1) {
     if (this.cache.audio.exists(key)) this.sound.play(key, { volume: sfxV(volume), rate });
+  }
+
+  /** Crossfade the run's music bed to `key` (no-op if it's already playing). */
+  private playMusic(key: string, base: number, fadeMs = 900) {
+    if (!this.cache.audio.exists(key)) return;
+    if (this.music && (this.music as unknown as { key: string }).key === key) return;
+    const old = this.music;
+    if (old) {
+      this.tweens.killTweensOf(old);
+      this.tweens.add({ targets: old, volume: 0, duration: fadeMs * 0.6, onComplete: () => old.stop() });
+    }
+    this.music = this.sound.add(key, { volume: 0, loop: true });
+    this.musicBase = base;
+    this.music.play();
+    this.tweens.add({ targets: this.music, volume: musicV(base), duration: fadeMs });
+  }
+
+  /** Let the song go (death, victory) — it fades and does not return. */
+  private fadeOutMusic(ms = 1100) {
+    const m = this.music;
+    this.music = null;
+    if (!m) return;
+    this.tweens.killTweensOf(m);
+    this.tweens.add({ targets: m, volume: 0, duration: ms, onComplete: () => m.stop() });
   }
   private pick(a: string[]): string {
     return a[(Math.random() * a.length) | 0];
@@ -1963,7 +2092,12 @@ class GameScene extends Phaser.Scene {
         delay: Math.max(0, afterMs - 420),
       });
     }
-    if (wasBoss) this.bossSpoils(dying?.x ?? SAFE_X + BOSS_ENGAGE_GAP);
+    if (wasBoss) {
+      this.bossSpoils(dying?.x ?? SAFE_X + BOSS_ENGAGE_GAP);
+      // his drums die with him: the road's song returns — unless the road is done
+      if (this.run.killed < RUN_COMPLETE_AT) this.playMusic("music_journey", 0.26, 1600);
+      else this.fadeOutMusic(1400);
+    }
 
     this.time.delayedCall(Math.max(760, afterMs), () => {
       if (this.run.over) return;
@@ -1997,6 +2131,7 @@ class GameScene extends Phaser.Scene {
   private showRunComplete() {
     if (this.runCompleteShown || this.overShown) return;
     this.runCompleteShown = true;
+    this.fadeOutMusic(1200); // quiet under the victory fanfare
     this.phase = "advance"; // he strides on while the banner flies — a victory walk
     this.hero.play("hero-walk", true);
 
@@ -4095,6 +4230,7 @@ class GameScene extends Phaser.Scene {
 
   private showGameOver() {
     this.overShown = true;
+    this.fadeOutMusic(900); // the song dies with him
     this.orc?.stop();
     this.hero.play("hero-death"); // the hero falls where the dark caught him
     // the big flat death pose sprawls left of the skull and off the lane — clamp it back on
@@ -4535,6 +4671,10 @@ const game = new Phaser.Game({
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
   scene: [TitleScene, CampScene, GameScene, MenuScene], // boot: title -> camp; DEPART starts the run, death returns; menu overlays camp/run
 });
+
+// Master volume, once, for the whole session — every scene mixes under the same
+// ceiling. (Setting this inside a scene made loudness depend on scene history.)
+game.sound.volume = 0.7;
 
 // Mobile browsers resize the visible viewport when the toolbar shows/hides (and on
 // rotate) without always firing a plain "resize"; re-fit the canvas on those too.

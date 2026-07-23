@@ -524,8 +524,18 @@ furnace, portal, torches/water staged for future biomes).
 PNG tile faces), raindrop, chest closed/open, god rays, coins, sparks, orbs,
 cropped ground slices.
 
+**Music:** xDeviruchi *8-bit Fantasy & Adventure* (**CC-BY 4.0** — credit
+"xDeviruchi" in released builds). Source WAVs live in `assets/music/`
+(gitignored); shipped as 160 kbps MP3s via `node scripts/encode-music.mjs`.
+- `music_title.mp3` (*Title Theme*) — camp.
+- `music_journey.mp3` (*And The Journey Begins*) — the run.
+- `music_boss.mp3` (*Prepare for Battle!*) — boss approach through boss death.
+Remaining pack tracks (Decisive Battle, Mysterious Dungeon, The Icy Cave…) are
+on deck for future biomes/moments.
+
 **Licensing note:** keep every pack CC0 / properly-licensed and original; the
-boss pack is explicitly CC0. (Confirm licenses before shipping commercially.)
+boss pack is explicitly CC0, the music pack CC-BY 4.0 (attribution required).
+(Confirm licenses before shipping commercially.)
 
 ---
 

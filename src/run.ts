@@ -83,7 +83,7 @@ export const BLOCK_PUSHBACK = 0.05;
 // The potion tile, drunk on tap: a stride of ground regained + a swig of guard.
 export const POTION_GROUND = 0.12;
 export const POTION_GUARD = 2; // charges
-export const ADVANCE_PER_KILL = 0.3; // pressure removed (hero surge) per kill
+export const ADVANCE_PER_KILL = 0.36; // pressure removed (hero surge) per kill
 // Damage per match now runs 5 / 7 / 9 (for 3 / 4 / 5+ swords). Base HP sits ~one
 // strong combo so early foes fall fast; a couple of small matches also do it.
 export const ENEMY_BASE_HP = 9;
@@ -169,6 +169,7 @@ export interface MatchOutcome {
   spell: SpellOutcome | null; // the cast, if staff tiles matched
   killed: boolean;
   gained: Resources;
+  guard: number; // block charges banked this wave (per shield MATCH, not per tile)
   swords: number; // EFFECTIVE sword count driving the swing animation (whetstone can raise it)
 }
 
@@ -209,10 +210,14 @@ export function dealDamage(s: RunState, damage: number): boolean {
 /** Apply one cascade's cleared-tile counts. Returns what happened (for juice). */
 export function applyMatches(s: RunState, counts: Record<number, number>): MatchOutcome {
   const n = (t: number) => counts[t] ?? 0;
-  const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay 1:1 — they're tension)
-  const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: n(KEY) };
+  const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay per-match — they're tension)
+  // Keys and guard pay per MATCH, not per tile: a 3-match banks one, a 5-match
+  // two, two separate 3-matches in one wave two. (round(n/3): 3,4->1  5,6->2)
+  const perMatch = (tiles: number) => Math.round(tiles / 3);
+  const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: perMatch(n(KEY)) };
 
-  s.block += n(SHIELD); // one charge per shield tile
+  const guard = perMatch(n(SHIELD)); // one charge per shield MATCH
+  s.block += guard;
   s.resources.wood += gained.wood;
   s.resources.ore += gained.ore;
   s.resources.treasure += gained.treasure;
@@ -251,7 +256,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   const damage = hits.reduce((a, b) => a + b, 0) + (spell?.dmg ?? 0);
   const killed = dealDamage(s, damage);
 
-  return { damage, hits, swordMod, spell, killed, gained, swords: n(SWORD) > 0 ? swords : 0 };
+  return { damage, hits, swordMod, spell, killed, gained, guard, swords: n(SWORD) > 0 ? swords : 0 };
 }
 
 /**

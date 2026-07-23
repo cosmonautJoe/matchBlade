@@ -171,7 +171,7 @@ export class MenuScene extends Phaser.Scene {
     let sy = y + 92;
     this.slider(box, x, sy, w, "effects", s.sfx, (v) => setAudioSettings({ sfx: v }));
     this.slider(box, x, (sy += 64), w, "ambience", s.amb, (v) => setAudioSettings({ amb: v }));
-    this.slider(box, x, (sy += 64), w, "music", s.music, (v) => setAudioSettings({ music: v }), "(coming soon)");
+    this.slider(box, x, (sy += 64), w, "music", s.music, (v) => setAudioSettings({ music: v }));
     this.button(box, x, y + 330 - 40, 160, "back", () => this.showMain(), { small: true });
   }
 

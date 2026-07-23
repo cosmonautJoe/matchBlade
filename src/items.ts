@@ -56,7 +56,7 @@ export const ITEMS: ItemDef[] = [
   { id: "waystone", name: "Waystone", glyph: "🗿", tier: "uncommon", target: "none",
     desc: `The world holds its breath: scroll pressure freezes for ${WAYSTONE_SECS}s.`, hint: TAP },
   { id: "bulwark", name: "Bulwark Brew", glyph: "🧪", tier: "common", target: "none",
-    desc: "Drink deep: instantly raise your guard by six shields' worth.", hint: TAP },
+    desc: "Drink deep: instantly raise your guard by six charges.", hint: TAP },
   { id: "hearth", name: "Hearth Charm", glyph: "❤️", tier: "rare", target: "none",
     desc: "Keeps itself. When death takes you it burns instead — once — and drags you back from the skull.", hint: "acts on its own" },
   { id: "spurs", name: "Scout's Spurs", glyph: "🥾", tier: "common", target: "none",

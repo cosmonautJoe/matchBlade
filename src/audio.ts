@@ -2,7 +2,7 @@
  * matchBlade — persisted audio settings (channel faders).
  *
  * Three channels the options menu exposes: sound effects, ambience beds, and
- * music (no tracks yet — the fader is wired for the day one lands). Scenes
+ * music (xDeviruchi's 8-bit Fantasy pack: title/journey/boss beds). Scenes
  * multiply their per-call volumes through sfxV()/ambV()/musicV(), so the
  * sliders act as channel faders over the existing mix. Changes broadcast on
  * game.events as "audio-changed" so looping beds can re-level live.

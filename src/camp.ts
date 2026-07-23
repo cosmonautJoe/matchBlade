@@ -36,7 +36,7 @@ import {
   MAX_ACTIVE,
 } from "./meta";
 import { ITEMS, type ItemDef, type ItemTier, TIER_COLORS } from "./items";
-import { sfxV, ambV } from "./audio";
+import { sfxV, ambV, musicV } from "./audio";
 
 const DH = 480; // design height for the prop layer (smaller = more zoomed in)
 const DW = 940; // full design width of the camp spread (smaller = more zoomed in; clamps vw/DW)
@@ -142,6 +142,7 @@ export class CampScene extends Phaser.Scene {
   private hero!: Phaser.GameObjects.Sprite;
   private fireSnd: Phaser.Sound.BaseSound | null = null;
   private ambSnd: Phaser.Sound.BaseSound | null = null; // looping night-forest bed
+  private musicSnd: Phaser.Sound.BaseSound | null = null; // Title Theme (xDeviruchi), the camp's song
   private departing = false;
 
   // meta progression (persistent across runs)
@@ -214,6 +215,7 @@ export class CampScene extends Phaser.Scene {
 
     if (!this.cache.audio.exists("camp_fire")) this.load.audio("camp_fire", "sounds/camp_fire.mp3");
     if (!this.cache.audio.exists("amb_night")) this.load.audio("amb_night", "sounds/amb_night.mp3"); // crickets round the fire
+    if (!this.cache.audio.exists("music_title")) this.load.audio("music_title", "sounds/music_title.mp3"); // xDeviruchi — Title Theme
     for (const [k, f] of [["pickup", "pickup.mp3"], ["coin3", "coin3.mp3"], ["pouch", "pouch.mp3"]] as const)
       if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
   }
@@ -313,16 +315,26 @@ export class CampScene extends Phaser.Scene {
       this.fireSnd = null;
       this.ambSnd?.stop();
       this.ambSnd = null;
+      this.musicSnd?.stop();
+      this.musicSnd = null;
     });
 
     this.fireSnd = this.sound.add("camp_fire", { volume: ambV(0.22), loop: true });
     this.fireSnd.play();
     this.ambSnd = this.sound.add("amb_night", { volume: ambV(0.16), loop: true }); // the wilds hum past the firelight
     this.ambSnd.play();
-    // the ambience fader re-levels the beds live while the options slider moves
+    // the Title Theme carries the camp — eased in under the crackle and crickets
+    this.musicSnd = this.sound.add("music_title", { volume: 0, loop: true });
+    this.musicSnd.play();
+    this.tweens.add({ targets: this.musicSnd, volume: musicV(0.2), duration: 1600 });
+    // the faders re-level the beds live while the options sliders move
     const onAudio = () => {
       if (this.fireSnd) (this.fireSnd as unknown as { volume: number }).volume = ambV(0.22);
       if (this.ambSnd) (this.ambSnd as unknown as { volume: number }).volume = ambV(0.16);
+      if (this.musicSnd) {
+        this.tweens.killTweensOf(this.musicSnd);
+        (this.musicSnd as unknown as { volume: number }).volume = musicV(0.2);
+      }
     };
     this.game.events.on("audio-changed", onAudio);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.game.events.off("audio-changed", onAudio));
@@ -1265,6 +1277,7 @@ export class CampScene extends Phaser.Scene {
     this.tweens.add({ targets: this.hero, x: 700, duration: 2300, ease: "Sine.easeIn" });
     this.tweens.add({ targets: this.fireSnd, volume: 0, duration: 1800 });
     this.tweens.add({ targets: this.ambSnd, volume: 0, duration: 1800 });
+    this.tweens.add({ targets: this.musicSnd, volume: 0, duration: 1800 }); // the song stays behind with the fire
     this.time.delayedCall(1400, () => this.cameras.main.fadeOut(1300, 5, 6, 10));
     this.time.delayedCall(2750, () => this.scene.start("game"));
   }
