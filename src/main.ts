@@ -84,7 +84,7 @@ import { CampScene } from "./camp";
 import { MenuScene } from "./menu";
 import { TitleScene } from "./title";
 import { sfxV, ambV, musicV, audioSettings, setAudioSettings, setSoundLevel } from "./audio";
-import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
+import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress, forgeCap } from "./meta";
 import { Tutorial } from "./tutorial";
 
 // ---- layout ---------------------------------------------------------------
@@ -480,7 +480,7 @@ class GameScene extends Phaser.Scene {
 
   create() {
     this.meta = loadMeta();
-    this.run = newRun(this.meta.swordLevel); // forge levels bite through the whole run
+    this.run = newRun(this.meta.swordLevel, forgeCap(this.meta.biome)); // forge levels bite all run; at the zone cap the blade sunders
     this.chestsOpened = 0;
     this.busy = false;
     this.down = null;
@@ -1633,6 +1633,14 @@ class GameScene extends Phaser.Scene {
       this.playComboSfx(combo);
       this.showHits(outcome.hits, combo, outcome.swordMod);
       this.flyBlades(swordCells); // the matched tiles themselves take wing at the foe
+      if (outcome.sunder) {
+        // the peak blade fells it in one stroke — name the moment
+        this.time.delayedCall(140, () => {
+          if (!this.orc) return;
+          this.floatChip(this.orc.x - 4, GROUND_Y - 122, "SUNDER!", { size: 26, stroke: "#2a0c06" });
+          this.cameras.main.shake(120, 0.005);
+        });
+      }
     }
     const meleeMs = hasMelee ? this.comboMs(combo) : 0;
     const spell = outcome.spell;

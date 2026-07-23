@@ -55,6 +55,7 @@ export interface RunState {
   resources: Resources;
   over: boolean;
   swordBonus: number; // forge upgrades: extra damage folded into the first sword hit
+  sunderEdge: boolean; // blade at the zone's forge cap: sword matches fell non-boss foes outright
   // ---- run-item buffs (src/items.ts; the scene sets these, we honour them) ----
   whetstone: number; // charges: sword matches that count as full 5-match combos
   surgeMult: number; // War Horn: multiplies the per-kill pressure surge (default 1)
@@ -66,6 +67,10 @@ export interface RunState {
 // is one solid hit; each extra sword (up to 2) tacks on a small follow-up hit.
 export const SWORD_MAIN = 5; // first swing — a 3-match
 export const SWORD_EXTRA = 2; // each extra sword beyond 3 (max 2 follow-ups)
+export const SWORD_BONUS_PER_LEVEL = 5; // forge level -> first-strike bonus
+// A blade at its zone's forge cap SUNDERS: any sword match fells a non-boss
+// foe in one stroke, iron hide included. (Bosses are arena fights — the board
+// retracts — so steel never reaches them anyway.)
 // Staff matches are their own act now: the hero CASTS, a fireball flies.
 // Firebolt (3) / Fireball (4) / Pyroclasm (5+, also sets the foe burning).
 export const SPELL_DMG: Record<3 | 4 | 5, number> = { 3: 9, 4: 14, 5: 20 };
@@ -136,7 +141,7 @@ export function makeEnemy(killed: number, rand: () => number = Math.random): Ene
   };
 }
 
-export function newRun(swordBonus = 0): RunState {
+export function newRun(swordLevel = 0, forgeCapLevel = Number.POSITIVE_INFINITY): RunState {
   return {
     pressure: 0,
     block: 0,
@@ -145,7 +150,8 @@ export function newRun(swordBonus = 0): RunState {
     score: 0,
     resources: { wood: 0, ore: 0, treasure: 0, keys: 0 },
     over: false,
-    swordBonus,
+    swordBonus: swordLevel * SWORD_BONUS_PER_LEVEL,
+    sunderEdge: swordLevel >= forgeCapLevel,
     whetstone: 0,
     surgeMult: 1,
     resMult: 1,
@@ -171,6 +177,7 @@ export interface MatchOutcome {
   gained: Resources;
   guard: number; // block charges banked this wave (per shield MATCH, not per tile)
   swords: number; // EFFECTIVE sword count driving the swing animation (whetstone can raise it)
+  sunder: boolean; // the peak blade felled this foe in one stroke
 }
 
 /** Split a sword match into per-swing damage: 3 -> [5], 4 -> [5,2], 5+ -> [5,2,2]. */
@@ -235,8 +242,14 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   const rawHits = swordHits(swords);
   if (rawHits.length && swords >= 3) rawHits[0] += s.swordBonus; // forged edge bites harder
   const pM = physMult(defense);
-  const hits = rawHits.map((h) => Math.max(1, Math.round(h * pM))); // even glancing blows land 1
-  const swordMod: DamageMod = !hits.length || pM === 1 ? "none" : pM < 1 ? "resist" : "weak";
+  let hits = rawHits.map((h) => Math.max(1, Math.round(h * pM))); // even glancing blows land 1
+  let swordMod: DamageMod = !hits.length || pM === 1 ? "none" : pM < 1 ? "resist" : "weak";
+  // the peak blade SUNDERS: one felling stroke, defense be damned (never bosses)
+  const sunder = s.sunderEdge && swords >= 3 && s.enemy !== null && s.enemy.kind !== "boss";
+  if (sunder && s.enemy) {
+    hits = [s.enemy.hp];
+    swordMod = "none";
+  }
 
   // ---- the cast: staff tiles fire a Firebolt / Fireball / Pyroclasm ----------
   const staves = n(STAFF);
@@ -256,7 +269,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   const damage = hits.reduce((a, b) => a + b, 0) + (spell?.dmg ?? 0);
   const killed = dealDamage(s, damage);
 
-  return { damage, hits, swordMod, spell, killed, gained, guard, swords: n(SWORD) > 0 ? swords : 0 };
+  return { damage, hits, swordMod, spell, killed, gained, guard, swords: n(SWORD) > 0 ? swords : 0, sunder };
 }
 
 /**

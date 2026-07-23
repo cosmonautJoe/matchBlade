@@ -188,8 +188,11 @@ Applied in `applyMatches(run, counts)` per resolved cascade:
   `swordHits(n)` → 3 swords = `[5]`, 4 = `[5, 2]`, 5+ = `[5, 2, 2]`
   (`SWORD_MAIN = 5`, `SWORD_EXTRA = 2`, capped at 2 follow-ups). **Total damage
   per match: 5 / 7 / 9** for 3 / 4 / 5+.
-- **Forge bonus** (`swordBonus`, from `meta.swordLevel`) is added to the **first**
-  swing — "the forged edge bites harder."
+- **Forge bonus**: each forge level adds **+5 first-strike damage**
+  (`SWORD_BONUS_PER_LEVEL`). At the zone's **forge cap** the blade **SUNDERS**:
+  any sword match fells a non-boss foe in one stroke, iron hide included
+  (`sunderEdge` in run.ts; "SUNDER!" chip in the lane). Bosses are arena
+  fights — the board retracts — so steel never reaches them anyway.
 - **Staff** matches CAST: a fireball flies from the hero and everything lands on
   impact — **Firebolt (3) 9 dmg / Fireball (4) 14 / Pyroclasm (5+) 20** (+3 per
   tile beyond 5; a Pyroclasm also sets the foe burning). `SPELL_DMG` in run.ts.
@@ -407,10 +410,12 @@ enter; departs by walking the hero into the portal (`scene.start("game")`).
   the tent opens her dialogue; **hire cost `BLACKSMITH_COST = 30 wood + 30 ore`**
   (~2–3 good runs). On hire she **walks out of the tent to the forge** (2.6s) and
   joins the caravan.
-- **The Forge** (tap Wren/furnace once hired): sells **+1 first-strike sword
-  damage per level**. Cost curve **`forgeCost(level) = 20 + level × 15` ore**
-  (20, 35, 50, …). Each level raises `meta.swordLevel`, folded into the first
-  sword swing every run.
+- **The Forge** (tap Wren/furnace once hired): sells sword levels (**+5
+  first-strike damage each**), capped per zone — **`forgeCap`: plains 2,
+  forest 5**. At the cap the blade **sunders** (one sword match = one dead
+  common foe) and the panel closes shop: "a harder land will ask for a harder
+  edge." Cost curve **`forgeCost(level) = 20 + level × 15` ore** (20, 35, …).
+  Forge quests measure the blade's absolute level (deltas break under caps).
 - Sprites: `smith.png` (WarriorWoman sheet). One portrait, a name, one line of
   dialogue — the **character budget** (no dialogue trees; recruits never fight
   beside you — that's sequel scope).
@@ -443,8 +448,22 @@ board is YMBAB-style with a twist:
 | depth16 | Reach depth 16 in one run | 25 |
 
 **Forest pool (`FOREST_QUESTS`, 7):** slay 50 · open 10 chests · haul 120 wood ·
-haul 120 ore · forge ×3 · depth 22 · depth 30 (rewards 20–45 — the forest asks
-more of a seasoned scout).
+haul 120 ore · forest-peak blade · depth 18 · clear the road (rewards 20–45 —
+the forest asks more of a seasoned scout).
+
+### 11.5b The forest plan (designed, NOT yet built)
+The forest inverts the plains' lesson — steel got you here, magic gets you
+through:
+- **Forest mobs are sword-resistant** (hide-heavy spawn pools / new variants):
+  the sundering plains blade does NOT trivialize the new road, and staff
+  matches become the damage school that matters.
+- **The Wizard** — the forest's hireable recruit, mirroring Wren: found in
+  camp, hired for banked resources, then sells **magic upgrades** (spell
+  damage / cast tiers) with its own per-zone cap, the way the forge sells
+  sword levels. Wren's forge cap rises to 5 in the forest (already wired),
+  so both schools climb side by side.
+- Same character budget as Wren: one sprite, a name, one line — no dialogue
+  trees.
 
 ### 11.6 Biomes & the road gate
 - `BIOME_ORDER = [plains, forest]`; each biome has its own quest pool

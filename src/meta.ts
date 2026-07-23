@@ -165,6 +165,14 @@ export const BLACKSMITH_COST = { wood: 30, ore: 30 };
 export function forgeCost(level: number): number {
   return 20 + level * 15; // 20, 35, 50, ...
 }
+/**
+ * Each zone's smithy can only take the blade so far. At the cap, the blade
+ * SUNDERS that zone's common foes — one sword match, one kill (never bosses).
+ * The next zone raises the ceiling (and fields foes that demand it).
+ */
+export function forgeCap(biome: string): number {
+  return biome === "forest" ? 5 : 2;
+}
 
 export function canAfford(m: MetaState, cost: { wood?: number; ore?: number; treasure?: number }): boolean {
   return m.wood >= (cost.wood ?? 0) && m.ore >= (cost.ore ?? 0) && m.treasure >= (cost.treasure ?? 0);
@@ -203,7 +211,7 @@ export const PLAINS_QUESTS: Quest[] = [
   { id: "depth10", label: "Reach depth 10 in a single run", shortLabel: "depth 10 run", reward: 15, kind: "run-depth", target: 10 },
   { id: "slay60", label: "Slay 60 more slimes", shortLabel: "slay slimes II", reward: 15, kind: "delta", stat: "slain", target: 60 },
   { id: "ore80", label: "Haul 80 ore back to camp", shortLabel: "haul ore", reward: 15, kind: "delta", stat: "totalOre", target: 80 },
-  { id: "forge2", label: "Have Wren forge 2 upgrades", shortLabel: "forge twice", reward: 20, kind: "delta", stat: "swordLevel", target: 2 },
+  { id: "forge2", label: "Forge the blade to its plains peak", shortLabel: "peak blade", reward: 20, kind: "delta", stat: "swordLevel", target: 2 },
   { id: "chests12", label: "Crack open 12 more chests", shortLabel: "open chests II", reward: 15, kind: "delta", stat: "chestsOpened", target: 12 },
   { id: "depth16", label: "Reach depth 16 in a single run", shortLabel: "depth 16 run", reward: 25, kind: "run-depth", target: 16 },
 ];
@@ -214,7 +222,7 @@ export const FOREST_QUESTS: Quest[] = [
   { id: "f_chests10", label: "Crack open 10 treasure chests", shortLabel: "open chests", reward: 20, kind: "delta", stat: "chestsOpened", target: 10 },
   { id: "f_wood120", label: "Haul 120 wood back to camp", shortLabel: "haul wood", reward: 20, kind: "delta", stat: "totalWood", target: 120 },
   { id: "f_ore120", label: "Haul 120 ore back to camp", shortLabel: "haul ore", reward: 25, kind: "delta", stat: "totalOre", target: 120 },
-  { id: "f_forge3", label: "Have Wren forge 3 more upgrades", shortLabel: "forge x3", reward: 30, kind: "delta", stat: "swordLevel", target: 3 },
+  { id: "f_forge3", label: "Forge the blade to its forest peak", shortLabel: "forest peak", reward: 30, kind: "delta", stat: "swordLevel", target: 5 },
   // Runs end victorious at depth 20 (the second boss) — quests fit the road.
   { id: "f_depth22", label: "Reach depth 18 in a single run", shortLabel: "depth 18 run", reward: 30, kind: "run-depth", target: 18 },
   { id: "f_depth30", label: "Clear the road to the second boss", shortLabel: "clear the road", reward: 45, kind: "run-depth", target: 20 },
@@ -257,7 +265,9 @@ export function questProgress(
     const hit = m.fulfilledRuns.includes(q.id) || (live ? live.kills >= q.target : false);
     return { have: hit ? q.target : Math.min(live?.kills ?? 0, q.target), need: q.target };
   }
-  let have = statOf(m, q.stat!) - aq.base;
+  // forge quests measure the blade's ABSOLUTE level (caps make deltas
+  // unreachable if accepted after a forging) — other stats count from accept
+  let have = q.stat === "swordLevel" ? statOf(m, q.stat) : statOf(m, q.stat!) - aq.base;
   if (live) {
     if (q.stat === "slain") have += live.kills;
     else if (q.stat === "chestsOpened") have += live.chests;

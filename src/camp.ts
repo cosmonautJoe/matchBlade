@@ -23,6 +23,7 @@ import {
   spend,
   BLACKSMITH_COST,
   forgeCost,
+  forgeCap,
   questById,
   questProgress,
   questDone,
@@ -36,6 +37,7 @@ import {
   MAX_ACTIVE,
 } from "./meta";
 import { ITEMS, type ItemDef, type ItemTier, TIER_COLORS } from "./items";
+import { SWORD_BONUS_PER_LEVEL } from "./run";
 import { sfxV, ambV, musicV, setSoundLevel } from "./audio";
 
 const DH = 480; // design height for the prop layer (smaller = more zoomed in)
@@ -1116,19 +1118,40 @@ export class CampScene extends Phaser.Scene {
     });
   }
 
-  /** Wren's forge: buy permanent sword damage, scaling ore cost. */
+  /** Wren's forge: permanent sword levels, capped per zone — the cap SUNDERS. */
   private furnaceTapped() {
     if (this.editMode || this.panelOpen || this.cutscene) return;
     if (!this.meta.blacksmithHired) {
       this.toast("the furnace is cold… someone in that tent might know its trade");
       return;
     }
-    const cost = forgeCost(this.meta.swordLevel);
+    const lvl = this.meta.swordLevel;
+    const cap = forgeCap(this.meta.biome);
+    if (lvl >= cap) {
+      this.panel(
+        "⚒ WREN'S FORGE",
+        [
+          `the blade is at its ${this.meta.biome} peak (level ${lvl})`,
+          `one stroke fells any common foe on this road`,
+          ``,
+          `"my anvil's done all it can here. a harder`,
+          ` land will ask for a harder edge."`,
+        ],
+        [{ label: "rest the hammer" }],
+      );
+      return;
+    }
+    const cost = forgeCost(lvl);
     const afford = canAfford(this.meta, { ore: cost });
+    const nextNote =
+      lvl + 1 >= cap
+        ? `level ${lvl} → ${lvl + 1}:  the PEAK — sword matches fell common foes outright`
+        : `level ${lvl} → ${lvl + 1}:  first strike +${(lvl + 1) * SWORD_BONUS_PER_LEVEL} damage`;
     this.panel(
       "⚒ WREN'S FORGE",
       [
-        `blade edge:  +${this.meta.swordLevel} → +${this.meta.swordLevel + 1} first-strike damage`,
+        nextNote,
+        `(${cap - lvl} forging${cap - lvl === 1 ? "" : "s"} left on this road)`,
         ``,
         `your bank:  🪨 ${this.meta.ore}`,
       ],
@@ -1145,7 +1168,8 @@ export class CampScene extends Phaser.Scene {
     saveMeta(this.meta);
     this.refreshResources();
     this.sfx("pickup", 0.65);
-    this.toast(`the edge sings — sword damage +${this.meta.swordLevel} ⚔`);
+    const atPeak = this.meta.swordLevel >= forgeCap(this.meta.biome);
+    this.toast(atPeak ? "the edge is PERFECT — one stroke fells any common foe ⚔" : `the edge sings — blade level ${this.meta.swordLevel} ⚔`);
     this.refreshWayfarerMark(); // a forge oath may now be ready to turn in
     if (this.meta.active.some((aq) => questDone(this.meta, aq)))
       this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
