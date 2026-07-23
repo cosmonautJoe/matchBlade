@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0b0f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/matchBlade/manifest.webmanifest" />
+    <title>matchBlade</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      /* expose the notch / home-indicator safe-area insets to JS (read in layout()). */
+      :root {
+        --sai-t: env(safe-area-inset-top, 0px);
+        --sai-r: env(safe-area-inset-right, 0px);
+        --sai-b: env(safe-area-inset-bottom, 0px);
+        --sai-l: env(safe-area-inset-left, 0px);
+      }
+      /* 100dvh tracks the *visible* viewport (excludes mobile browser chrome); 100vh is the fallback. */
+      html, body { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; background: #0a0b0f; }
+      #game { width: 100vw; height: 100vh; height: 100dvh; display: flex; align-items: center; justify-content: center; }
+      canvas { image-rendering: pixelated; display: block; }
+      /* High-density screens (phones, retina laptops): the browser upscales the
+         canvas 2-3x — nearest-neighbour there turns TEXT to chunks. Let those
+         screens smooth the upscale; 1x desktops keep the crisp pixel look. */
+      @media (min-resolution: 1.5dppx) {
+        canvas { image-rendering: auto; }
+      }
+      #rotate-gate {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 14px;
+        padding: max(28px, env(safe-area-inset-top)) max(28px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left));
+        color: #e8edf5;
+        background: radial-gradient(circle at 50% 42%, #202a38 0, #10141c 45%, #080a0f 100%);
+        font-family: monospace;
+        text-align: center;
+      }
+      .rotate-phone {
+        width: 48px;
+        height: 78px;
+        border: 4px solid #7fb8e8;
+        border-radius: 9px;
+        box-shadow: 0 0 20px rgb(88 173 238 / 35%);
+        transform: rotate(90deg);
+      }
+      .rotate-title { color: #ffe08a; font-size: clamp(18px, 5vw, 28px); font-weight: 700; letter-spacing: 0.08em; }
+      .rotate-copy { color: #aeb9c8; font-size: clamp(12px, 3.5vw, 17px); }
+      @media (orientation: portrait) {
+        #game { visibility: hidden; }
+        #rotate-gate { display: flex; }
+      }
+    </style>
+    <script type="module" crossorigin src="/matchBlade/assets/index-BhQ--joJ.js"></script>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="rotate-gate" role="status" aria-live="polite">
+      <div class="rotate-phone" aria-hidden="true"></div>
+      <div class="rotate-title">ROTATE TO LANDSCAPE</div>
+      <div class="rotate-copy">matchBlade needs the wider battlefield.</div>
+    </div>
+  </body>
+</html>
