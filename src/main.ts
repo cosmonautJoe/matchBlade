@@ -82,6 +82,7 @@ import {
 } from "./items";
 import { CampScene } from "./camp";
 import { MenuScene } from "./menu";
+import { TitleScene } from "./title";
 import { sfxV, ambV } from "./audio";
 import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
 import { Tutorial } from "./tutorial";
@@ -211,6 +212,12 @@ const STRIKE_MS = 4800; // enemy strike cadence
 // flies, and everything downstream (damage number, hurt, death) lands on impact
 const CAST_LEAD_MS = 320;
 const BOLT_FLIGHT_MS = 340;
+// board<->lane stitching: matches launch FROM the tiles, the fight answers back
+// ONTO the board — so the runner is felt even when the eye never leaves the puzzle
+const STRIKE_TELE_MS = 700; // dread creeps over the board this long before a strike
+const BLADE_FLIGHT_MS = 360; // spectral blades: matched sword tiles -> the foe
+const VIGNETTE_FROM = 0.45; // pressure where the red edge-glow starts bleeding in
+const VIGNETTE_MAX = 0.34; // its ceiling alpha at pressure 1 (heartbeat rides on top)
 const SPELL_BURN_SECS = 6; // a Pyroclasm (5-match) leaves the foe burning this long
 const WALK_IN_MS = 850; // time for a new enemy to march into range
 const TILE_SFX = 17; // number of tile-match sound variations (tile1..tileN)
@@ -397,6 +404,11 @@ class GameScene extends Phaser.Scene {
   private buffText!: Phaser.GameObjects.Text; // live item-buff readout (left panel)
   private buffStr = ""; // last rendered buff line (skip redundant setText)
 
+  // ---- peril feedback: the fight reaching the player's peripheral vision ----
+  private vignette: Phaser.GameObjects.Image | null = null; // full-viewport red edge-glow
+  private vignetteA = 0; // eased alpha (lerps toward the pressure-driven target)
+  private heartPhase = 0; // heartbeat accumulator — beats faster as the skull nears
+
   constructor() {
     super("game");
   }
@@ -518,6 +530,11 @@ class GameScene extends Phaser.Scene {
     this.buildTilePolish();
     this.buildTileFaces();
     this.buildChestArt();
+    this.buildBladeArt();
+    this.buildVignetteArt();
+    this.vignette = null;
+    this.vignetteA = 0;
+    this.heartPhase = 0;
 
     this.sound.volume = 0.7; // master sfx level
 
@@ -528,6 +545,8 @@ class GameScene extends Phaser.Scene {
     this.buildLane();
     this.buildBoard();
     this.buildInput();
+    // danger vignette: screen-space (NOT the centre column) so it hugs the viewport edges
+    this.vignette = this.add.image(0, 0, "vignette").setDepth(76).setAlpha(0);
     this.layout();
     this.scale.off("resize", this.layout, this);
     this.scale.on("resize", this.layout, this);
@@ -572,11 +591,15 @@ class GameScene extends Phaser.Scene {
       onComplete: () => (this.heroLockX = false),
     });
 
-    // strike cadence self-schedules so Scout's Spurs can stretch the interval mid-run
+    // strike cadence self-schedules so Scout's Spurs can stretch the interval mid-run;
+    // each strike casts its dread over the board first (strikeTelegraph)
     const strikeLoop = () => {
       this.strike();
-      this.time.delayedCall(this.spursActive ? SPURS_STRIKE_MS : STRIKE_MS, strikeLoop);
+      const wait = this.spursActive ? SPURS_STRIKE_MS : STRIKE_MS;
+      this.time.delayedCall(wait - STRIKE_TELE_MS, () => this.strikeTelegraph());
+      this.time.delayedCall(wait, strikeLoop);
     };
+    this.time.delayedCall(STRIKE_MS - STRIKE_TELE_MS, () => this.strikeTelegraph());
     this.time.delayedCall(STRIKE_MS, strikeLoop);
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
@@ -730,6 +753,7 @@ class GameScene extends Phaser.Scene {
     const cx = Math.round(shellX + leftW);
     const cy = Math.round(y0 + (uh - ch) / 2);
     this.centerBox.setScale(s).setPosition(cx, cy);
+    this.vignette?.setPosition(vw / 2, vh / 2).setDisplaySize(vw, vh);
     this.layoutPanels(shellX, y0, shellW, uh, cx, cw);
   }
 
@@ -1069,6 +1093,25 @@ class GameScene extends Phaser.Scene {
           this.frags.splice(i, 1);
         }
       }
+    }
+
+    // peril vignette: past VIGNETTE_FROM the skull's pull bleeds red in from the
+    // screen edges — felt in peripheral vision without ever looking up. Near the
+    // end a heartbeat rides on top, quickening as the ground runs out.
+    if (this.vignette) {
+      const p = this.run.pressure;
+      let target = 0;
+      if (!this.run.over && !this.overShown && !this.runCompleteShown && p > VIGNETTE_FROM) {
+        const t = Math.min(1, (p - VIGNETTE_FROM) / (1 - VIGNETTE_FROM));
+        target = t * t * VIGNETTE_MAX;
+        if (p > 0.7) {
+          this.heartPhase += dts * (1.2 + p * 1.8) * Math.PI * 2;
+          const thump = Math.pow(Math.max(0, Math.sin(this.heartPhase)), 3);
+          target += thump * 0.09 * ((p - 0.7) / 0.3);
+        }
+      }
+      this.vignetteA += (target - this.vignetteA) * Math.min(1, dts * 7);
+      this.vignette.setAlpha(Math.max(0, this.vignetteA));
     }
 
     if (this.run.over && !this.overShown) {
@@ -1423,6 +1466,8 @@ class GameScene extends Phaser.Scene {
       const resCells: { x: number; y: number }[] = []; // resources/keys -> gold score
       const cmbCells: { x: number; y: number }[] = []; // swords/staves  -> gold combat score
       const shdCells: { x: number; y: number }[] = []; // shields        -> steel guard chip
+      const swordCells: { x: number; y: number }[] = []; // launch points for the spectral blades
+      const staffCells: { x: number; y: number }[] = []; // gather points for the spell cast
       cleared.forEach((key) => {
         const [r, c] = key.split(",").map(Number);
         const ty = this.grid[r][c];
@@ -1430,6 +1475,8 @@ class GameScene extends Phaser.Scene {
         if (ty === WOOD || ty === ORE || ty === TREASURE || ty === KEY) resCells.push(at);
         else if (ty === SWORD || ty === STAFF) cmbCells.push(at);
         else if (ty === SHIELD) shdCells.push(at);
+        if (ty === SWORD) swordCells.push(at);
+        else if (ty === STAFF) staffCells.push(at);
         const t = this.tiles[r][c];
         if (t) fades.push(this.shatter(t, ty));
         this.tiles[r][c] = null;
@@ -1462,7 +1509,7 @@ class GameScene extends Phaser.Scene {
         this.floatGuard(p.x, p.y, shields, 100);
       }
       this.tutorial?.onCascade(counts);
-      this.onCombat(outcome, outcome.swords); // effective count — Wren's Whetstone can upgrade the swing
+      this.onCombat(outcome, outcome.swords, swordCells, staffCells); // effective count — Wren's Whetstone can upgrade the swing
       // non-combat clear — a random tile-match sound (1 of TILE_SFX), slight pitch variation
       if (outcome.damage <= 0) this.sfx(`tile${1 + ((Math.random() * TILE_SFX) | 0)}`, 0.4, 0.97 + Math.random() * 0.06);
       this.refreshHud();
@@ -1471,7 +1518,7 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private onCombat(outcome: MatchOutcome, swords: number) {
+  private onCombat(outcome: MatchOutcome, swords: number, swordCells: { x: number; y: number }[] = [], staffCells: { x: number; y: number }[] = []) {
     if (outcome.damage <= 0 || !this.orc || this.orcDying) return;
 
     this.updateEnemyBar();
@@ -1489,6 +1536,7 @@ class GameScene extends Phaser.Scene {
     if (hasMelee) {
       this.playComboSfx(combo);
       this.showHits(outcome.hits, combo, outcome.swordMod);
+      this.flyBlades(swordCells); // the matched tiles themselves take wing at the foe
     }
     const meleeMs = hasMelee ? this.comboMs(combo) : 0;
     const spell = outcome.spell;
@@ -1498,7 +1546,7 @@ class GameScene extends Phaser.Scene {
       this.heroLockX = true;
       if (hasMelee) this.playCombo(combo);
       if (spell) {
-        const impactAt = this.performCast(spell, true, meleeMs);
+        const impactAt = this.performCast(spell, true, meleeMs, undefined, staffCells);
         this.surgeAfterKill(impactAt + 120);
       } else {
         this.surgeAfterKill(meleeMs);
@@ -1511,7 +1559,7 @@ class GameScene extends Phaser.Scene {
           if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-${this.phase === "fight" ? "idle" : "walk"}`);
         });
       }
-      if (spell) this.performCast(spell, false, meleeMs);
+      if (spell) this.performCast(spell, false, meleeMs, undefined, staffCells);
     }
   }
 
@@ -1534,11 +1582,12 @@ class GameScene extends Phaser.Scene {
    * (number, hurt, burn, even the death) lands ON IMPACT. Returns impact time.
    * `killed` holds the corpse until the bolt arrives instead of dying early.
    */
-  private performCast(spell: SpellOutcome, killed: boolean, delayMs: number, tint = 0xffa040): number {
+  private performCast(spell: SpellOutcome, killed: boolean, delayMs: number, tint = 0xffa040, fromCells: { x: number; y: number }[] = []): number {
     if (killed) this.orcDying = true; // freeze hurt/strike reactions; killOrc re-affirms at impact
     this.time.delayedCall(delayMs, () => {
       this.playCombo(["hero-spell"], killed ? undefined : this.heroBaseAnim());
       this.sfx("spell", 0.55);
+      if (fromCells.length) this.gatherSpell(fromCells, tint); // the matched tiles feed the staff
       this.time.delayedCall(CAST_LEAD_MS, () => this.launchBolt(spell, killed, tint));
     });
     return delayMs + CAST_LEAD_MS + BOLT_FLIGHT_MS;
@@ -1619,6 +1668,119 @@ class GameScene extends Phaser.Scene {
         if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-${this.phase === "fight" ? "idle" : "walk"}`);
       });
     }
+  }
+
+  // ---- board -> lane causality: the match physically travels to the fight ----
+
+  /** Tween an object along a shallow arc, nose pointed down the path. */
+  private arcTo(obj: Phaser.GameObjects.Image, sx: number, sy: number, tx: number, ty: number, ms: number, arcH: number, onDone: () => void) {
+    const mx = (sx + tx) / 2;
+    const my = Math.min(sy, ty) - arcH; // control point above the straight line
+    let px = sx;
+    let py = sy;
+    this.tweens.addCounter({
+      from: 0,
+      to: 1,
+      duration: ms,
+      ease: "Sine.easeIn",
+      onUpdate: (tw) => {
+        const u = tw.getValue() ?? 0;
+        const a = 1 - u;
+        const x = a * a * sx + 2 * a * u * mx + u * u * tx;
+        const y = a * a * sy + 2 * a * u * my + u * u * ty;
+        obj.setRotation(Math.atan2(y - py, x - px) + Math.PI / 2); // blade art points up
+        px = x;
+        py = y;
+        obj.setPosition(x, y);
+      },
+      onComplete: onDone,
+    });
+  }
+
+  /**
+   * Sword matches take wing: a spectral blade lifts out of each matched tile and
+   * arcs up into the foe — the eye follows the motion from board to fight, and
+   * "my match DID that" becomes literal. Impacts land as small steel-white pops.
+   */
+  private flyBlades(cells: { x: number; y: number }[]) {
+    if (!this.orc || !cells.length) return;
+    const foeX = this.orc.x;
+    cells.slice(0, 5).forEach((cell, i) => {
+      this.time.delayedCall(i * 55, () => {
+        if (this.run.over) return;
+        const tx = foeX + (Math.random() * 20 - 14);
+        const ty = GROUND_Y - 34 - Math.random() * 18;
+        const blade = this.inBox(
+          this.add.image(cell.x, cell.y, "blade-spect").setBlendMode(Phaser.BlendModes.ADD).setDepth(46).setAlpha(0).setScale(0.5),
+        );
+        this.tweens.add({ targets: blade, alpha: 0.95, scale: 1, duration: 90 });
+        const trail = this.inBox(
+          this.add
+            .particles(0, 0, "spark", {
+              speed: { min: 5, max: 30 },
+              lifespan: { min: 110, max: 240 },
+              scale: { start: 0.55, end: 0 },
+              blendMode: "ADD",
+              tint: 0xcfe8ff,
+              frequency: 22,
+              follow: blade,
+            })
+            .setDepth(45),
+        );
+        this.arcTo(blade, cell.x, cell.y, tx, ty, BLADE_FLIGHT_MS, 70 + Math.random() * 40, () => {
+          trail.destroy();
+          blade.destroy();
+          const pop = this.inBox(
+            this.add
+              .particles(tx, ty, "spark", {
+                speed: { min: 60, max: 170 },
+                lifespan: { min: 120, max: 300 },
+                scale: { start: 0.8, end: 0 },
+                blendMode: "ADD",
+                tint: 0xe7f4ff,
+                emitting: false,
+              })
+              .setDepth(46),
+          );
+          pop.explode(7);
+          this.time.delayedCall(400, () => pop.destroy());
+        });
+      });
+    });
+  }
+
+  /**
+   * Staff matches feed the cast: motes stream out of the matched tiles and
+   * converge on the staff tip during the cast lead — THEN the bolt leaves.
+   * The player sees their tiles become the fireball.
+   */
+  private gatherSpell(cells: { x: number; y: number }[], tint: number) {
+    const tx = this.hero.x + 28; // the staff tip — same origin launchBolt uses
+    const ty = GROUND_Y - 44;
+    cells.slice(0, 5).forEach((cell, i) => {
+      const mote = this.inBox(
+        this.add.image(cell.x, cell.y, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(tint).setDepth(46).setScale(1.5).setAlpha(0.9),
+      );
+      const mx = (cell.x + tx) / 2 + (Math.random() * 60 - 30);
+      const my = (cell.y + ty) / 2 + (Math.random() * 40 - 20);
+      this.tweens.addCounter({
+        from: 0,
+        to: 1,
+        duration: CAST_LEAD_MS - 40,
+        delay: i * 18,
+        ease: "Quad.easeIn",
+        onUpdate: (tw) => {
+          const u = tw.getValue() ?? 0;
+          const a = 1 - u;
+          mote.setPosition(a * a * cell.x + 2 * a * u * mx + u * u * tx, a * a * cell.y + 2 * a * u * my + u * u * ty);
+          mote.setScale(1.5 - u * 0.9);
+        },
+        onComplete: () => mote.destroy(),
+      });
+    });
+    // the tip answers as the motes land — a swelling glow right before the launch
+    const glow = this.inBox(this.add.image(tx, ty, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(tint).setDepth(46).setScale(0.4).setAlpha(0.5));
+    this.tweens.add({ targets: glow, scale: 2.4, alpha: 0.95, duration: CAST_LEAD_MS - 30, ease: "Quad.easeIn", onComplete: () => glow.destroy() });
   }
 
   /** First resisted/weak hit on a foe names the rule — the defenses teach themselves. */
@@ -1780,6 +1942,15 @@ class GameScene extends Phaser.Scene {
     const dying = this.orc;
     this.orc = null;
     if (dying) {
+      // the kill lands as a BEAT: corpse flashes white-hot, the camera punches in a
+      // hair and settles — a felt full-screen punctuation, no eye movement required
+      dying.setTintFill(0xffffff);
+      this.time.delayedCall(90, () => dying.clearTint());
+      buzz(18);
+      const cam = this.cameras.main;
+      cam.zoomTo(1.035, 70, Phaser.Math.Easing.Quadratic.Out, true, (_c: Phaser.Cameras.Scene2D.Camera, prog: number) => {
+        if (prog === 1) cam.zoomTo(1, 160, Phaser.Math.Easing.Sine.Out, true);
+      });
       this.tweens.killTweensOf(dying);
       dying.play(`${this.orcAnim}-death`);
       dying.once("animationcomplete", () => {
@@ -2747,6 +2918,7 @@ class GameScene extends Phaser.Scene {
             font: EMOJI_FONT,
           }); // deep foes chew through the guard — the cost is shown, not hidden
         this.showBlockImpact(isBoss, net <= 0);
+        this.boardGuardRipple(); // the guard's clang rings around the puzzle frame too
       });
     this.orc.play(`${this.orcAnim}-attack`).once("animationcomplete", () => {
       if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
@@ -2755,6 +2927,7 @@ class GameScene extends Phaser.Scene {
       this.cameras.main.shake(isBoss ? 260 : 150, isBoss ? 0.009 : 0.006);
       this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
       this.time.delayedCall(isBoss ? 200 : 130, () => this.hero.clearTint());
+      this.boardHitReact(isBoss); // the blow lands where the player is LOOKING: on the board
     } else if (blocked) {
       // PERFECT block: run.ts already banked the riposte shove (BLOCK_PUSHBACK)
       // — the hero steps up via update(); sell the foe being knocked away too
@@ -2846,6 +3019,75 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: foe, x: x + (isBoss ? 8 : 12), duration: 70, yoyo: true, ease: "Quad.easeOut" });
     }
     if (fullyBlocked) this.cameras.main.shake(isBoss ? 100 : 75, isBoss ? 0.003 : 0.002);
+  }
+
+  // ---- lane -> board intrusion: the fight reaches down into the puzzle -------
+
+  /**
+   * STRIKE_TELE_MS before each strike, dread bleeds over the board's top rows
+   * and a "!" pops over the foe — the board-watcher feels it coming, and the
+   * cue itself invites a glance up. Fires blind; guards decide if it shows.
+   */
+  private strikeTelegraph() {
+    if (this.run.over || this.phase !== "fight" || !this.orc || this.orcDying || this.tutorial?.active || this.arenaActive) return;
+    const shade = this.inBox(this.add.rectangle(CXC, GRID_Y + 16, GRID_W, 32, 0x8a1622, 0).setDepth(40));
+    const rim = this.inBox(this.add.rectangle(CXC, GRID_Y - 3, GRID_W, 3, 0xff4a3a, 0).setDepth(40).setBlendMode(Phaser.BlendModes.ADD));
+    this.tweens.add({ targets: shade, fillAlpha: 0.2, duration: STRIKE_TELE_MS * 0.55, ease: "Sine.easeIn" });
+    this.tweens.add({ targets: rim, fillAlpha: 0.7, duration: STRIKE_TELE_MS * 0.55, ease: "Sine.easeIn" });
+    // release right as the blow lands (or would have — strike() re-checks the world)
+    this.time.delayedCall(STRIKE_TELE_MS + 60, () => {
+      this.tweens.add({ targets: [shade, rim], fillAlpha: 0, duration: 160, onComplete: () => { shade.destroy(); rim.destroy(); } });
+    });
+    const bang = this.inBox(
+      this.add
+        .text(this.orc.x + 6, GROUND_Y - 92, "!", { fontFamily: "monospace", fontStyle: "bold", fontSize: "30px", color: "#ff5a4a", stroke: "#1a0508", strokeThickness: 6 })
+        .setOrigin(0.5)
+        .setDepth(48)
+        .setScale(0.2),
+    );
+    this.tweens.add({ targets: bang, scale: 1, duration: 160, ease: "Back.easeOut" });
+    this.tweens.add({ targets: bang, alpha: 0, duration: 180, delay: STRIKE_TELE_MS - 160, onComplete: () => bang.destroy() });
+  }
+
+  /**
+   * An unblocked hit rattles the puzzle itself: every settled tile shudders in
+   * its cell (angle only — never fights the x/y of swaps and falls), a red wash
+   * flashes over the board, and a claw-streak rakes across it.
+   */
+  private boardHitReact(isBoss: boolean) {
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++) {
+        const t = this.tiles[r][c];
+        if (!t) continue;
+        const a = (Math.random() * 2 - 1) * (isBoss ? 5 : 3.5);
+        this.tweens.add({ targets: t, angle: a, duration: 45, yoyo: true, repeat: 1, ease: "Sine.easeInOut", delay: Math.random() * 60 });
+      }
+    const wash = this.inBox(this.add.rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W, GRID_H, 0xc03028, isBoss ? 0.16 : 0.11).setDepth(44));
+    this.tweens.add({ targets: wash, fillAlpha: 0, duration: 260, ease: "Quad.easeOut", onComplete: () => wash.destroy() });
+    // three raking claw lines, upper-right to lower-left across the board face
+    const claw = this.inBox(this.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(45).setAlpha(0.85));
+    const cx0 = CXC + GRID_W * 0.22;
+    const cy0 = GRID_Y + GRID_H * 0.18;
+    for (let i = 0; i < 3; i++) {
+      claw.lineStyle(i === 1 ? 5 : 3, 0xff6a4a, 0.9);
+      claw.beginPath();
+      claw.moveTo(cx0 + i * 34, cy0 + i * 10);
+      claw.lineTo(cx0 - GRID_W * 0.34 + i * 34, cy0 + GRID_H * 0.5 + i * 10);
+      claw.strokePath();
+    }
+    this.tweens.add({ targets: claw, alpha: 0, duration: 300, ease: "Quad.easeOut", onComplete: () => claw.destroy() });
+  }
+
+  /** A held block answers on the board too: a steel-blue ring pulses off the frame. */
+  private boardGuardRipple() {
+    const ring = this.inBox(
+      this.add
+        .rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W + 10, GRID_H + 10)
+        .setStrokeStyle(4, 0x7ec4ff, 0.9)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(44),
+    );
+    this.tweens.add({ targets: ring, scaleX: 1.035, scaleY: 1.07, alpha: 0, duration: 340, ease: "Quad.easeOut", onComplete: () => ring.destroy() });
   }
 
   // ================= treasure chests (the dopamine blast) =================
@@ -3039,7 +3281,45 @@ class GameScene extends Phaser.Scene {
           .setScale(0.2),
       );
       this.tweens.add({ targets: t, scale: 1.12, duration: 200, ease: "Back.easeOut" });
-      await this.cwait(560);
+      // items bring their tooltip to the reveal: what it does + how it's used,
+      // so the player learns the tool while the spotlight is on it (skip collapses this)
+      if (pull.kind === "item" && pull.item) {
+        const desc = this.inBox(
+          this.add
+            .text(CX, CY - 118, pull.item.desc, {
+              fontFamily: "monospace", fontSize: "17px", color: "#efe6d4",
+              stroke: "#14100c", strokeThickness: 4, align: "center", wordWrap: { width: 480 },
+            })
+            .setOrigin(0.5, 0)
+            .setDepth(64)
+            .setAlpha(0),
+        );
+        const how = this.inBox(
+          this.add
+            .text(CX, CY - 118, `· ${pull.item.hint} ·`, {
+              fontFamily: "monospace", fontStyle: "bold", fontSize: "14px", color: "#c9a86a",
+              stroke: "#14100c", strokeThickness: 3,
+            })
+            .setOrigin(0.5, 0)
+            .setDepth(64)
+            .setAlpha(0),
+        );
+        how.setY(desc.y + desc.height + 10);
+        this.tweens.add({ targets: [desc, how], alpha: 1, duration: 220, delay: 140 });
+        // read at your own pace — the reveal holds until a tap (skip ▸ still blows through)
+        const go = this.inBox(
+          this.add
+            .text(CX, how.y + 34, "tap ▸", { fontFamily: "monospace", fontStyle: "bold", fontSize: "15px", color: "#9aa4b4", stroke: "#14100c", strokeThickness: 3 })
+            .setOrigin(0.5, 0)
+            .setDepth(64)
+            .setAlpha(0),
+        );
+        this.tweens.add({ targets: go, alpha: 0.9, duration: 300, delay: 500, yoyo: true, repeat: -1 });
+        await this.waitTap();
+        this.tweens.add({ targets: [desc, how, go], alpha: 0, duration: 180, onComplete: () => { desc.destroy(); how.destroy(); go.destroy(); } });
+      } else {
+        await this.cwait(560);
+      }
       this.tweens.add({ targets: t, x: rowX(i), y: rowY, scale: 0.72, duration: 230, ease: "Quad.easeInOut" }); // tuck into the row
       collected.push({ t, pull });
     }
@@ -3128,6 +3408,12 @@ class GameScene extends Phaser.Scene {
   /** A choreography beat — collapses to a blink once the player taps to skip. */
   private cwait(ms: number): Promise<void> {
     return new Promise((res) => this.time.delayedCall(this.chestFast ? Math.min(ms, 70) : ms, res));
+  }
+
+  /** Hold a chest beat until the player taps (anywhere). Skipping waives the wait. */
+  private waitTap(): Promise<void> {
+    if (this.chestFast) return Promise.resolve();
+    return new Promise((res) => this.input.once("pointerdown", () => res()));
   }
 
   /** Promise-wrapped tween; runs near-instant once the player has tapped to skip. */
@@ -3954,6 +4240,53 @@ class GameScene extends Phaser.Scene {
     this.textures.addCanvas(POTION_ART_KEY, cv);
   }
 
+  /** A spectral sword, point-up: the projectile sword matches send at the foe. */
+  private buildBladeArt() {
+    if (this.textures.exists("blade-spect")) return;
+    const cv = document.createElement("canvas");
+    cv.width = 18;
+    cv.height = 48;
+    const g = cv.getContext("2d")!;
+    // blade: elongated diamond, steel core with a white-hot edge
+    g.beginPath();
+    g.moveTo(9, 0); // tip
+    g.lineTo(13, 30);
+    g.lineTo(9, 34);
+    g.lineTo(5, 30);
+    g.closePath();
+    const grad = g.createLinearGradient(0, 0, 0, 34);
+    grad.addColorStop(0, "#ffffff");
+    grad.addColorStop(0.5, "#cfe4ff");
+    grad.addColorStop(1, "#8fb4e0");
+    g.fillStyle = grad;
+    g.fill();
+    g.strokeStyle = "rgba(255,255,255,0.9)";
+    g.lineWidth = 1.4;
+    g.stroke();
+    // crossguard + grip
+    g.fillStyle = "#e8f2ff";
+    g.fillRect(2, 33, 14, 4);
+    g.fillStyle = "#a8c4e8";
+    g.fillRect(7, 37, 4, 9);
+    this.textures.addCanvas("blade-spect", cv);
+  }
+
+  /** Radial red edge-glow, stretched to the viewport — the peril vignette. */
+  private buildVignetteArt() {
+    if (this.textures.exists("vignette")) return;
+    const S = 256;
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = S;
+    const g = cv.getContext("2d")!;
+    const gr = g.createRadialGradient(S / 2, S / 2, S * 0.3, S / 2, S / 2, S * 0.66);
+    gr.addColorStop(0, "rgba(200,36,48,0)");
+    gr.addColorStop(0.7, "rgba(200,36,48,0.5)");
+    gr.addColorStop(1, "rgba(140,16,28,1)");
+    g.fillStyle = gr;
+    g.fillRect(0, 0, S, S);
+    this.textures.addCanvas("vignette", cv);
+  }
+
   private faceCanvas(type: number, S: number): HTMLCanvasElement {
     const cv = document.createElement("canvas");
     cv.width = S;
@@ -4200,7 +4533,7 @@ const game = new Phaser.Game({
   pixelArt: true,
   // RESIZE: canvas fills the #game element (100vw x 100vh); the scene re-lays-out on resize
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
-  scene: [CampScene, GameScene, MenuScene], // boot into camp; DEPART starts the run, death returns; menu overlays either
+  scene: [TitleScene, CampScene, GameScene, MenuScene], // boot: title -> camp; DEPART starts the run, death returns; menu overlays camp/run
 });
 
 // Mobile browsers resize the visible viewport when the toolbar shows/hides (and on

@@ -98,7 +98,7 @@ const CAMP_BIOMES: Record<string, BiomeDef> = {
 };
 
 /** The biome def for a saved biome key, defaulting to plains for unknown values. */
-function biomeDef(key: string): BiomeDef {
+export function biomeDef(key: string): BiomeDef {
   return CAMP_BIOMES[key] ?? CAMP_BIOMES.plains;
 }
 

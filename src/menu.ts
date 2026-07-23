@@ -21,6 +21,7 @@ type View = "main" | "options" | "save" | "load" | "confirm";
 
 export class MenuScene extends Phaser.Scene {
   private from = "camp"; // scene key we paused (resume target)
+  private direct: View | null = null; // opened straight to one view (title's LOAD GAME) — back resumes, not showMain
   private root: Phaser.GameObjects.Container | null = null;
   private view: View = "main";
   private dragging: ((px: number) => void) | null = null; // active slider, if any
@@ -29,8 +30,9 @@ export class MenuScene extends Phaser.Scene {
     super("menu");
   }
 
-  init(data: { from?: string }) {
+  init(data: { from?: string; view?: View }) {
     this.from = data?.from ?? "camp";
+    this.direct = data?.view ?? null;
   }
 
   create() {
@@ -39,7 +41,7 @@ export class MenuScene extends Phaser.Scene {
     this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.7).setInteractive(); // swallow taps to the world
 
     this.input.keyboard?.on("keydown-ESC", () => {
-      if (this.view === "main") this.resume();
+      if (this.view === "main" || this.direct) this.resume();
       else this.showMain();
     });
     // slider dragging is scene-wide so the knob can't be "dropped" mid-drag
@@ -53,7 +55,8 @@ export class MenuScene extends Phaser.Scene {
       }
     });
 
-    this.showMain();
+    if (this.direct === "load") this.showSlots("load");
+    else this.showMain();
   }
 
   private sfx(key: string, volume = 0.5) {
@@ -253,7 +256,8 @@ export class MenuScene extends Phaser.Scene {
       });
       sy += 66;
     }
-    this.button(box, x, y + 380 - 40, 160, "back", () => this.showMain(), { small: true });
+    // launched straight here (title's LOAD GAME): back returns to the title, not the pause menu
+    this.button(box, x, y + 380 - 40, 160, "back", () => (this.direct ? this.resume() : this.showMain()), { small: true });
   }
 
   /** A two-line slot row (taller than a button, left-aligned label). */
