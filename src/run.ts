@@ -218,12 +218,14 @@ export function dealDamage(s: RunState, damage: number): boolean {
 export function applyMatches(s: RunState, counts: Record<number, number>): MatchOutcome {
   const n = (t: number) => counts[t] ?? 0;
   const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay per-match — they're tension)
-  // Keys and guard pay per MATCH, not per tile: a 3-match banks one, a 5-match
-  // two, two separate 3-matches in one wave two. (round(n/3): 3,4->1  5,6->2)
+  // Keys pay per MATCH, not per tile: a 3-match banks one, a 5-match two,
+  // two separate 3-matches in one wave two. (round(n/3): 3,4->1  5,6->2)
   const perMatch = (tiles: number) => Math.round(tiles / 3);
   const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: perMatch(n(KEY)) };
 
-  const guard = perMatch(n(SHIELD)); // one charge per shield MATCH
+  // Shields reward the BIGGER match: 3 tiles -> 1 charge, then +1 per extra
+  // tile (4 -> 2, 5 -> 3, 6 -> 4, ...). Working for the long swap pays off.
+  const guard = n(SHIELD) >= 3 ? n(SHIELD) - 2 : 0;
   s.block += guard;
   s.resources.wood += gained.wood;
   s.resources.ore += gained.ore;

@@ -201,7 +201,8 @@ Applied in `applyMatches(run, counts)` per resolved cascade:
   Malgrim — spells ×0.5, swords ×1.5); green slimes are plain. `RESIST_MULT`
   0.5 / `WEAK_MULT` 1.5; badge 🛡⚔ / 🛡🪄 by the HP bar; gray "resisted" and
   gold "WEAK!" numbers + a first-hit callout teach the rule.
-- **Shields** bank guard CHARGES (1 per tile), but deep foes hit harder than
+- **Shields** bank guard CHARGES per MATCH, rewarding the long swap: 3 tiles →
+  1 charge, then +1 per extra tile (4→2, 5→3, 6→4…). But deep foes hit harder than
   one shield can turn: a strike costs `guardCost(killed)` charges — 1 early,
   **2 from depth 8, 3 from depth 16** (the HUD floats `-N🛡` when a block eats
   more than one). Pay in full and the blow is turned + the foe shoved back
