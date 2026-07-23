@@ -4728,6 +4728,26 @@ const game = new Phaser.Game({
 // ceiling. (Setting this inside a scene made loudness depend on scene history.)
 game.sound.volume = 0.7;
 
+// Keep the audio alive when the window merely loses FOCUS (second monitor,
+// a notification stealing it): the game stays visible and keeps running, so
+// silent-but-scrolling reads as "the sound randomly cut out". Page-hidden
+// still pauses everything as normal.
+game.sound.pauseOnBlur = false;
+
+// Audio watchdog: corporate browsers (Edge/Chrome efficiency modes, sleeping
+// tabs) and Bluetooth headset profile flips can suspend the AudioContext
+// mid-session and never hand it back — sound vanishes for stretches until
+// something forces a resume. Nudge it awake on every user signal plus a slow
+// heartbeat. Harmless where the context is healthy or HTML5 audio is in use.
+const nudgeAudio = () => {
+  const ctx = (game.sound as unknown as { context?: AudioContext }).context;
+  if (ctx && ctx.state !== "running") void ctx.resume().catch(() => undefined);
+};
+window.addEventListener("focus", nudgeAudio);
+document.addEventListener("visibilitychange", nudgeAudio);
+window.addEventListener("pointerdown", nudgeAudio, { passive: true });
+window.setInterval(nudgeAudio, 5000);
+
 // Mobile browsers resize the visible viewport when the toolbar shows/hides (and on
 // rotate) without always firing a plain "resize"; re-fit the canvas on those too.
 // Portrait is a hard pause: Safari cannot reliably lock an iPhone's orientation,
