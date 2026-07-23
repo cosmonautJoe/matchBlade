@@ -413,6 +413,11 @@ class GameScene extends Phaser.Scene {
   private laneGuard!: Phaser.GameObjects.Container; // in-lane 🛡️×N badge (top-left)
   private laneGuardText!: Phaser.GameObjects.Text;
   private laneGuardLast = -1; // last shown count — drives the gain-bounce / spend-flash
+  // zone-dressed HUD rails: baked fringe strips pinned to the panel edges by layoutPanels
+  private panelDecor: { ts: Phaser.GameObjects.TileSprite; edge: "top" | "bottom" | "side"; h: number; side: "left" | "right" }[] = [];
+  // live rail bounds (screen px) — the panel critters wander inside these
+  private panelRectL = new Phaser.Geom.Rectangle();
+  private panelRectR = new Phaser.Geom.Rectangle();
 
   constructor() {
     super("game");
@@ -788,6 +793,22 @@ class GameScene extends Phaser.Scene {
     const midY = y0 + uh / 2;
     this.leftPanel.setPosition(lLeft + lw / 2, midY).setSize(lw - 8, uh - 8);
     this.rightPanel.setPosition(rLeft + rw / 2, midY).setSize(rw - 8, uh - 8);
+    // fringe strips hug the inside of each rail's frame (see buildPanelTheme)
+    this.panelRectL.setTo(lLeft + 4, y0 + 4, lw - 8, uh - 8);
+    this.panelRectR.setTo(rLeft + 4, y0 + 4, rw - 8, uh - 8);
+    for (const d of this.panelDecor) {
+      const isL = d.side === "left";
+      const px = isL ? lLeft : rLeft;
+      const pw = isL ? lw : rw;
+      if (d.edge === "side") {
+        // a climbing strip down the rail's OUTER edge (clear of the text inset)
+        const x = isL ? px + 4 + d.h / 2 : px + pw - 4 - d.h / 2;
+        d.ts.setPosition(x, midY).setSize(d.h, uh - 12);
+      } else {
+        const y = d.edge === "bottom" ? midY + (uh - 8) / 2 - d.h / 2 - 2 : midY - (uh - 8) / 2 + d.h / 2 + 2;
+        d.ts.setPosition(px + pw / 2, y).setSize(Math.max(8, pw - 14), d.h);
+      }
+    }
     this.rotateHint.setPosition(x0 + uw / 2, y0 + 6).setVisible(uw < uh); // portrait hint; panels still show
 
     // resources: icon + number rows, positioned exactly so there's no emoji-spacing drift
@@ -829,8 +850,18 @@ class GameScene extends Phaser.Scene {
 
   // --- HUD panels (positions are set later by layout()) ---
   private buildPanels() {
-    this.leftPanel = this.add.rectangle(0, 0, 10, 10, 0x14171f).setStrokeStyle(2, 0x2a2d38);
-    this.rightPanel = this.add.rectangle(0, 0, 10, 10, 0x14171f).setStrokeStyle(2, 0x2a2d38);
+    // the rails wear the zone: tinted body + hand-baked fringe art (buildPanelTheme),
+    // muted and edge-hugging so the resources/slots stay the first read
+    const theme = this.buildPanelTheme();
+    this.leftPanel = this.add.rectangle(0, 0, 10, 10, theme.body).setStrokeStyle(2, theme.edge);
+    this.rightPanel = this.add.rectangle(0, 0, 10, 10, theme.body).setStrokeStyle(2, theme.edge);
+    this.panelDecor = [];
+    for (const side of ["left", "right"] as const)
+      for (const d of theme.decor) {
+        const ts = this.add.tileSprite(0, 0, 8, d.h, d.key).setAlpha(d.alpha);
+        this.panelDecor.push({ ts, edge: d.edge, h: d.h, side });
+      }
+    this.buildPanelLife(theme.kind); // created HERE so the critters render under the text/slots
 
     // resources: one icon + one number per row, positioned explicitly so spacing is exact
     const RES_GLYPHS = ["🪵", "🪨", "💎", "🔑"];
@@ -4434,6 +4465,454 @@ class GameScene extends Phaser.Scene {
     g.textBaseline = "middle";
     g.fillText("🧪", 42, 46);
     this.textures.addCanvas(POTION_ART_KEY, cv);
+  }
+
+  // ---- zone-dressed HUD rails: per-biome panel tint + baked fringe art -------
+
+  /**
+   * The HUD rails reflect the road: panel body/stroke tinted to the zone, plus
+   * hand-baked tileable fringe strips (original canvas art, not world textures)
+   * hugging the panel edges. Muted colors + alpha keep the text the first read.
+   * A new biome = one more branch here.
+   */
+  private buildPanelTheme(): {
+    kind: "plains" | "forest";
+    body: number;
+    edge: number;
+    decor: { key: string; edge: "top" | "bottom" | "side"; h: number; alpha: number }[];
+  } {
+    if (this.meta.biome === "forest") {
+      this.bakeForestPanelArt();
+      return {
+        kind: "forest",
+        body: 0x0f1511,
+        edge: 0x2c4a33,
+        decor: [
+          { key: "ui-forest-canopy", edge: "top", h: 64, alpha: 0.95 },
+          { key: "ui-forest-litter", edge: "bottom", h: 30, alpha: 0.9 },
+          { key: "ui-forest-vine", edge: "side", h: 14, alpha: 0.8 },
+        ],
+      };
+    }
+    // plains (and the default for roads not yet dressed)
+    this.bakePlainsPanelArt();
+    return {
+      kind: "plains",
+      body: 0x131a10,
+      edge: 0x3a512b,
+      decor: [
+        { key: "ui-plains-grass", edge: "bottom", h: 56, alpha: 0.95 },
+        { key: "ui-plains-sky", edge: "top", h: 24, alpha: 0.6 },
+      ],
+    };
+  }
+
+  /** A single leaf: pointed oval on a stem angle, filled + veined. */
+  private drawLeaf(g: CanvasRenderingContext2D, x: number, y: number, len: number, ang: number, fill: string) {
+    g.save();
+    g.translate(x, y);
+    g.rotate(ang);
+    const w = len * 0.32;
+    g.fillStyle = fill;
+    g.beginPath();
+    g.moveTo(0, 0);
+    g.quadraticCurveTo(w, len * 0.35, 0, len);
+    g.quadraticCurveTo(-w, len * 0.35, 0, 0);
+    g.fill();
+    g.strokeStyle = "rgba(10,20,10,0.35)";
+    g.lineWidth = 0.8;
+    g.beginPath();
+    g.moveTo(0, len * 0.12);
+    g.lineTo(0, len * 0.88);
+    g.stroke();
+    g.restore();
+  }
+
+  /** Plains rails: a deep meadow fringe (bottom) and a sunlit sky whisper (top). */
+  private bakePlainsPanelArt() {
+    if (!this.textures.exists("ui-plains-grass")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 56;
+      const g = cv.getContext("2d")!;
+      // low meadow mounds behind the blades
+      g.fillStyle = "rgba(42,66,32,0.55)";
+      for (const [mx, mr] of [[40, 70], [140, 95], [230, 65]] as const) {
+        g.beginPath();
+        g.ellipse(mx, 70, mr, 26, 0, Math.PI, 0);
+        g.fill();
+      }
+      // a DEEP stand of grass: leaning quadratic strokes in four greens
+      const greens = ["#3c6030", "#4a7538", "#578a45", "#2e4d26"];
+      for (let i = 0; i < 170; i++) {
+        const x = 3 + Math.random() * 250;
+        const h = 12 + Math.random() * 40;
+        const lean = (Math.random() * 2 - 1) * 11;
+        g.strokeStyle = greens[i % greens.length];
+        g.lineWidth = 1.3 + Math.random() * 1.6;
+        g.beginPath();
+        g.moveTo(x, 56);
+        g.quadraticCurveTo(x + lean * 0.3, 56 - h * 0.6, x + lean, 56 - h);
+        g.stroke();
+      }
+      // golden wheat stalks swaying above the green
+      for (let i = 0; i < 8; i++) {
+        const x = 14 + Math.random() * 228;
+        const h = 36 + Math.random() * 16;
+        const lean = (Math.random() * 2 - 1) * 7;
+        g.strokeStyle = "#c9b25a";
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.moveTo(x, 56);
+        g.quadraticCurveTo(x + lean * 0.4, 56 - h * 0.6, x + lean, 56 - h);
+        g.stroke();
+        g.fillStyle = "#d8c26a";
+        for (let k = 0; k < 5; k++) {
+          g.beginPath();
+          g.ellipse(x + lean + (k % 2 === 0 ? -1.9 : 1.9), 56 - h + k * 2.8, 2, 3.2, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      // wildflowers + a few white daisies riding the blades
+      const petals = ["#ffd94a", "#ffe9a8", "#dfa0c0", "#e8e2f0"];
+      for (let i = 0; i < 16; i++) {
+        const x = 12 + Math.random() * 232;
+        const y = 56 - (10 + Math.random() * 26);
+        g.fillStyle = petals[i % petals.length];
+        g.beginPath();
+        g.arc(x, y, 2.3, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = "rgba(90,60,20,0.8)";
+        g.beginPath();
+        g.arc(x, y, 0.9, 0, Math.PI * 2);
+        g.fill();
+      }
+      for (let i = 0; i < 6; i++) {
+        const x = 20 + Math.random() * 216;
+        const y = 56 - (14 + Math.random() * 22);
+        g.fillStyle = "#f2f2ea";
+        for (let k = 0; k < 5; k++) {
+          const a = (k / 5) * Math.PI * 2;
+          g.beginPath();
+          g.arc(x + Math.cos(a) * 2.4, y + Math.sin(a) * 2.4, 1.5, 0, Math.PI * 2);
+          g.fill();
+        }
+        g.fillStyle = "#ffd94a";
+        g.beginPath();
+        g.arc(x, y, 1.4, 0, Math.PI * 2);
+        g.fill();
+      }
+      this.textures.addCanvas("ui-plains-grass", cv);
+    }
+    if (!this.textures.exists("ui-plains-sky")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 24;
+      const g = cv.getContext("2d")!;
+      // a warm sun-glow breaking in from the strip's edge
+      const sun = g.createRadialGradient(232, 4, 1, 232, 4, 18);
+      sun.addColorStop(0, "rgba(255,224,138,0.6)");
+      sun.addColorStop(1, "rgba(255,224,138,0)");
+      g.fillStyle = sun;
+      g.fillRect(206, 0, 50, 24);
+      // soft cloud puffs + distant birds
+      g.fillStyle = "rgba(215,228,240,0.35)";
+      for (const [cx0, cy0, s] of [[52, 9, 1], [126, 15, 0.7], [182, 11, 0.85]] as const) {
+        for (const [ox, oy, r] of [[-10, 2, 6], [0, 0, 8], [10, 2, 6], [4, 4, 6]] as const) {
+          g.beginPath();
+          g.arc(cx0 + ox * s, cy0 + oy * s, r * s, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      g.strokeStyle = "rgba(200,215,230,0.55)";
+      g.lineWidth = 1;
+      for (const [bx, by] of [[96, 7], [107, 10], [102, 15]] as const) {
+        g.beginPath();
+        g.moveTo(bx - 3, by + 2);
+        g.quadraticCurveTo(bx, by, bx + 3, by + 2);
+        g.stroke();
+      }
+      this.textures.addCanvas("ui-plains-sky", cv);
+    }
+    // the meadow's visitor: pale wings baked once, tinted per butterfly
+    if (!this.textures.exists("ui-butterfly")) {
+      const cv = document.createElement("canvas");
+      cv.width = 12;
+      cv.height = 10;
+      const g = cv.getContext("2d")!;
+      g.fillStyle = "#f4f4f8";
+      for (const s of [-1, 1]) {
+        g.beginPath();
+        g.ellipse(6 + s * 3, 3.4, 3.1, 2.4, s * 0.5, 0, Math.PI * 2);
+        g.fill();
+        g.beginPath();
+        g.ellipse(6 + s * 2.4, 6.8, 2.2, 1.8, s * 0.9, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.strokeStyle = "#2a2016";
+      g.lineWidth = 1.2;
+      g.beginPath();
+      g.moveTo(6, 1.5);
+      g.lineTo(6, 8.5);
+      g.stroke();
+      this.textures.addCanvas("ui-butterfly", cv);
+    }
+  }
+
+  /** Forest rails: layered hanging canopy (top), mushroomed litter (bottom), climbing side vines. */
+  private bakeForestPanelArt() {
+    if (!this.textures.exists("ui-forest-canopy")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 64;
+      const g = cv.getContext("2d")!;
+      // BACK canopy layer: dense, dark, short — depth behind the bright leaves
+      const backs = ["#16301a", "#1c3a1f"];
+      for (let x = 0; x < 256; x += 5) {
+        this.drawLeaf(g, x + Math.random() * 4, Math.random() * 6, 16 + Math.random() * 16, (Math.random() * 2 - 1) * 0.7, backs[(Math.random() * 2) | 0]);
+      }
+      // the vine the leaves hang from
+      g.strokeStyle = "#243b22";
+      g.lineWidth = 2.5;
+      g.beginPath();
+      g.moveTo(0, 3);
+      for (let x = 0; x <= 256; x += 16) g.quadraticCurveTo(x - 8, 3 + (x % 32 === 0 ? 3 : -2), x, 3);
+      g.stroke();
+      // FRONT canopy: brighter clusters, longest in the dips
+      const deeps = ["#274d2b", "#356338", "#3f7a42", "#4d9450"];
+      for (let x = 4; x < 256; x += 8 + Math.random() * 7) {
+        const n = 2 + ((Math.random() * 3) | 0);
+        for (let k = 0; k < n; k++) {
+          const len = 14 + Math.random() * 28;
+          const ang = (Math.random() * 2 - 1) * 0.55;
+          this.drawLeaf(g, x + (Math.random() * 8 - 4), 2 + Math.random() * 6, len, ang, deeps[(Math.random() * deeps.length) | 0]);
+        }
+      }
+      // trailing tendrils reaching further down than the leaves dare
+      for (const tx of [30, 116, 200]) {
+        const x = tx + Math.random() * 22;
+        const depth = 46 + Math.random() * 16;
+        g.strokeStyle = "#2a4526";
+        g.lineWidth = 1.7;
+        g.beginPath();
+        g.moveTo(x, 4);
+        let side = 1;
+        for (let y = 12; y <= depth; y += 8) {
+          g.quadraticCurveTo(x + side * 5, y - 4, x, y);
+          side = -side;
+        }
+        g.stroke();
+        for (let y = 12; y < depth; y += 10) this.drawLeaf(g, x, y, 8 + Math.random() * 5, (y % 2 === 0 ? 1 : -1) * 1.2, "#356338");
+      }
+      this.textures.addCanvas("ui-forest-canopy", cv);
+    }
+    if (!this.textures.exists("ui-forest-litter")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 30;
+      const g = cv.getContext("2d")!;
+      // moss line along the very bottom
+      g.fillStyle = "rgba(38,58,34,0.6)";
+      g.beginPath();
+      g.moveTo(0, 30);
+      for (let x = 0; x <= 256; x += 12) g.lineTo(x, 23 + Math.random() * 5);
+      g.lineTo(256, 30);
+      g.fill();
+      // fallen leaves, flat and scattered
+      const fallen = ["#4a5a2c", "#5d6b34", "#6b5a2a", "#3a4a24"];
+      for (let i = 0; i < 34; i++) {
+        const x = 4 + Math.random() * 248;
+        const y = 14 + Math.random() * 13;
+        this.drawLeaf(g, x, y, 8 + Math.random() * 8, Math.PI / 2 + (Math.random() * 2 - 1) * 1.1, fallen[i % fallen.length]);
+      }
+      // toadstools poking through the litter (red-capped + little brown)
+      for (const [mx, big] of [[36 + Math.random() * 40, true], [150 + Math.random() * 60, true], [96 + Math.random() * 30, false], [218 + Math.random() * 24, false]] as const) {
+        const x = mx;
+        if (big) {
+          g.fillStyle = "#e0d4c0";
+          g.fillRect(x - 1.8, 19, 3.6, 9);
+          g.fillStyle = "#b03830";
+          g.beginPath();
+          g.arc(x, 20, 6.2, Math.PI, 0);
+          g.fill();
+          g.fillStyle = "#f0e8e0";
+          for (const [dx, dy] of [[-2.8, -2], [1.1, -3.4], [3.4, -1.1]] as const) {
+            g.beginPath();
+            g.arc(x + dx, 20 + dy, 0.95, 0, Math.PI * 2);
+            g.fill();
+          }
+        } else {
+          g.fillStyle = "#cabb9a";
+          g.fillRect(x - 1.2, 23, 2.4, 6);
+          g.fillStyle = "#8a6a3a";
+          g.beginPath();
+          g.arc(x, 23.4, 3.6, Math.PI, 0);
+          g.fill();
+        }
+      }
+      this.textures.addCanvas("ui-forest-litter", cv);
+    }
+    // side vine: a winding climber, tileable vertically down the rail's edge
+    if (!this.textures.exists("ui-forest-vine")) {
+      const cv = document.createElement("canvas");
+      cv.width = 14;
+      cv.height = 128;
+      const g = cv.getContext("2d")!;
+      g.strokeStyle = "#2a4526";
+      g.lineWidth = 2.2;
+      g.beginPath();
+      g.moveTo(7, 0);
+      let side = 1;
+      for (let y = 16; y <= 128; y += 16) {
+        g.quadraticCurveTo(7 + side * 4, y - 8, 7, y);
+        side = -side;
+      }
+      g.stroke();
+      const vineGreens = ["#356338", "#274d2b"];
+      for (let y = 6; y < 124; y += 11) {
+        const s2 = y % 22 < 11 ? 1 : -1;
+        this.drawLeaf(g, 7 + s2 * 2, y, 8 + Math.random() * 4, s2 * (Math.PI / 2 + 0.5), vineGreens[(Math.random() * 2) | 0]);
+      }
+      this.textures.addCanvas("ui-forest-vine", cv);
+    }
+    // a single pale leaf, tinted per fall
+    if (!this.textures.exists("ui-leaf")) {
+      const cv = document.createElement("canvas");
+      cv.width = 12;
+      cv.height = 16;
+      const g = cv.getContext("2d")!;
+      this.drawLeaf(g, 6, 1, 13, 0, "#cfe0c4");
+      this.textures.addCanvas("ui-leaf", cv);
+    }
+  }
+
+  // ---- panel critters: small living touches wandering the rails --------------
+
+  /** Living touches over the rails, by zone: wings and pollen, or leaf-fall and glow. */
+  private buildPanelLife(kind: "plains" | "forest") {
+    for (const side of ["left", "right"] as const) {
+      if (kind === "plains") {
+        for (const tint of [0xffd070, 0xd8a8e8]) this.spawnButterfly(side, tint);
+        for (let i = 0; i < 4; i++) this.spawnMote(side, i * 1100);
+      } else {
+        for (let i = 0; i < 3; i++) this.spawnFallingLeaf(side, i * 2300);
+        for (let i = 0; i < 3; i++) this.spawnFirefly(side);
+      }
+    }
+  }
+
+  /** A wander target inside a rail (margins keep critters off the frame). */
+  private panelPoint(side: "left" | "right", mx = 12, my = 18) {
+    const r = side === "left" ? this.panelRectL : this.panelRectR;
+    return {
+      r,
+      x: r.x + mx + Math.random() * Math.max(1, r.width - mx * 2),
+      y: r.y + my + Math.random() * Math.max(1, r.height - my * 2),
+    };
+  }
+
+  /** A meadow butterfly: wingbeat via scaleX, lazy wander, rests between hops. */
+  private spawnButterfly(side: "left" | "right", tint: number) {
+    const p0 = this.panelPoint(side);
+    const b = this.add.image(p0.x, p0.y, "ui-butterfly").setTint(tint).setAlpha(0.95);
+    this.tweens.add({ targets: b, scaleX: 0.4, duration: 120 + Math.random() * 60, yoyo: true, repeat: -1 });
+    const wander = () => {
+      if (!b.active) return;
+      const p = this.panelPoint(side);
+      b.setFlipX(p.x < b.x);
+      const d = Phaser.Math.Distance.Between(b.x, b.y, p.x, p.y);
+      this.tweens.add({
+        targets: b,
+        x: p.x,
+        y: p.y,
+        duration: 900 + d * 18,
+        ease: "Sine.easeInOut",
+        onComplete: () => this.time.delayedCall(400 + Math.random() * 2600, wander),
+      });
+    };
+    wander();
+  }
+
+  /** Sunlit pollen: a gold mote drifting up out of the grass, then reborn elsewhere. */
+  private spawnMote(side: "left" | "right", delay: number) {
+    const m = this.add.image(0, 0, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0xffe9a0).setScale(0.3).setAlpha(0);
+    const drift = () => {
+      if (!m.active) return;
+      const p = this.panelPoint(side);
+      m.setPosition(p.x, Math.min(p.r.bottom - 26, p.y + 30)).setAlpha(0);
+      const ms = 3800 + Math.random() * 2600;
+      this.tweens.add({ targets: m, alpha: { from: 0, to: 0.75 }, duration: ms * 0.35, yoyo: true, hold: ms * 0.3 });
+      this.tweens.add({
+        targets: m,
+        y: m.y - 50 - Math.random() * 40,
+        x: m.x + (Math.random() * 30 - 15),
+        duration: ms,
+        ease: "Sine.easeOut",
+        onComplete: () => this.time.delayedCall(300 + Math.random() * 1200, drift),
+      });
+    };
+    this.time.delayedCall(delay, drift);
+  }
+
+  /** A leaf lets go of the canopy: sways down the rail, tumbling, fades at the litter. */
+  private spawnFallingLeaf(side: "left" | "right", delay: number) {
+    const tints = [0x6fae5e, 0x4f8a48, 0x9aa04a, 0xc0803a];
+    const leaf = this.add.image(0, 0, "ui-leaf").setAlpha(0);
+    const fall = () => {
+      if (!leaf.active) return;
+      const r = side === "left" ? this.panelRectL : this.panelRectR;
+      const x0 = r.x + 10 + Math.random() * Math.max(1, r.width - 20);
+      leaf
+        .setPosition(x0, r.y + 52)
+        .setAlpha(0)
+        .setTint(tints[(Math.random() * tints.length) | 0])
+        .setScale(0.7 + Math.random() * 0.5);
+      const ms = 5200 + Math.random() * 3600;
+      const sway = 14 + Math.random() * 12;
+      const rot = (Math.random() < 0.5 ? -1 : 1) * (2 + Math.random() * 2);
+      this.tweens.add({ targets: leaf, alpha: 0.85, duration: 600 });
+      this.tweens.addCounter({
+        from: 0,
+        to: 1,
+        duration: ms,
+        onUpdate: (tw) => {
+          const u = tw.getValue() ?? 0;
+          leaf.setPosition(x0 + Math.sin(u * Math.PI * 3) * sway, r.y + 52 + u * (r.height - 86));
+          leaf.setRotation(Math.sin(u * Math.PI * 2) * 0.6 * rot);
+          if (u > 0.85) leaf.setAlpha(0.85 * (1 - (u - 0.85) / 0.15));
+        },
+        onComplete: () => this.time.delayedCall(600 + Math.random() * 2400, fall),
+      });
+    };
+    this.time.delayedCall(delay, fall);
+  }
+
+  /** A firefly: additive glow, breathing pulse, slow aimless drift. */
+  private spawnFirefly(side: "left" | "right") {
+    const p0 = this.panelPoint(side);
+    const f = this.add.image(p0.x, p0.y, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0xd8ff9a).setScale(0.5).setAlpha(0.2);
+    this.tweens.add({
+      targets: f,
+      alpha: { from: 0.15, to: 0.9 },
+      scale: { from: 0.4, to: 0.62 },
+      duration: 700 + Math.random() * 500,
+      yoyo: true,
+      repeat: -1,
+      hold: Math.random() * 400,
+    });
+    const wander = () => {
+      if (!f.active) return;
+      const p = this.panelPoint(side);
+      this.tweens.add({
+        targets: f,
+        x: p.x,
+        y: p.y,
+        duration: 2600 + Math.random() * 2600,
+        ease: "Sine.easeInOut",
+        onComplete: () => this.time.delayedCall(200 + Math.random() * 1400, wander),
+      });
+    };
+    wander();
   }
 
   /** A spectral sword, point-up: the projectile sword matches send at the foe. */
