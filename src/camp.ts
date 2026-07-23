@@ -36,7 +36,7 @@ import {
   MAX_ACTIVE,
 } from "./meta";
 import { ITEMS, type ItemDef, type ItemTier, TIER_COLORS } from "./items";
-import { sfxV, ambV, musicV } from "./audio";
+import { sfxV, ambV, musicV, setSoundLevel } from "./audio";
 
 const DH = 480; // design height for the prop layer (smaller = more zoomed in)
 const DW = 940; // full design width of the camp spread (smaller = more zoomed in; clamps vw/DW)
@@ -319,21 +319,27 @@ export class CampScene extends Phaser.Scene {
       this.musicSnd = null;
     });
 
-    this.fireSnd = this.sound.add("camp_fire", { volume: ambV(0.22), loop: true });
+    // NB: levels go through setSoundLevel AFTER play() — it writes the volume
+    // into the sound's stored config too, so Phaser's internal re-applies
+    // (loop restarts, tab blur-resume, unlock) restore OUR level, not full
+    // blast. (This was the "starts loud / suddenly loud" family of bugs.)
+    this.fireSnd = this.sound.add("camp_fire", { loop: true });
     this.fireSnd.play();
-    this.ambSnd = this.sound.add("amb_night", { volume: ambV(0.16), loop: true }); // the wilds hum past the firelight
+    setSoundLevel(this.fireSnd, ambV(0.22));
+    this.ambSnd = this.sound.add("amb_night", { loop: true }); // the wilds hum past the firelight
     this.ambSnd.play();
-    // the Title Theme carries the camp — eased in under the crackle and crickets
-    this.musicSnd = this.sound.add("music_title", { volume: 0, loop: true });
+    setSoundLevel(this.ambSnd, ambV(0.16));
+    // the Title Theme carries the camp — straight in at its level, no fade
+    this.musicSnd = this.sound.add("music_title", { loop: true });
     this.musicSnd.play();
-    this.tweens.add({ targets: this.musicSnd, volume: musicV(0.2), duration: 1600 });
+    setSoundLevel(this.musicSnd, musicV(0.2));
     // the faders re-level the beds live while the options sliders move
     const onAudio = () => {
-      if (this.fireSnd) (this.fireSnd as unknown as { volume: number }).volume = ambV(0.22);
-      if (this.ambSnd) (this.ambSnd as unknown as { volume: number }).volume = ambV(0.16);
+      if (this.fireSnd) setSoundLevel(this.fireSnd, ambV(0.22));
+      if (this.ambSnd) setSoundLevel(this.ambSnd, ambV(0.16));
       if (this.musicSnd) {
         this.tweens.killTweensOf(this.musicSnd);
-        (this.musicSnd as unknown as { volume: number }).volume = musicV(0.2);
+        setSoundLevel(this.musicSnd, musicV(0.2));
       }
     };
     this.game.events.on("audio-changed", onAudio);

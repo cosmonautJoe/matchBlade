@@ -527,6 +527,8 @@ cropped ground slices.
 **Music:** xDeviruchi *8-bit Fantasy & Adventure* (**CC-BY 4.0** — credit
 "xDeviruchi" in released builds). Source WAVs live in `assets/music/`
 (gitignored); shipped as 160 kbps MP3s via `node scripts/encode-music.mjs`.
+- `music_menu.mp3` (*A Great Journey — Overworld*; separate artist, confirm
+  license/credit before commercial release) — title screen.
 - `music_title.mp3` (*Title Theme*) — camp.
 - `music_journey.mp3` (*And The Journey Begins*) — the run.
 - `music_boss.mp3` (*Prepare for Battle!*) — boss approach through boss death.

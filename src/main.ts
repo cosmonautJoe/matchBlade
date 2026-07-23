@@ -83,7 +83,7 @@ import {
 import { CampScene } from "./camp";
 import { MenuScene } from "./menu";
 import { TitleScene } from "./title";
-import { sfxV, ambV, musicV } from "./audio";
+import { sfxV, ambV, musicV, audioSettings, setAudioSettings, setSoundLevel } from "./audio";
 import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress } from "./meta";
 import { Tutorial } from "./tutorial";
 
@@ -565,21 +565,24 @@ class GameScene extends Phaser.Scene {
     // ambient forest bed under the whole run (rain variant on wet runs); the
     // sound manager outlives the scene, so stop it when the camp takes over.
     // The ambience fader scales it, live when the options slider moves.
+    // NB: levels go through setSoundLevel AFTER play() — it writes the level
+    // into the sound's config too, so Phaser's internal re-applies (loop
+    // restarts, blur-resume) restore OUR level instead of full blast.
     const ambBase = this.rainy ? 0.34 : 0.22;
-    this.amb = this.sound.add(this.rainy ? "amb_rain" : "amb_day", { volume: 0, loop: true });
+    this.amb = this.sound.add(this.rainy ? "amb_rain" : "amb_day", { loop: true });
     this.amb.play();
-    this.tweens.add({ targets: this.amb, volume: ambV(ambBase), duration: 1400 });
+    setSoundLevel(this.amb, ambV(ambBase));
     // the road's song under it all (the boss swaps in his own war-drums)
     this.music = null;
     this.playMusic("music_journey", 0.26, 1600);
     const onAudio = () => {
       if (this.amb) {
         this.tweens.killTweensOf(this.amb);
-        (this.amb as unknown as { volume: number }).volume = ambV(ambBase);
+        setSoundLevel(this.amb, ambV(ambBase));
       }
       if (this.music) {
         this.tweens.killTweensOf(this.music);
-        (this.music as unknown as { volume: number }).volume = musicV(this.musicBase);
+        setSoundLevel(this.music, musicV(this.musicBase));
       }
     };
     this.game.events.on("audio-changed", onAudio);
@@ -977,6 +980,44 @@ class GameScene extends Phaser.Scene {
       .setOrigin(0, 0.5);
     this.laneGuard = this.inBox(this.add.container(GRID_X + 8, LANE_Y + 22, [gbBg, gbIcon, this.laneGuardText]).setDepth(30));
     this.laneGuardLast = -1;
+
+    // quick-mute chips, top-right of the lane: 🔊 (effects + ambience) and 🎵
+    // (music). Toggles persist in the audio settings and re-level live beds.
+    const mkMute = (
+      x: number,
+      glyphFor: (muted: boolean) => string,
+      isMuted: () => boolean,
+      flip: () => void,
+    ) => {
+      const bg = this.add.rectangle(0, 0, 36, 30, 0x0c1018, 0.72).setStrokeStyle(2, 0x3a4152, 0.9);
+      const ic = this.add.text(0, 1, "", { fontFamily: EMOJI_FONT, fontSize: "15px" }).setOrigin(0.5);
+      const slash = this.add.line(0, 0, -9, 9, 9, -9, 0xff6a5a, 1).setLineWidth(2).setVisible(false);
+      this.inBox(this.add.container(x, LANE_Y + 22, [bg, ic, slash]).setDepth(30));
+      const paint = () => {
+        const m = isMuted();
+        ic.setText(glyphFor(m)).setAlpha(m ? 0.4 : 1);
+        slash.setVisible(m);
+      };
+      paint();
+      bg.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+        flip();
+        this.game.events.emit("audio-changed"); // live beds re-level immediately
+        paint();
+        this.sfx("swap", 0.3); // audible only when sound survived the toggle
+      });
+    };
+    mkMute(
+      GRID_X + UI_W - 26,
+      (m) => (m ? "🔇" : "🔊"),
+      () => audioSettings().muteSound,
+      () => setAudioSettings({ muteSound: !audioSettings().muteSound }),
+    );
+    mkMute(
+      GRID_X + UI_W - 68,
+      () => "🎵",
+      () => audioSettings().muteMusic,
+      () => setAudioSettings({ muteMusic: !audioSettings().muteMusic }),
+    );
 
     this.hero = this.inBox(
       this.add.sprite(SAFE_X, GROUND_Y, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(HERO_SCALE).play("hero-idle"),
@@ -1924,28 +1965,39 @@ class GameScene extends Phaser.Scene {
     if (this.cache.audio.exists(key)) this.sound.play(key, { volume: sfxV(volume), rate });
   }
 
-  /** Crossfade the run's music bed to `key` (no-op if it's already playing). */
+  /**
+   * Fade a bed to silence and stop it. Steps through setSoundLevel so the
+   * sound's config follows the fade — a loop restart mid-fade can't pop it
+   * back to its old level.
+   */
+  private fadeSoundOut(snd: Phaser.Sound.BaseSound, ms: number) {
+    this.tweens.killTweensOf(snd);
+    const from = (snd as unknown as { volume: number }).volume;
+    this.tweens.addCounter({
+      from,
+      to: 0,
+      duration: ms,
+      onUpdate: (tw) => setSoundLevel(snd, tw.getValue() ?? 0),
+      onComplete: () => snd.stop(),
+    });
+  }
+
+  /** Switch the run's music bed to `key`: old fades out, new enters at level. */
   private playMusic(key: string, base: number, fadeMs = 900) {
     if (!this.cache.audio.exists(key)) return;
     if (this.music && (this.music as unknown as { key: string }).key === key) return;
-    const old = this.music;
-    if (old) {
-      this.tweens.killTweensOf(old);
-      this.tweens.add({ targets: old, volume: 0, duration: fadeMs * 0.6, onComplete: () => old.stop() });
-    }
-    this.music = this.sound.add(key, { volume: 0, loop: true });
+    if (this.music) this.fadeSoundOut(this.music, fadeMs * 0.6);
+    this.music = this.sound.add(key, { loop: true });
     this.musicBase = base;
     this.music.play();
-    this.tweens.add({ targets: this.music, volume: musicV(base), duration: fadeMs });
+    setSoundLevel(this.music, musicV(base)); // straight in at level — no fade to fight
   }
 
   /** Let the song go (death, victory) — it fades and does not return. */
   private fadeOutMusic(ms = 1100) {
     const m = this.music;
     this.music = null;
-    if (!m) return;
-    this.tweens.killTweensOf(m);
-    this.tweens.add({ targets: m, volume: 0, duration: ms, onComplete: () => m.stop() });
+    if (m) this.fadeSoundOut(m, ms);
   }
   private pick(a: string[]): string {
     return a[(Math.random() * a.length) | 0];

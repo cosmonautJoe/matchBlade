@@ -6,6 +6,7 @@
 import Phaser from "phaser";
 import { biomeDef } from "./camp";
 import { loadMeta, readSlot, SAVE_SLOTS } from "./meta";
+import { musicV, setSoundLevel } from "./audio";
 
 const PARALLAX_SRC_H = 216; // vnitti layer source height (shared with camp/run)
 const GROUND_FRAC = 0.8; // ground line as a fraction of viewport height
@@ -41,6 +42,7 @@ export class TitleScene extends Phaser.Scene {
     for (const l of biome.parallax) img(l.key, l.file);
     img(biome.floor.key, biome.floor.file);
     for (const t of TILE_DECOR) img(t.key, t.file);
+    if (!this.cache.audio.exists("music_menu")) this.load.audio("music_menu", "sounds/music_menu.mp3"); // A Great Journey (Overworld)
   }
 
   create() {
@@ -114,6 +116,21 @@ export class TitleScene extends Phaser.Scene {
     this.scale.off("resize", this.layout, this);
     this.scale.on("resize", this.layout, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", this.layout, this));
+
+    // "A Great Journey" under the title — straight in at its level, no fade.
+    // setSoundLevel writes the level into the sound's config too, so Phaser's
+    // internal re-applies (loop restart, blur-resume, unlock) keep OUR level.
+    const music = this.sound.add("music_menu", { loop: true });
+    const level = () => setSoundLevel(music, musicV(0.2));
+    music.play();
+    level();
+    this.sound.once(Phaser.Sound.Events.UNLOCKED, level);
+    this.game.events.on("audio-changed", level); // options slider / 🎵 mute re-level live
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.events.off("audio-changed", level);
+      this.sound.off(Phaser.Sound.Events.UNLOCKED, level);
+      music.stop();
+    });
   }
 
   /** A menu button: gold + breathing glow for the primary, quiet steel otherwise. */

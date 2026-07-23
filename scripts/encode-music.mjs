@@ -36,12 +36,20 @@ if (!fmt || !data) {
   console.error("missing fmt/data chunk");
   process.exit(1);
 }
-if (fmt.bits !== 16) {
-  console.error(`expected 16-bit PCM, got ${fmt.bits}-bit`);
+if (fmt.bits !== 16 && fmt.bits !== 24) {
+  console.error(`expected 16- or 24-bit PCM, got ${fmt.bits}-bit`);
   process.exit(1);
 }
 
-const samples = new Int16Array(data.buffer, data.byteOffset, Math.floor(data.byteLength / 2));
+// 24-bit sources are truncated down to 16-bit (fine for lossy re-encoding)
+let samples;
+if (fmt.bits === 24) {
+  const n = Math.floor(data.byteLength / 3);
+  samples = new Int16Array(n);
+  for (let i = 0; i < n; i++) samples[i] = data.readIntLE(i * 3, 3) >> 8;
+} else {
+  samples = new Int16Array(data.buffer, data.byteOffset, Math.floor(data.byteLength / 2));
+}
 const frames = Math.floor(samples.length / fmt.channels);
 const left = new Int16Array(frames);
 const right = fmt.channels === 2 ? new Int16Array(frames) : left;
