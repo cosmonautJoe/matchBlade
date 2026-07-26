@@ -21,6 +21,12 @@
       html, body { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; background: #0a0b0f; }
       #game { width: 100vw; height: 100vh; height: 100dvh; display: flex; align-items: center; justify-content: center; }
       canvas { image-rendering: pixelated; display: block; }
+      /* High-density screens (phones, retina laptops): the browser upscales the
+         canvas 2-3x — nearest-neighbour there turns TEXT to chunks. Let those
+         screens smooth the upscale; 1x desktops keep the crisp pixel look. */
+      @media (min-resolution: 1.5dppx) {
+        canvas { image-rendering: auto; }
+      }
       #rotate-gate {
         position: fixed;
         inset: 0;

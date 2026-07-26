@@ -24,6 +24,10 @@ import {
   BLACKSMITH_COST,
   forgeCost,
   forgeCap,
+  WIZARD_COST,
+  studyCost,
+  studyCap,
+  wizardAvailable,
   questById,
   questProgress,
   questDone,
@@ -37,7 +41,7 @@ import {
   MAX_ACTIVE,
 } from "./meta";
 import { ITEMS, type ItemDef, type ItemTier, TIER_COLORS } from "./items";
-import { SWORD_BONUS_PER_LEVEL } from "./run";
+import { SWORD_BONUS_PER_LEVEL, SPELL_BONUS_PER_LEVEL } from "./run";
 import { sfxV, ambV, musicV, setSoundLevel } from "./audio";
 
 const DH = 480; // design height for the prop layer (smaller = more zoomed in)
@@ -51,7 +55,7 @@ const PARALLAX_SRC_H = 216; // vnitti layer source height
 const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
 
 // ---- the Peddler (diamond shop; arrives once you bank a gem) ---------------
-const PEDDLER_X = -238; // her pitch, between the tarp tent and the campfire path
+// (the Peddler's pitch is per-biome now — see CampLayout.peddler)
 const PEDDLER_SCALE = 1.25; // knight frames hold a 48px figure (vs the hero's 26) — keep her near hero height
 // Feet measured off the sheets (frames are 80 tall with empty space below the
 // boots): idle bottoms out at row 63, the run cycle at row 66 — so each anim
@@ -62,7 +66,61 @@ const PEDDLER_PRICES: Record<ItemTier, number> = { common: 10, uncommon: 20, rar
 const PEDDLER_REROLL = 5; // 💎 to spin fresh wares
 const MAX_STOCKED = 3; // items you can pack for one run
 
-type EditableProp = { obj: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject; key: string; frame?: number };
+type EditableProp = {
+  obj: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject;
+  key: string;
+  frame?: number;
+  /** set for the interactive folk — the copied layout emits these as anchors */
+  npc?: string;
+  /** locked pieces can be selected (to unlock) but never dragged, nudged or removed */
+  locked?: boolean;
+  /** the sprite's built-in y offset, subtracted so a copied anchor re-applies exactly */
+  base?: number;
+  /** the sprite's default scale — a copy only emits `s` when it differs */
+  baseScale?: number;
+};
+
+/**
+ * A slab of the biome's own ground, for building terraces/ledges behind the camp.
+ * The tint fakes aerial perspective: the further back a shelf reads, the paler
+ * and cooler it gets, so stacked floors don't all fight for the eye.
+ */
+type Slab = { x: number; y: number; w: number; h: number; tint: number; depth: number };
+/** At this depth or lower a piece moves into backBox — behind the ground band. */
+const BACK_LAYER = -4;
+const SLAB_SHADES: { label: string; tint: number; depth: number }[] = [
+  { label: "floor near", tint: 0xffffff, depth: -1 },
+  { label: "floor mid", tint: 0xb9cfc4, depth: -2 },
+  { label: "floor far", tint: 0x8fa9a6, depth: -3 },
+  // BEHIND the ground band (depth <= BACK_LAYER) — distant hills the camp
+  // sits in front of, so the floor's own grass line reads as nearer ground
+  { label: "floor back", tint: 0x74908f, depth: -5 },
+];
+
+// The camp's building set: every prop texture preload() brings in, so the
+// in-camp editor can offer the whole kit. Animated pieces name their loop.
+const PALETTE: { key: string; anim?: string; frames?: number }[] = [
+  { key: "tent_large" }, { key: "tent_small" }, { key: "tarp_tent" },
+  { key: "tree1" }, { key: "tree2" }, { key: "tree3" }, { key: "birch1" },
+  { key: "bush_wide" }, { key: "bush_med" }, { key: "bush_small" },
+  { key: "log_pile" }, { key: "clothesline" }, { key: "table_apples" }, { key: "tomatoes" },
+  { key: "crate" }, { key: "crate_tall" }, { key: "barrel" }, { key: "basket_stack" },
+  { key: "cook_pot" }, { key: "cattails" },
+  { key: "rocks_grass" }, { key: "rocks_med" }, { key: "rocks_small1" }, { key: "rocks_small2" },
+  { key: "rockpile_big" }, { key: "tuft_tiny" },
+  // --- generated: forest town ---
+  { key: "stump_axe" }, { key: "drying_rack" }, { key: "forest_shrooms" },
+  { key: "fern" }, { key: "lantern_post" },
+  // --- generated: glacial town ---
+  { key: "snow_drift" }, { key: "ice_crystal" }, { key: "snowman" },
+  { key: "brazier" }, { key: "frozen_pine" }, { key: "ice_blocks" },
+  { key: "tall_grass", frames: 4 }, // static sheet — cycle the frame with [ ]
+  { key: "campfire", anim: "campfire-burn" },
+  { key: "furnace", anim: "furnace-burn" },
+  { key: "torch", anim: "torch-burn" },
+  { key: "portal", anim: "portal-spin" },
+  { key: "water", anim: "water-surface" },
+];
 type LayerDef = { key: string; file: string; drift: number }; // drift px/s (clouds)
 type BiomeDef = {
   label: string;
@@ -96,7 +154,30 @@ const CAMP_BIOMES: Record<string, BiomeDef> = {
     ],
     floor: { key: "forest-floor", file: "worlds/forest/floor.png", sx: 0, sy: 0, w: 112, h: 96 },
   },
-  // autumn / winter: same shape — GandalfHardcore floor atlas rows + Glacial/Autumn parallax sets.
+  snow: {
+    label: "GLACIAL PASS",
+    // vnitti Glacial Mountains; the cloud bands drift like the plains' do
+    parallax: [
+      { key: "snow-sky", file: "worlds/snow/sky.png", drift: 0 },
+      { key: "snow-clouds-bg", file: "worlds/snow/clouds_bg.png", drift: 3 },
+      { key: "snow-mtn", file: "worlds/snow/glacial_mountains.png", drift: 0 },
+      { key: "snow-clouds-3", file: "worlds/snow/clouds_mg_3.png", drift: 5 },
+      { key: "snow-clouds-2", file: "worlds/snow/clouds_mg_2.png", drift: 7 },
+      { key: "snow-clouds-1", file: "worlds/snow/clouds_mg_1.png", drift: 9 },
+    ],
+    floor: { key: "snow-floor", file: "worlds/snow/floor.png", sx: 16, sy: 384, w: 64, h: 96 },
+  },
+  dungeon: {
+    label: "THE DELVE",
+    // original generated corridor (scripts/gen_dungeon.py); nothing drifts underground
+    parallax: [
+      { key: "dungeon-wall", file: "worlds/dungeon/wall.png", drift: 0 },
+      { key: "dungeon-arches", file: "worlds/dungeon/arches.png", drift: 0 },
+      { key: "dungeon-fore", file: "worlds/dungeon/fore.png", drift: 0 },
+    ],
+    floor: { key: "dungeon-floor", file: "worlds/dungeon/floor.png", sx: 0, sy: 0, w: 64, h: 96 },
+  },
+  // autumn: same shape — GandalfHardcore floor atlas rows + the Autumn BG set.
 };
 
 /** The biome def for a saved biome key, defaulting to plains for unknown values. */
@@ -104,42 +185,206 @@ export function biomeDef(key: string): BiomeDef {
   return CAMP_BIOMES[key] ?? CAMP_BIOMES.plains;
 }
 
-// Static camp dressing, baked from the in-camp editor (positions are FINAL — no squeeze).
+// Camp dressing, baked from the in-camp editor (positions are FINAL — no squeeze).
 type Prop = { key: string; x: number; y: number; s: number; depth: number; frame?: number; flip?: boolean };
-const PROPS: Prop[] = [
-  // backdrop
-  { key: "tree2", x: -485, y: 3, s: 1.35, depth: 1, flip: true },
-  { key: "birch1", x: 308, y: 7, s: 1.5, depth: 2 },
-  { key: "clothesline", x: -337, y: 1, s: 1.35, depth: 2 },
-  // homestead
-  { key: "tarp_tent", x: -86, y: 2, s: 2.0, depth: 5 },
-  { key: "table_apples", x: -434, y: 4, s: 1.5, depth: 5 },
-  { key: "barrel", x: -199, y: 1, s: 1.5, depth: 5 },
-  { key: "rocks_med", x: -538, y: 2, s: 1.4, depth: 5 },
-  // blacksmith yard
-  { key: "crate_tall", x: 205, y: 1, s: 1.5, depth: 5 },
-  { key: "crate", x: 241, y: 0, s: 1.4, depth: 5 },
-  { key: "basket_stack", x: 191, y: 1, s: 1.6, depth: 5 },
-  { key: "crate", x: -165, y: 3, s: 1.5, depth: 6 },
-  // front dressing
-  { key: "bush_small", x: 45, y: 0, s: 1.4, depth: 8 },
-  { key: "rocks_grass", x: 62, y: 1, s: 1.4, depth: 8 },
-  { key: "rocks_small1", x: -354, y: 3, s: 1.2, depth: 8 },
-  { key: "rocks_small2", x: 27, y: 3, s: 1.2, depth: 8 },
-  { key: "tuft_tiny", x: -203, y: 3, s: 1.5, depth: 8 },
-  { key: "tuft_tiny", x: 57, y: 0, s: 1.4, depth: 8 },
-  { key: "tall_grass", x: 284, y: 5, s: 1.5, depth: 8, frame: 0 },
-  { key: "tall_grass", x: 305, y: 5, s: 1.4, depth: 8, frame: 1 },
-];
+/**
+ * Each biome lays its camp out differently — the same caravan, pitched in a new
+ * place. `anchors` move the interactive folk too, so a busier roster (the forest
+ * gains Aldwin) gets more elbow room instead of stacking up in one huddle.
+ * Wren's tarp tent travels with the caravan, so it stays the tent in every camp.
+ */
+/**
+ * Where one of the folk stands. `y` lifts them onto a raised slab (0 = ground);
+ * `s` overrides their default scale, so resizing in the editor sticks.
+ */
+type Anchor = { x: number; y?: number; s?: number };
+const AY = (a: Anchor) => a.y ?? 0;
+/** anchor scale, falling back to the sprite's authored default */
+const AS = (a: Anchor, def: number) => a.s ?? def;
+type CampLayout = {
+  props: Prop[];
+  /** background terrace shelves, built in the in-camp editor and baked here */
+  slabs?: Slab[];
+  hero: Anchor;
+  smith: Anchor;
+  furnace: Anchor;
+  mage: Anchor;
+  wayfarer: Anchor;
+  portal: Anchor;
+  peddler: Anchor;
+};
 
-// Wren steps out of the tarp tent when hired — follow it wherever the layout puts it.
-const TENT_X = PROPS.find((p) => p.key === "tarp_tent")?.x ?? -86;
+const PLAINS_LAYOUT: CampLayout = {
+  // authored in-game with the ✎ editor (👁 preview on, so Wren and the Peddler
+  // could be placed before they're unlocked). No mage anchor — the plains road
+  // never has one — so his entry just keeps the table's shape.
+  hero: { x: -194, y: -1, s: 3 },
+  smith: { x: 54, y: -4, s: 2.8 },
+  furnace: { x: 144, y: 4, s: 1.95 },
+  mage: { x: 258 },
+  wayfarer: { x: 288, y: -6, s: 2.2 },
+  portal: { x: 415, y: -9, s: 2.55 },
+  peddler: { x: -293, y: 6, s: 1.7 },
+  props: [
+    // depth -8 is past BACK_LAYER: this one stands BEHIND the ground band
+    { key: "tree2", x: -440, y: 15, s: 1.9, depth: -8, flip: true },
+    { key: "tarp_tent", x: -60, y: 6, s: 1.95, depth: 5 },
+    { key: "table_apples", x: -387, y: 2, s: 1.25, depth: 5 },
+    { key: "barrel", x: 212, y: 2, s: 1.7, depth: 5 },
+    { key: "rocks_med", x: -538, y: 2, s: 1.4, depth: 5 },
+    { key: "bush_small", x: 245, y: 1, s: 1.15, depth: 8 },
+    { key: "rocks_small2", x: 195, y: 3, s: 1, depth: 8 },
+    { key: "tuft_tiny", x: -203, y: 3, s: 1.5, depth: 8 },
+  ],
+};
+
+/**
+ * The forest camp — AUTHORED IN-GAME with the ✎ editor and baked from its
+ * copied JSON. Two ground slabs raise a shelf on each side (the right one sits
+ * BEHIND the ground band, depth -5), and much of the dressing stands on them.
+ *
+ * NB: the ⚒ BLACKSMITH / DEPART plaques are NOT props — the code hangs them off
+ * the forge and portal anchors, so they follow whatever those anchors say.
+ */
+const FOREST_LAYOUT: CampLayout = {
+  hero: { x: -214, y: 7, s: 2.65 },
+  smith: { x: -79, y: 6, s: 2.65 },
+  furnace: { x: 2, y: 7, s: 1.55 },
+  mage: { x: -218, y: -184, s: 1.9 }, // up on the left shelf
+  wayfarer: { x: 322, y: -6, s: 2 },
+  peddler: { x: 250, y: -144, s: 1.85 }, // up on the right shelf
+  portal: { x: 440 },
+  slabs: [
+    { x: 288, y: -150, w: 420, h: 200, tint: 0x74908f, depth: -5 },
+    { x: -450, y: -193, w: 636, h: 200, tint: 0xb9cfc4, depth: -5 },
+  ],
+  props: [
+    { key: "bush_med", x: 157, y: -141, s: 1.4, depth: -4 }, // behind the ground band
+    { key: "tree1", x: -438, y: -188, s: 1.3, depth: 1 },
+    { key: "birch1", x: -278, y: 5, s: 0.85, depth: 2 },
+    { key: "birch1", x: -367, y: 5, s: 1.3, depth: 2, flip: true },
+    { key: "birch1", x: 107, y: 1, s: 1.55, depth: 2 },
+    { key: "bush_wide", x: -164, y: -178, s: 1.05, depth: 2 },
+    { key: "bush_wide", x: 218, y: 2, s: 1.3, depth: 2, flip: true },
+    { key: "rocks_grass", x: 50, y: 6, s: 1.05, depth: 3 },
+    { key: "log_pile", x: 461, y: -133, s: 0.85, depth: 5 },
+    { key: "log_pile", x: 201, y: -135, s: 0.65, depth: 5, flip: true },
+    { key: "tent_small", x: 391, y: -132, s: 1.9, depth: 5 },
+    { key: "rockpile_big", x: -455, y: 3, s: 1.4, depth: 5 },
+    { key: "barrel", x: -123, y: 6, s: 1.4, depth: 6 },
+    { key: "rocks_small1", x: 298, y: -132, s: 1.1, depth: 8 },
+    { key: "rocks_small2", x: -420, y: 3, s: 1.2, depth: 8 },
+    { key: "tall_grass", x: -389, y: -184, s: 1.5, depth: 8, frame: 0 },
+    { key: "tall_grass", x: 135, y: 5, s: 1.2, depth: 8, frame: 0 },
+    { key: "tuft_tiny", x: -360, y: -188, s: 1.5, depth: 8 },
+    { key: "tuft_tiny", x: 237, y: -5, s: 1.4, depth: 8 },
+  ],
+};
+
+/**
+ * The Glacial Pass — a camp cut into terraced ice. Four slabs stack it three
+ * storeys high (the Peddler trades from the very top at y -315), and the
+ * dressing leans on the generated glacial pieces: drifts, ice blocks, a crystal
+ * garden and a snowman.
+ */
+const SNOW_LAYOUT: CampLayout = {
+  hero: { x: -120, y: 1, s: 3 },
+  smith: { x: -14, y: 2, s: 2.8 },
+  furnace: { x: 78, y: 6, s: 1.95 },
+  mage: { x: -98, y: -174, s: 1.65 },
+  wayfarer: { x: 260, y: -7, s: 2.2 },
+  peddler: { x: -77, y: -315, s: 1.7 },
+  portal: { x: 402, y: -9, s: 2.55 },
+  slabs: [
+    { x: -254, y: -166, w: 380, h: 200, tint: 0xffffff, depth: -7 },
+    { x: 243, y: 54, w: 360, h: 200, tint: 0x8fa9a6, depth: -8 },
+    { x: 29, y: -318, w: 360, h: 340, tint: 0xb9cfc4, depth: -8 },
+    { x: 335, y: -210, w: 340, h: 260, tint: 0x74908f, depth: -5 },
+  ],
+  props: [
+    { key: "tarp_tent", x: -345, y: -165, s: 1.95, depth: -6 },
+    { key: "anim:campfire-burn", x: 453, y: -202, s: 1.5, depth: -4 },
+    { key: "tent_small", x: 291, y: -209, s: 1.95, depth: 1 },
+    { key: "rocks_grass", x: 174, y: 2, s: 1.5, depth: 3 },
+    { key: "barrel", x: 144, y: 4, s: 1.7, depth: 5 },
+    { key: "rocks_med", x: -538, y: 2, s: 1.4, depth: 5 },
+    { key: "crate_tall", x: -117, y: -313, s: 1.5, depth: 5 },
+    { key: "clothesline", x: -235, y: 3, s: 1.05, depth: 5 },
+    { key: "cook_pot", x: 451, y: -213, s: 1.5, depth: 5 },
+    { key: "snowman", x: -360, y: 2, s: 1.05, depth: 5 },
+    { key: "snow_drift", x: -229, y: 8, s: 0.65, depth: 5 },
+    { key: "snow_drift", x: -411, y: 6, s: 0.6, depth: 5 },
+    { key: "snow_drift", x: -243, y: -159, s: 0.5, depth: 5 },
+    { key: "snow_drift", x: -152, y: -164, s: 0.55, depth: 5 },
+    { key: "snow_drift", x: 148, y: -310, s: 0.65, depth: 5 },
+    { key: "ice_crystal", x: 85, y: -311, s: 0.9, depth: 5 },
+    { key: "ice_crystal", x: 51, y: -290, s: 0.5, depth: 5 },
+    { key: "ice_crystal", x: 11, y: -308, s: 0.65, depth: 5 },
+    { key: "ice_crystal", x: 204, y: -306, s: 0.65, depth: 5 },
+    { key: "rocks_small2", x: 195, y: 3, s: 1, depth: 8 },
+    { key: "ice_blocks", x: -200, y: -160, s: 0.7, depth: 9 },
+  ],
+};
+
+const CAMP_LAYOUTS: Record<string, CampLayout> = { plains: PLAINS_LAYOUT, forest: FOREST_LAYOUT, snow: SNOW_LAYOUT };
+/** The dungeon reuses the plains pitch until it's dressed for its own road. */
+function campLayout(biome: string): CampLayout {
+  return CAMP_LAYOUTS[biome] ?? PLAINS_LAYOUT;
+}
+
+// ---- in-progress camp edits (DEV) -------------------------------------------
+// 💾 writes the layout here so a reload doesn't lose the work; 📋 still copies
+// the JSON for baking into CAMP_LAYOUTS above (the saved copy is a scratchpad,
+// the baked table is the shipped truth).
+/**
+ * DEV preview: show the folk you haven't unlocked YET on THIS road (Wren before
+ * she's hired, the Peddler before she arrives) so the camp can be laid out for
+ * how it will finally look. It only relaxes "have I unlocked them yet" — a road
+ * that never has someone (Aldwin in the plains) still doesn't show them. Never
+ * touches the save; the copied layout just ends up carrying every anchor.
+ */
+let previewAll = false;
+/** the toggle rebuilds the scene; this re-opens the editor on the other side */
+let resumeEdit = false;
+
+const campSaveKey = (biome: string) => `matchblade-camp-${biome}`;
+
+/** A saved layout for this biome, or null. Falls back silently on bad data. */
+function loadSavedLayout(biome: string): CampLayout | null {
+  try {
+    const raw = localStorage.getItem(campSaveKey(biome));
+    if (!raw) return null;
+    const j = JSON.parse(raw) as Partial<CampLayout> & { anchors?: Record<string, Anchor> };
+    const base = CAMP_LAYOUTS[biome] ?? PLAINS_LAYOUT;
+    const a = j.anchors ?? {};
+    return {
+      ...base,
+      hero: a.hero ?? base.hero,
+      smith: a.smith ?? base.smith,
+      furnace: a.furnace ?? base.furnace,
+      mage: a.mage ?? base.mage,
+      wayfarer: a.wayfarer ?? base.wayfarer,
+      portal: a.portal ?? base.portal,
+      peddler: a.peddler ?? base.peddler,
+      slabs: j.slabs ?? base.slabs,
+      props: j.props ?? base.props,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export class CampScene extends Phaser.Scene {
   private parallax: { sprite: Phaser.GameObjects.TileSprite; drift: number }[] = [];
   private clouds: { img: Phaser.GameObjects.Image; speed: number; fy: number; base: number }[] = []; // high drifting clouds
   private ground!: Phaser.GameObjects.TileSprite;
   private propBox!: Phaser.GameObjects.Container;
+  /** Same transform as propBox but drawn BEHIND the ground band (see BACK_LAYER). */
+  private backBox!: Phaser.GameObjects.Container;
+  /** falling snow over the glacial camp (screen-space; resized in layout()) */
+  private snowZone: Phaser.Geom.Rectangle | null = null; // resized in layout()
+  /** markers pinned to an owner sprite — see update() and follow() */
+  private followers: { obj: Phaser.GameObjects.GameObject & { x: number; y: number }; owner: Phaser.GameObjects.Sprite; dx: number; dy: number }[] = [];
   private biomeLabel!: Phaser.GameObjects.Text;
   private hero!: Phaser.GameObjects.Sprite;
   private fireSnd: Phaser.Sound.BaseSound | null = null;
@@ -152,6 +397,9 @@ export class CampScene extends Phaser.Scene {
   private resText!: Phaser.GameObjects.Text;
   private smith: Phaser.GameObjects.Sprite | null = null;
   private tentMark: Phaser.GameObjects.GameObject[] = []; // gold "?" over the unhired smith's tent
+  private lay: CampLayout = PLAINS_LAYOUT; // this biome's pitch (props + folk anchors)
+  private mage: Phaser.GameObjects.Sprite | null = null; // Aldwin — forest camp onward
+  private mageMark: Phaser.GameObjects.GameObject[] = []; // violet "?" until he's hired
   private panelOpen = false;
   private panelBox: Phaser.GameObjects.Container | null = null;
 
@@ -173,6 +421,9 @@ export class CampScene extends Phaser.Scene {
   private editable: EditableProp[] = [];
   private editBtn?: Phaser.GameObjects.Text;
   private copyBtn?: Phaser.GameObjects.Text;
+  private addBtn?: Phaser.GameObjects.Text; // ＋ opens the building-pieces palette
+  private saveBtn?: Phaser.GameObjects.Text; // 💾 persists the layout across reloads
+  private previewBtn?: Phaser.GameObjects.Text; // 👁 shows progression-locked folk
   private menuBtn!: Phaser.GameObjects.Text; // ☰ opens the pause menu (Esc works too)
   private portalHit?: Phaser.GameObjects.Rectangle;
 
@@ -192,6 +443,9 @@ export class CampScene extends Phaser.Scene {
     if (!this.textures.exists("warrior")) this.load.spritesheet("warrior", "sprites/warrior.png", { frameWidth: 80, frameHeight: 64 });
     // NPCs: the blacksmith (WarriorWoman sheet, same layout as the hero) + the quest-giving Wayfarer
     if (!this.textures.exists("smith")) this.load.spritesheet("smith", "sprites/smith.png", { frameWidth: 80, frameHeight: 64 });
+    // Aldwin the Mage (scripts/gen_mage.py — the Evil Wizard sheet in arcane blue)
+    if (!this.textures.exists("mage-idle")) this.load.spritesheet("mage-idle", "sprites/mage_idle.png", { frameWidth: 150, frameHeight: 150 });
+    if (!this.textures.exists("mage-walk")) this.load.spritesheet("mage-walk", "sprites/mage_walk.png", { frameWidth: 150, frameHeight: 150 });
     if (!this.textures.exists("goddess")) this.load.spritesheet("goddess", "camp/goddess.png", { frameWidth: 64, frameHeight: 64 });
     // the Peddler (knight pack — idle 4x64x80, run 8x80x80; measured from the sheets)
     if (!this.textures.exists("knight-idle")) this.load.spritesheet("knight-idle", "sprites/knight_idle.png", { frameWidth: 64, frameHeight: 80 });
@@ -205,6 +459,9 @@ export class CampScene extends Phaser.Scene {
       "cook_pot", "basket_stack",
       "bush_wide", "bush_med", "bush_small", "rocks_grass", "rocks_med", "rocks_small1", "rocks_small2",
       "rockpile_big", "tuft_tiny",
+      // generated dressing (scripts/gen_camp_props.py) — forest + glacial towns
+      "stump_axe", "drying_rack", "forest_shrooms", "fern", "lantern_post",
+      "snow_drift", "ice_crystal", "snowman", "brazier", "frozen_pine", "ice_blocks",
     ])
       img(k, `${P}${k}.png`);
     this.load.spritesheet("campfire", `${P}campfire.png`, { frameWidth: 32, frameHeight: 32 });
@@ -231,6 +488,8 @@ export class CampScene extends Phaser.Scene {
     this.panelOpen = false;
     this.panelBox = null;
     this.smith = null;
+    this.mage = null;
+    this.mageMark = [];
     this.goddess = null;
     this.wayMark = [];
     this.furnace = null;
@@ -239,6 +498,8 @@ export class CampScene extends Phaser.Scene {
     this.cutscene = false;
     this.peddler = null;
     this.meta = loadMeta();
+    // a 💾-saved edit wins over the baked table, so work-in-progress survives reloads
+    this.lay = loadSavedLayout(this.meta.biome) ?? campLayout(this.meta.biome);
     this.rollShopOffers();
     const biome = biomeDef(this.meta.biome);
     const groundKey = `camp-ground-${this.meta.biome}`; // per-biome so a road-onward rebuilds it
@@ -270,16 +531,24 @@ export class CampScene extends Phaser.Scene {
     this.buildAnims();
 
     // --- screen-space backdrop (sized in layout()) ---
+    // Scene layers get EXPLICIT depths so pieces can be pushed behind the ground
+    // band: parallax < clouds < backBox < ground < propBox.
     for (const l of biome.parallax) {
-      const ts = this.add.tileSprite(0, 0, 8, 8, l.key).setOrigin(0, 0);
+      const ts = this.add.tileSprite(0, 0, 8, 8, l.key).setOrigin(0, 0).setDepth(-30);
       this.parallax.push({ sprite: ts, drift: l.drift });
     }
-    this.buildClouds(); // high clouds drift above the mountains, below the props
-    this.ground = this.add.tileSprite(0, 0, 8, 8, groundKey).setOrigin(0, 0);
+    if (this.meta.biome !== "dungeon") this.buildClouds(); // high clouds — none drift underground
+    for (const c of this.clouds) c.img.setDepth(-25);
+    // pieces sent far enough back (depth <= BACK_LAYER) move into this container,
+    // which draws BEHIND the ground band — for distant hills and treelines
+    this.backBox = this.add.container(0, 0).setDepth(-20);
+    this.ground = this.add.tileSprite(0, 0, 8, 8, groundKey).setOrigin(0, 0).setDepth(-10);
 
     // --- the camp itself (design coords, anchored to the ground line) ---
-    this.propBox = this.add.container(0, 0);
+    this.propBox = this.add.container(0, 0).setDepth(0);
     this.buildCamp();
+    this.snowZone = null;
+    if (this.meta.biome === "snow") this.buildSnowfall(); // the pass snows over camp too
 
     // biome tag + banked resources, top-left
     this.biomeLabel = this.add
@@ -288,7 +557,9 @@ export class CampScene extends Phaser.Scene {
     // TEMP debug: tap the biome tag to flip plains<->forest instantly (preview both worlds; remove before release)
     this.biomeLabel.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
       if (this.editMode || this.panelOpen || this.departing || this.cutscene) return;
-      this.meta.biome = this.meta.biome === "forest" ? "plains" : "forest";
+      // cycle all worlds for previewing
+      const cycle = ["plains", "forest", "snow", "dungeon"];
+      this.meta.biome = cycle[(cycle.indexOf(this.meta.biome) + 1) % cycle.length];
       saveMeta(this.meta);
       this.scene.restart();
     });
@@ -306,7 +577,15 @@ export class CampScene extends Phaser.Scene {
     // NB: quest rewards are no longer auto-paid on arrival — the Wayfarer holds
     // them (her gold "?" invites the visit) and pays when you see her.
 
-    if (import.meta.env.DEV) this.buildEditor();
+    if (import.meta.env.DEV) {
+      this.buildEditor();
+      // the 👁 toggle restarts the scene — re-open the editor on the far side
+      if (resumeEdit) {
+        resumeEdit = false;
+        this.editBtn?.emit("pointerdown");
+        this.toast(previewAll ? "showing ALL folk — place them, then 📋 / 💾" : "back to the real save state");
+      }
+    }
 
     this.layout();
     this.scale.off("resize", this.layout, this);
@@ -371,6 +650,8 @@ export class CampScene extends Phaser.Scene {
     mk("smith-walk", "smith", 48, 55, 12);
     mk("peddler-idle", "knight-idle", 0, 3, 5);
     mk("peddler-walk", "knight-run", 0, 7, 11);
+    mk("mage-idle", "mage-idle", 0, 7, 7);
+    mk("mage-walk", "mage-walk", 0, 7, 10);
     // NB: the goddess sheet is a walk cycle (no idle) — the Wayfarer holds a static
     // frame + a gentle float instead (see buildCamp), so she doesn't march in place.
     mk("campfire-burn", "campfire", 0, 9, 10);
@@ -385,6 +666,42 @@ export class CampScene extends Phaser.Scene {
   }
 
   /** Populate propBox: every prop stands on y=0 (the ground line), origin bottom-centre. */
+  /**
+   * Snow over the glacial camp. Screen-space (not in propBox) so it falls across
+   * the whole viewport at a constant size rather than scaling with the camp, and
+   * it drifts sideways as it comes down instead of dropping like rain.
+   */
+  private buildSnowfall() {
+    if (!this.textures.exists("camp-flake")) {
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = 6;
+      const g = cv.getContext("2d")!;
+      const gr = g.createRadialGradient(3, 3, 0.4, 3, 3, 3);
+      gr.addColorStop(0, "rgba(255,255,255,0.95)");
+      gr.addColorStop(1, "rgba(226,240,255,0)");
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 6, 6);
+      this.textures.addCanvas("camp-flake", cv);
+    }
+    const vw = this.scale.width;
+    // an emit ZONE (rather than an x range) so a window resize is a one-line
+    // width tweak instead of rebuilding the emitter's config
+    this.snowZone = new Phaser.Geom.Rectangle(-20, -12, vw + 40, 4);
+    this.add
+      .particles(0, 0, "camp-flake", {
+        emitZone: { type: "random" as const, source: this.snowZone, quantity: 1 },
+        speedY: { min: 38, max: 92 },
+        speedX: { min: -22, max: 14 },
+        accelerationX: { min: -10, max: 10 }, // a wandering fall, not a straight drop
+        lifespan: 13000,
+        quantity: 1,
+        frequency: 120,
+        alpha: { start: 0.9, end: 0.35 },
+        scale: { min: 0.5, max: 1.5 },
+      })
+      .setDepth(40); // over the camp, under the HUD
+  }
+
   /** A handful of fluffy clouds drifting high across the open sky (y/scale set in layout()). */
   private buildClouds() {
     // [key, fx (initial x fraction), fy (y fraction of sky), base scale, speed px/s]
@@ -403,10 +720,24 @@ export class CampScene extends Phaser.Scene {
   }
 
   private buildCamp() {
+    for (const sl of this.lay.slabs ?? []) this.placeSlab(sl); // terraces first — everything stands in front
     const put = (p: Prop) => {
-      const im = this.add.image(p.x, p.y, p.key, p.frame).setOrigin(0.5, 1).setScale(p.s).setDepth(p.depth);
+      // "anim:<key>" is how the editor records an ANIMATED piece (campfire, torch,
+      // water...). Rebuild it as a playing sprite, not a dead still image.
+      const animKey = p.key.startsWith("anim:") ? p.key.slice(5) : null;
+      const tex = animKey ? PALETTE.find((q) => q.anim === animKey)?.key : p.key;
+      const im = (
+        animKey && tex
+          ? this.add.sprite(p.x, p.y, tex).play(animKey)
+          : this.add.image(p.x, p.y, p.key, p.frame)
+      )
+        .setOrigin(0.5, 1)
+        .setScale(p.s)
+        .setDepth(p.depth) as Phaser.GameObjects.Image;
       if (p.flip) im.setFlipX(true);
-      this.propBox.add(im);
+      // a baked prop pushed past BACK_LAYER belongs BEHIND the ground band, same
+      // as when it was placed in the editor — otherwise it pops to the front on reload
+      (p.depth <= BACK_LAYER ? this.backBox : this.propBox).add(im);
       this.editable.push({ obj: im, key: p.key, frame: p.frame });
       return im;
     };
@@ -416,12 +747,12 @@ export class CampScene extends Phaser.Scene {
       this.editable.push({ obj: sp, key: `anim:${anim}` });
       return sp;
     };
-    for (const p of PROPS) {
+    for (const p of this.lay.props) {
       const im = put(p);
       // the tarp tent hides the reluctant blacksmith until she's hired
       if (p.key === "tarp_tent") {
         im.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.tentTapped());
-        if (!this.meta.blacksmithHired) {
+        if (!this.meta.blacksmithHired && !previewAll) {
           // gold glowing "?" — someone's in there
           const qGlow = this.add
             .image(p.x, -104, "camp-glow")
@@ -444,43 +775,92 @@ export class CampScene extends Phaser.Scene {
     }
 
     // hero stands in the middle of camp
-    this.hero = this.add.sprite(-47, 2, "warrior").setOrigin(0.5, 0.734).setScale(2.1).setDepth(7).play("hero-idle");
+    this.hero = this.add.sprite(this.lay.hero.x, 2 + AY(this.lay.hero), "warrior").setOrigin(0.5, 0.734).setScale(AS(this.lay.hero, 2.1)).setDepth(7).play("hero-idle");
     this.propBox.add(this.hero);
+    this.editable.push({ obj: this.hero, key: "npc:hero", npc: "hero", base: 2, baseScale: 2.1 });
 
     // the Wayfarer — quest giver waiting by the road out (static frame + gentle float).
     // Her !/? marker is state-driven — see refreshWayfarerMark().
-    this.goddess = this.add.sprite(300, 2, "goddess").setOrigin(0.5, 1).setScale(1.9).setDepth(6).setFrame(0);
+    this.goddess = this.add.sprite(this.lay.wayfarer.x, 2 + AY(this.lay.wayfarer), "goddess").setOrigin(0.5, 1).setScale(AS(this.lay.wayfarer, 1.9)).setDepth(6).setFrame(0);
     this.propBox.add(this.goddess);
+    this.editable.push({ obj: this.goddess, key: "npc:wayfarer", npc: "wayfarer", base: 2, baseScale: 1.9 });
     this.tweens.add({ targets: this.goddess, y: -5, duration: 1600, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     this.goddess.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.goddessTapped());
 
     // blacksmith's furnace — COLD until Wren is hired (she lights it herself);
     // the plaque + firelight only exist while the forge is actually manned
-    this.furnace = sprite("furnace", "furnace-burn", 138, 0, 2.1, 5);
+    this.furnace = sprite("furnace", "furnace-burn", this.lay.furnace.x, AY(this.lay.furnace), AS(this.lay.furnace, 2.1), 5);
     this.furnace.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
-    if (this.meta.blacksmithHired) {
-      this.lightFurnace(false);
-      this.smith = this.add.sprite(85, 2, "smith").setOrigin(0.5, 0.734).setScale(2.1).setDepth(6).play("smith-idle");
+    this.tagEditable(this.furnace, "npc:furnace", "furnace", 0, 2.1);
+    if (this.meta.blacksmithHired || previewAll) {
+      // Wren FIRST — lightFurnace hangs her sign on her, so she has to exist
+      this.smith = this.add.sprite(this.lay.smith.x, 2 + AY(this.lay.smith), "smith").setOrigin(0.5, 0.734).setScale(AS(this.lay.smith, 2.1)).setDepth(6).play("smith-idle");
       this.propBox.add(this.smith);
       this.smith.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
+      this.editable.push({ obj: this.smith, key: "npc:smith", npc: "smith", base: 2, baseScale: 2.1 });
+      this.lightFurnace(false);
     } else {
       this.furnace.stop().setFrame(0).setTint(0x6f7b8e); // dead coals in the morning light
     }
 
+    // Aldwin the Mage — only from the FOREST camp onward (the forge's mirror for
+    // magic). Unhired he studies under a violet "?"; hired, tapping opens his study.
+    // NB: preview relaxes "have I unlocked them YET", NOT "does this road have
+    // them at all" — Aldwin still never appears in the plains.
+    if (wizardAvailable(this.meta.biome)) {
+      // He's slender next to the chunky hero/smith, so he's scaled a little
+      // taller than them to read as a peer rather than a child.
+      const MX = this.lay.mage.x;
+      const MY = AY(this.lay.mage);
+      this.mage = this.add.sprite(MX, 2 + MY, "mage-idle").setOrigin(0.5, 0.673).setScale(AS(this.lay.mage, 1.25)).setDepth(6).play("mage-idle");
+      this.propBox.add(this.mage);
+      this.mage.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.mageTapped());
+      this.editable.push({ obj: this.mage, key: "npc:mage", npc: "mage", base: 2, baseScale: 1.25 });
+      if (!this.meta.wizardHired && !previewAll) {
+        // The mark lives in its own box PINNED to Aldwin (see follow), so
+        // dragging him in the editor carries his "?" along. The bob happens
+        // INSIDE the box, so the tween never fights the pinning.
+        const glow = this.add
+          .image(0, -104, "camp-glow")
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(0xa06bff)
+          .setScale(1.6)
+          .setAlpha(0.55);
+        const mark = this.add
+          .text(0, -104, "?", { fontFamily: "monospace", fontStyle: "bold", fontSize: "34px", color: "#c9a0ff", stroke: "#2a1050", strokeThickness: 6 })
+          .setOrigin(0.5);
+        const markBox = this.add.container(MX, 2 + MY, [glow, mark]).setDepth(9);
+        this.propBox.add(markBox);
+        this.follow(markBox, this.mage);
+        this.tweens.add({ targets: mark, y: -114, duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+        this.tweens.add({ targets: glow, alpha: 0.25, scale: 1.35, duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+        this.mageMark = [markBox];
+      }
+    }
+
     // the Peddler's pitch — only once she's followed the glitter into camp
-    if (this.meta.peddlerArrived) this.buildPeddler(false);
+    if (this.meta.peddlerArrived || previewAll) this.buildPeddler(false);
 
     // DEPART: humming portal (right side of camp)
-    const portal = sprite("portal", "portal-spin", 445, 9, 2.6, 5);
-    this.addGlow(445, -60, 2.6, 0.3);
-    const sign = this.plaque(363, -194, "DEPART ▶");
+    const portal = sprite("portal", "portal-spin", this.lay.portal.x, 9 + AY(this.lay.portal), AS(this.lay.portal, 2.6), 5);
+    this.tagEditable(portal, "npc:portal", "portal", 9, 2.6);
+    this.addGlow(portal.x, portal.y - 60, 2.6, 0.3);
+    const sign = this.plaque(portal.x, portal.y - 176, "DEPART ▶"); // centred ON the portal
     this.departSign = sign;
-    this.tweens.add({ targets: sign, y: -200, duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
-    const hit = this.add.rectangle(445, -80, 220, 220, 0xffffff, 0).setDepth(10).setInteractive({ useHandCursor: true });
+    this.follow(sign, portal); // the signpost travels with the portal
+    this.tweens.add({ targets: sign.list, y: "-=6", duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    const hit = this.add.rectangle(this.lay.portal.x, AY(this.lay.portal) - 80, 220, 220, 0xffffff, 0).setDepth(10).setInteractive({ useHandCursor: true });
     this.propBox.add(hit);
     this.portalHit = hit;
     hit.on("pointerdown", () => this.depart());
     portal.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.depart());
+    this.hoverPlaque(sign, [portal, hit]); // the signpost answers the pointer
+
+    // A Container draws its children in LIST order, so a prop's `depth` means
+    // nothing until we sort by it. Sorting once here makes the authored depths
+    // authoritative regardless of the order pieces happened to be created in.
+    this.propBox.sort("depth");
+    this.backBox.sort("depth");
   }
 
   /** Wooden plaque with a label — returns the container so callers can tween it. */
@@ -492,8 +872,7 @@ export class CampScene extends Phaser.Scene {
     const cont = this.add.container(x, y, [bg, grain, txt]).setDepth(10);
     cont.setSize(w, 30);
     this.propBox.add(cont);
-    this.editable.push({ obj: cont, key: `plaque:${label}` });
-    return cont;
+    return cont; // NB: NOT editable — plaques hang off their owner (see follow/hoverPlaque)
   }
 
   /** Soft additive firelight, breathing. Returns the image so callers can keep/kill it. */
@@ -509,8 +888,13 @@ export class CampScene extends Phaser.Scene {
     if (!this.furnace || this.furnaceLitObjs.length) return;
     this.furnace.clearTint();
     this.furnace.play("furnace-burn");
-    const g = this.addGlow(138, -46, 2.4, 0.26);
-    const plq = this.plaque(138, -152, "⚒ BLACKSMITH");
+    const g = this.addGlow(this.furnace.x, this.furnace.y - 46, 2.4, 0.26);
+    // the sign hangs over WREN herself (the furnace is her workbench, she's the
+    // shopkeeper) and falls back to the forge if she hasn't stepped out yet
+    const signOwner = this.smith ?? this.furnace;
+    const plq = this.plaque(signOwner.x, signOwner.y - 120, "⚒ BLACKSMITH");
+    this.follow(plq, signOwner);
+    this.hoverPlaque(plq, [this.smith, this.furnace]);
     this.furnaceLitObjs = [g, plq];
     if (ceremony) {
       // she strikes the flint: a warm flash and the plaque pops into place
@@ -545,16 +929,19 @@ export class CampScene extends Phaser.Scene {
     else if (this.meta.active.length) [glyph, big] = ["?", false];
     else return;
 
-    const x = 300;
-    const y = big ? -156 : -142;
+    // boxed and pinned to her sprite so the editor can drag her with it
+    const my = (big ? -156 : -142) - 2; // relative to her feet (she sits at y = 2 + anchor)
+    const markBox = this.add.container(this.goddess.x, this.goddess.y).setDepth(9);
+    this.propBox.add(markBox);
+    this.follow(markBox, this.goddess);
+    this.wayMark.push(markBox);
     if (big) {
-      const g = this.add.image(x, y, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setTint(0xffd24a).setScale(2.2).setAlpha(0.6).setDepth(9);
-      this.propBox.add(g);
+      const g = this.add.image(0, my, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setTint(0xffd24a).setScale(2.2).setAlpha(0.6);
+      markBox.add(g);
       this.tweens.add({ targets: g, alpha: 0.28, scale: 1.7, duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
-      this.wayMark.push(g);
     }
     const t = this.add
-      .text(x, y, glyph, {
+      .text(0, my, glyph, {
         fontFamily: "monospace",
         fontStyle: "bold",
         fontSize: big ? "48px" : "24px",
@@ -562,12 +949,10 @@ export class CampScene extends Phaser.Scene {
         stroke: big ? "#5a3a08" : "#1a1d24",
         strokeThickness: big ? 8 : 5,
       })
-      .setOrigin(0.5)
-      .setDepth(10);
-    this.propBox.add(t);
-    this.tweens.add({ targets: t, y: y - (big ? 12 : 7), duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+      .setOrigin(0.5);
+    markBox.add(t);
+    this.tweens.add({ targets: t, y: my - (big ? 12 : 7), duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     if (big) this.tweens.add({ targets: t, scale: 1.14, duration: 650, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
-    this.wayMark.push(t);
   }
 
   // ===== cutscenes: a shared letterboxed dialog engine + the camp's scenes =====
@@ -808,9 +1193,10 @@ export class CampScene extends Phaser.Scene {
 
   /** Stand her at her pitch with her goods. `entrance` = the arrival ceremony. */
   private buildPeddler(entrance: boolean) {
-    const ped = this.add.sprite(entrance ? -880 : PEDDLER_X, 2, "knight-idle").setScale(PEDDLER_SCALE).setDepth(7);
+    const ped = this.add.sprite(entrance ? -880 : this.lay.peddler.x, 2 + AY(this.lay.peddler), "knight-idle").setScale(AS(this.lay.peddler, PEDDLER_SCALE)).setDepth(7);
     this.propBox.add(ped);
     this.peddler = ped;
+    this.editable.push({ obj: ped, key: "npc:peddler", npc: "peddler", base: 2, baseScale: PEDDLER_SCALE });
     this.peddlerPlay(entrance ? "peddler-walk" : "peddler-idle");
     ped.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.peddlerTapped());
     if (!entrance) this.buildPeddlerGoods(false);
@@ -819,11 +1205,16 @@ export class CampScene extends Phaser.Scene {
   /** Her stall: a crate, a basket, and the shingle. Pops in during the arrival. */
   private buildPeddlerGoods(pop: boolean) {
     const goods: Phaser.GameObjects.GameObject[] = [];
-    const crate = this.add.image(PEDDLER_X - 52, 1, "crate").setOrigin(0.5, 1).setScale(1.4).setDepth(6);
-    const basket = this.add.image(PEDDLER_X + 44, 1, "basket_stack").setOrigin(0.5, 1).setScale(1.5).setDepth(6);
+    const crate = this.add.image(this.lay.peddler.x - 52, 1 + AY(this.lay.peddler), "crate").setOrigin(0.5, 1).setScale(1.4).setDepth(6);
+    const basket = this.add.image(this.lay.peddler.x + 44, 1 + AY(this.lay.peddler), "basket_stack").setOrigin(0.5, 1).setScale(1.5).setDepth(6);
     this.propBox.add(crate);
     this.propBox.add(basket);
-    const plq = this.plaque(PEDDLER_X, -132, "💰 PEDDLER");
+    // the stall is HERS — pin it so moving her carries the crate and baskets along
+    this.follow(crate, this.peddler);
+    this.follow(basket, this.peddler);
+    const plq = this.plaque(this.peddler?.x ?? this.lay.peddler.x, (this.peddler?.y ?? 2) - 132, "💰 PEDDLER");
+    this.follow(plq, this.peddler);
+    this.hoverPlaque(plq, [this.peddler]);
     goods.push(crate, basket, plq);
     for (const g of goods) {
       const im = g as Phaser.GameObjects.Image;
@@ -867,7 +1258,7 @@ export class CampScene extends Phaser.Scene {
       prelude: (finish) => {
         walkTween = this.tweens.add({
           targets: this.peddler,
-          x: PEDDLER_X,
+          x: this.lay.peddler.x,
           duration: 3600,
           ease: "Sine.easeOut",
           onComplete: () => {
@@ -877,13 +1268,13 @@ export class CampScene extends Phaser.Scene {
         });
         return () => {
           walkTween?.stop();
-          this.peddler?.setX(PEDDLER_X);
+          this.peddler?.setX(this.lay.peddler.x);
           unpack();
           finish();
         };
       },
       onEnd: () => {
-        this.peddler?.setX(PEDDLER_X);
+        this.peddler?.setX(this.lay.peddler.x);
         unpack();
         this.meta.peddlerArrived = true;
         saveMeta(this.meta);
@@ -1099,13 +1490,18 @@ export class CampScene extends Phaser.Scene {
     for (const m of this.tentMark) m.destroy(); // the "?" is answered
     this.tentMark = [];
     // Wren steps out of the tent and walks to her forge (pace scales with the trip)
-    const smith = this.add.sprite(TENT_X, 2, "smith").setOrigin(0.5, 0.734).setScale(2.1).setDepth(6).play("smith-walk");
+    const tentX = this.lay.props.find((p) => p.key === "tarp_tent")?.x ?? this.lay.hero.x;
+    const smith = this.add.sprite(tentX, 2, "smith").setOrigin(0.5, 0.734).setScale(AS(this.lay.smith, 2.1)).setDepth(6).play("smith-walk");
     this.propBox.add(smith);
     this.smith = smith;
+    // clickable + editable the moment she arrives, not only after a camp reload
+    smith.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.furnaceTapped());
+    this.editable.push({ obj: smith, key: "npc:smith", npc: "smith", base: 2, baseScale: 2.1 });
     this.tweens.add({
       targets: smith,
-      x: 85,
-      duration: Math.max(900, Math.abs(85 - TENT_X) * 7),
+      x: this.lay.smith.x,
+      y: 2 + AY(this.lay.smith),
+      duration: Math.max(900, Math.abs(this.lay.smith.x - tentX) * 7),
       ease: "Sine.easeInOut",
       onComplete: () => {
         smith.play("smith-idle");
@@ -1116,6 +1512,94 @@ export class CampScene extends Phaser.Scene {
           this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
       },
     });
+  }
+
+  /**
+   * Aldwin: the forge's mirror for magic. Unhired he's a wandering scholar with
+   * a price; hired, his study sells permanent staff levels, capped per zone.
+   */
+  private mageTapped() {
+    if (this.editMode || this.panelOpen || this.cutscene) return;
+    if (!this.meta.wizardHired) {
+      const afford = canAfford(this.meta, WIZARD_COST);
+      this.panel(
+        "A SCHOLAR OF THE OLD ROAD",
+        [
+          `"Your blade is well kept. Your CASTING is a rumour."`,
+          `"Reagents and a focus-stone, and I'll teach the staff"`,
+          `" what the forge taught the sword."`,
+          ``,
+          `your bank:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`,
+        ],
+        [
+          { label: `HIRE  🪵${WIZARD_COST.wood} 🪨${WIZARD_COST.ore} 💎${WIZARD_COST.treasure}`, enabled: afford, cb: () => this.hireWizard() },
+          { label: "not today" },
+        ],
+      );
+      return;
+    }
+    const lvl = this.meta.staffLevel;
+    const cap = studyCap(this.meta.biome);
+    if (lvl >= cap) {
+      this.panel(
+        "🪄 ALDWIN'S STUDY",
+        [
+          `the staff is at its ${this.meta.biome} peak (level ${lvl})`,
+          `every cast carries +${lvl * SPELL_BONUS_PER_LEVEL} damage`,
+          ``,
+          `"the leylines here are spent. walk a stranger"`,
+          ` road and I'll read it for you."`,
+        ],
+        [{ label: "close the book" }],
+      );
+      return;
+    }
+    const cost = studyCost(lvl);
+    const afford = canAfford(this.meta, { ore: cost });
+    this.panel(
+      "🪄 ALDWIN'S STUDY",
+      [
+        `staff lore:  +${lvl * SPELL_BONUS_PER_LEVEL} → +${(lvl + 1) * SPELL_BONUS_PER_LEVEL} damage on EVERY cast`,
+        `(${cap - lvl} lesson${cap - lvl === 1 ? "" : "s"} left on this road)`,
+        ``,
+        `your bank:  🪨 ${this.meta.ore}`,
+      ],
+      [
+        { label: `STUDY  🪨${cost}`, enabled: afford, cb: () => this.studyUpgrade(cost) },
+        { label: "not yet" },
+      ],
+    );
+  }
+
+  private hireWizard() {
+    spend(this.meta, WIZARD_COST);
+    this.meta.wizardHired = true;
+    saveMeta(this.meta);
+    this.refreshResources();
+    this.sfx("pouch", 0.6);
+    for (const m of this.mageMark) m.destroy(); // the "?" is answered
+    this.mageMark = [];
+    // a flare of arcane light as he takes up his post
+    const flare = this.add.image(this.mage?.x ?? 258, -40, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setTint(0x9a6bff).setScale(1.2).setAlpha(0.9).setDepth(9);
+    this.propBox.add(flare);
+    this.tweens.add({ targets: flare, scale: 3.4, alpha: 0, duration: 700, onComplete: () => flare.destroy() });
+    this.toast("Aldwin the Mage joins the caravan! 🪄");
+    this.refreshWayfarerMark();
+    if (this.meta.active.some((aq) => questDone(this.meta, aq)))
+      this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
+  }
+
+  private studyUpgrade(cost: number) {
+    spend(this.meta, { ore: cost });
+    this.meta.staffLevel++;
+    saveMeta(this.meta);
+    this.refreshResources();
+    this.sfx("pickup", 0.65);
+    const atPeak = this.meta.staffLevel >= studyCap(this.meta.biome);
+    this.toast(atPeak ? `the staff sings at its peak — +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} per cast 🪄` : `the lore deepens — staff level ${this.meta.staffLevel} 🪄`);
+    this.refreshWayfarerMark();
+    if (this.meta.active.some((aq) => questDone(this.meta, aq)))
+      this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
   }
 
   /** Wren's forge: permanent sword levels, capped per zone — the cap SUNDERS. */
@@ -1312,6 +1796,193 @@ export class CampScene extends Phaser.Scene {
     this.time.delayedCall(2750, () => this.scene.start("game"));
   }
 
+  /**
+   * Put a piece in the right container for its depth and re-sort both. Depths at
+   * or below BACK_LAYER live in backBox (behind the ground band); everything else
+   * in propBox. The two share a transform, so moving between them never shifts
+   * the piece on screen. NB: a Container draws in LIST order and ignores a
+   * child's depth, so the sort is what actually makes depth mean anything.
+   */
+  private reparentByDepth(o: Phaser.GameObjects.GameObject & { depth: number }) {
+    const want = o.depth <= BACK_LAYER ? this.backBox : this.propBox;
+    const other = want === this.backBox ? this.propBox : this.backBox;
+    if (other.exists(o)) {
+      other.remove(o);
+      want.add(o);
+    } else if (!want.exists(o)) want.add(o);
+    this.propBox.sort("depth");
+    this.backBox.sort("depth");
+  }
+
+  /**
+   * A shop sign only shows while you're pointing at the thing it names — the
+   * camp stays uncluttered and the hover teaches what's interactive. Touch has
+   * no hover, but tapping opens the panel anyway, so nothing is lost there.
+   */
+  private hoverPlaque(plq: Phaser.GameObjects.Container, owners: (Phaser.GameObjects.GameObject | null | undefined)[]) {
+    plq.setAlpha(0);
+    const fade = (to: number) => {
+      this.tweens.killTweensOf(plq);
+      this.tweens.add({ targets: plq, alpha: to, duration: 130, ease: "Quad.easeOut" });
+    };
+    for (const o of owners) {
+      if (!o?.input) continue;
+      o.on("pointerover", () => fade(1));
+      o.on("pointerout", () => fade(0));
+    }
+  }
+
+  /**
+   * Pin a marker box to an owner sprite. update() keeps it glued, so the editor
+   * can drag the owner and its "?" / plaque / glow travels with it instead of
+   * being stranded at the layout anchor it was built from.
+   */
+  private follow(obj: Phaser.GameObjects.GameObject & { x: number; y: number }, owner: Phaser.GameObjects.Sprite | null) {
+    if (!owner) return;
+    this.followers.push({ obj, owner, dx: obj.x - owner.x, dy: obj.y - owner.y });
+  }
+
+  /** Re-label an already-registered editable (props auto-register on creation). */
+  private tagEditable(obj: Phaser.GameObjects.GameObject, key: string, npc: string, base = 0, baseScale = 1) {
+    const e = this.editable.find((x) => x.obj === obj);
+    if (e) {
+      e.key = key;
+      e.npc = npc;
+      e.base = base;
+      e.baseScale = baseScale;
+    }
+  }
+
+  /**
+   * The building set: ＋ opens a grid of every camp piece; tap one and it drops
+   * into the middle of camp already selected, ready to drag where you want it.
+   */
+  private buildPalette(onPlace: (e: EditableProp) => void) {
+    const box = this.add.container(0, 0).setDepth(78).setVisible(false);
+    const vw = this.scale.width;
+    const vh = this.scale.height;
+    const COLS = 9;
+    const CELL = 62;
+    const rows = Math.ceil((PALETTE.length + SLAB_SHADES.length) / COLS);
+    const pw = COLS * CELL + 16;
+    const ph = rows * CELL + 44;
+    const px = Math.round(vw / 2 - pw / 2);
+    const py = Math.round(vh - ph - 12);
+    box.add(this.add.rectangle(px, py, pw, ph, 0x0d1017, 0.96).setOrigin(0, 0).setStrokeStyle(2, 0x3a4152));
+    box.add(
+      this.add
+        .text(px + 10, py + 8, "BUILDING PIECES — tap one to drop it into camp", { fontFamily: "monospace", fontSize: "12px", color: "#ffe08a" })
+        .setOrigin(0, 0),
+    );
+    PALETTE.forEach((item, i) => {
+      const cx = px + 8 + (i % COLS) * CELL + CELL / 2;
+      const cy = py + 34 + Math.floor(i / COLS) * CELL + CELL / 2;
+      const cellBg = this.add.rectangle(cx, cy, CELL - 6, CELL - 6, 0x1b2130).setStrokeStyle(1, 0x39415a);
+      // thumbnail scaled to fit whatever the source size is
+      const thumb = this.add.image(cx, cy + 4, item.key, 0).setOrigin(0.5, 0.5);
+      const f0 = this.textures.get(item.key).get(0);
+      thumb.setScale(Math.min((CELL - 20) / f0.width, (CELL - 20) / f0.height));
+      const lbl = this.add
+        .text(cx, cy + CELL / 2 - 10, item.key.slice(0, 9), { fontFamily: "monospace", fontSize: "8px", color: "#8892a6" })
+        .setOrigin(0.5);
+      box.add([cellBg, thumb, lbl]);
+      cellBg.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+        // drop it dead-centre of the visible camp so it never lands off-screen
+        const lx = Math.round((vw / 2 - this.propBox.x) / this.campScale);
+        const obj = item.anim
+          ? this.add.sprite(lx, 0, item.key).setOrigin(0.5, 1).setScale(1.5).setDepth(5).play(item.anim)
+          : this.add.image(lx, 0, item.key, item.frames ? 0 : undefined).setOrigin(0.5, 1).setScale(1.5).setDepth(5);
+        this.propBox.add(obj);
+        const e: EditableProp = { obj, key: item.anim ? `anim:${item.anim}` : item.key, frame: item.frames ? 0 : undefined };
+        this.editable.push(e);
+        this.propBox.sort("depth");
+        box.setVisible(false);
+        onPlace(e);
+        this.toast(`placed ${item.key} — drag it · [ ] scale · F flip · , . depth · Del remove`);
+      });
+    });
+
+    // --- floor slabs: build terraces/ledges out of the biome's own ground ---
+    SLAB_SHADES.forEach((sh, i) => {
+      const idx = PALETTE.length + i;
+      const cx = px + 8 + (idx % COLS) * CELL + CELL / 2;
+      const cy = py + 34 + Math.floor(idx / COLS) * CELL + CELL / 2;
+      const cellBg = this.add.rectangle(cx, cy, CELL - 6, CELL - 6, 0x1b2130).setStrokeStyle(1, 0x39415a);
+      const swatch = this.add.rectangle(cx, cy + 2, CELL - 22, CELL - 30, sh.tint).setStrokeStyle(1, 0x8fbf6a);
+      const lbl = this.add
+        .text(cx, cy + CELL / 2 - 10, sh.label.replace("floor ", "flr "), { fontFamily: "monospace", fontSize: "8px", color: "#9ad07a" })
+        .setOrigin(0.5);
+      box.add([cellBg, swatch, lbl]);
+      cellBg.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+        const lx = Math.round((vw / 2 - this.propBox.x) / this.campScale);
+        const e = this.placeSlab({ x: lx, y: -120, w: 240, h: 200, tint: sh.tint, depth: sh.depth });
+        box.setVisible(false);
+        onPlace(e);
+        this.toast(`placed ${sh.label} — drag it · [ ] width · shift+[ ] height · , . depth · Del remove`);
+      });
+    });
+    return box;
+  }
+
+  /**
+   * Stretch a slab's ground texture so exactly ONE vertical repeat spans it.
+   * The source is a single "grass lip + earth" column (96px) — tiling it down a
+   * tall shelf stripes grass the whole way, which reads as a bug.
+   */
+  private fitSlab(ts: Phaser.GameObjects.TileSprite) {
+    ts.setTileScale(1, Math.max(0.25, ts.height / 96));
+  }
+
+  /**
+   * Slabs draw from a LIGHTENED copy of the biome's ground. The raw art is a
+   * bright lip over near-black earth (the snow crop measures lum ~173 over ~18),
+   * and since Phaser tints multiply, a dark body can't be brightened by the
+   * shade presets — it just swallowed anything standing in front of it, the
+   * portal included. Here the dark pixels are lifted toward pale slate while
+   * the lip keeps its contrast, so shelves read as distant ground, not voids.
+   */
+  private slabTexture(biome: string): string {
+    const key = `camp-slab-${biome}`;
+    if (this.textures.exists(key)) return key;
+    const src = this.textures.get(`camp-ground-${biome}`).getSourceImage() as CanvasImageSource & { width: number; height: number };
+    const w = src.width;
+    const h = src.height;
+    const cv = document.createElement("canvas");
+    cv.width = w;
+    cv.height = h;
+    const g = cv.getContext("2d")!;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(src, 0, 0);
+    const img = g.getImageData(0, 0, w, h);
+    const d = img.data;
+    const LIFT_TO = [198, 210, 220]; // pale slate — reads as haze-washed distance
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 10) continue;
+      const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      const t = Math.max(0, 1 - lum / 130); // 1 at black, 0 once it's already light
+      const lift = 0.78 * t;
+      for (let k = 0; k < 3; k++) d[i + k] = Math.round(d[i + k] + (LIFT_TO[k] - d[i + k]) * lift);
+    }
+    g.putImageData(img, 0, 0);
+    this.textures.addCanvas(key, cv);
+    return key;
+  }
+
+  /** Drop a ground slab (a terrace shelf). Returns it registered as editable. */
+  private placeSlab(s: Slab): EditableProp {
+    const groundKey = this.slabTexture(this.meta.biome);
+    const slab = this.add
+      .tileSprite(s.x, s.y, s.w, s.h, groundKey)
+      .setOrigin(0.5, 0) // you place the walking SURFACE; the earth hangs below it
+      .setTint(s.tint)
+      .setDepth(s.depth);
+    this.fitSlab(slab);
+    this.reparentByDepth(slab); // far-back slabs go behind the ground band
+    const e: EditableProp = { obj: slab, key: `slab:${s.tint.toString(16)}` };
+    this.editable.push(e);
+    return e;
+  }
+
   // ===== dev layout editor: toggle ✎, drag anything, 📋 copies the layout JSON =====
   private buildEditor() {
     const mkBtn = (label: string) =>
@@ -1322,11 +1993,21 @@ export class CampScene extends Phaser.Scene {
         .setInteractive({ useHandCursor: true });
     this.editBtn = mkBtn("✎ edit");
     this.copyBtn = mkBtn("📋 copy layout").setVisible(false);
+    this.addBtn = mkBtn("＋ pieces").setVisible(false);
+    this.saveBtn = mkBtn("💾 save layout").setVisible(false);
+    this.previewBtn = mkBtn(previewAll ? "👁 showing ALL" : "👁 real state").setVisible(false);
+    if (previewAll) this.previewBtn.setColor("#ffe08a");
 
     // selection badge: tap a prop -> red ✕ pops at its corner; tap the ✕ to hide it
     const boundsOf = (o: EditableProp["obj"]) => (o as unknown as Phaser.GameObjects.Sprite).getBounds();
     const badge = this.add
       .text(0, 0, "✕", { fontFamily: "monospace", fontStyle: "bold", fontSize: "20px", color: "#ffffff", backgroundColor: "#c0392b", padding: { x: 7, y: 2 } })
+      .setOrigin(0.5)
+      .setDepth(72)
+      .setVisible(false)
+      .setInteractive({ useHandCursor: true });
+    const lockBtn = this.add
+      .text(0, 0, "🔓", { fontFamily: EMOJI_FONT, fontSize: "18px", backgroundColor: "#2a3142", padding: { x: 6, y: 3 } })
       .setOrigin(0.5)
       .setDepth(72)
       .setVisible(false)
@@ -1339,19 +2020,33 @@ export class CampScene extends Phaser.Scene {
 
     let dragging: EditableProp | null = null;
     let selected: EditableProp | null = null;
+    // repeated clicks on one spot walk down through the overlapping pieces
+    let lastPick = { x: -1e6, y: -1e6, i: 0 };
     const showSel = (e: EditableProp | null) => {
       selected = e;
       if (!e || !e.obj.visible) {
         badge.setVisible(false);
+        lockBtn.setVisible(false);
         tag.setVisible(false);
         return;
       }
       const b = boundsOf(e.obj);
-      badge.setPosition(b.right, b.top).setVisible(true);
-      tag.setText(`${e.key} @${Math.round(e.obj.x)},${Math.round(e.obj.y)}`).setPosition(b.left, b.top - 4).setVisible(true);
+      // a locked piece can't be deleted either, so its ✕ steps aside
+      badge.setPosition(b.right, b.top).setVisible(!e.locked);
+      lockBtn.setText(e.locked ? "🔒" : "🔓").setPosition(b.right - (e.locked ? 0 : 34), b.top).setVisible(true);
+      // depth is in the tag so the , . nudges give visible feedback
+      const o = e.obj as unknown as { depth: number; scaleX: number };
+      tag
+        .setText(`${e.locked ? "🔒 " : ""}${e.key} @${Math.round(e.obj.x)},${Math.round(e.obj.y)}  z${o.depth}  x${o.scaleX.toFixed(2)}`)
+        .setPosition(b.left, b.top - 4)
+        .setVisible(true);
     };
     const removeSel = () => {
       if (!selected) return;
+      if (selected.locked) {
+        this.toast("that piece is locked — tap 🔒 to free it");
+        return;
+      }
       const s = selected;
       s.obj.setVisible(false);
       this.editable = this.editable.filter((x) => x !== s);
@@ -1360,23 +2055,79 @@ export class CampScene extends Phaser.Scene {
       dragging = null;
     };
 
+    const palette = this.buildPalette((e) => {
+      this.addBtn!.setText("＋ pieces");
+      showSel(e);
+      dragging = e;
+    });
+
     this.editBtn.on("pointerdown", () => {
       this.editMode = !this.editMode;
       this.editBtn!.setText(this.editMode ? "✔ done" : "✎ edit").setColor(this.editMode ? "#ffe08a" : "#dfe3ea");
       this.copyBtn!.setVisible(this.editMode);
+      this.addBtn!.setVisible(this.editMode);
+      this.saveBtn!.setVisible(this.editMode);
+      this.previewBtn!.setVisible(this.editMode);
+      if (!this.editMode) {
+        palette.setVisible(false);
+        this.addBtn!.setText("＋ pieces");
+      }
       this.portalHit?.setVisible(!this.editMode); // don't let the big depart zone swallow drags
       if (!this.editMode) showSel(null);
-      this.toast(this.editMode ? "tap a prop to select · drag to move · tap ✕ to hide · 📋 copies layout" : "edit mode off");
+      this.toast(
+        this.editMode
+          ? "drag anything (NPCs too) · ＋ adds pieces · [ ] scale · F flip · , . depth · Del remove · 📋 copies"
+          : "edit mode off",
+      );
     });
+    // 👁 rebuilds the camp with every recruit present (or back to the real save
+    // state), so a layout can be authored for how the camp will FINALLY look.
+    this.previewBtn!.on("pointerdown", () => {
+      previewAll = !previewAll;
+      resumeEdit = true; // come back with the editor still open
+      this.scene.restart();
+    });
+    this.addBtn.on("pointerdown", () => {
+      const open = !palette.visible;
+      palette.setVisible(open);
+      this.addBtn!.setText(open ? "✕ close" : "＋ pieces");
+    });
+    // one serialiser feeds BOTH buttons: 📋 copies for baking, 💾 persists locally
+    const serialise = () => {
+      const anchors: Record<string, { x: number; y?: number; s?: number }> = {};
+      const props: Record<string, unknown>[] = [];
+      const slabs: Slab[] = [];
+      for (const e of this.editable) {
+        if (!e.obj.visible) continue;
+        if (e.npc) {
+          // y matters — folk can stand on raised slabs
+          const ay = Math.round(e.obj.y) - (e.base ?? 0); // strip the sprite's own offset
+          const sc = +(e.obj as unknown as { scaleX: number }).scaleX.toFixed(2);
+          const resized = e.baseScale !== undefined && Math.abs(sc - e.baseScale) > 0.001;
+          anchors[e.npc] = { x: Math.round(e.obj.x), ...(ay ? { y: ay } : {}), ...(resized ? { s: sc } : {}) };
+          continue;
+        }
+        if (e.key.startsWith("slab:")) {
+          const ts = e.obj as unknown as Phaser.GameObjects.TileSprite & { tintTopLeft: number; depth: number };
+          slabs.push({ x: Math.round(ts.x), y: Math.round(ts.y), w: Math.round(ts.width), h: Math.round(ts.height), tint: ts.tintTopLeft, depth: ts.depth });
+          continue;
+        }
+        const img = e.obj as unknown as Phaser.GameObjects.Image;
+        props.push({
+          key: e.key,
+          x: Math.round(e.obj.x),
+          y: Math.round(e.obj.y),
+          s: +e.obj.scaleX.toFixed(2),
+          depth: (e.obj as unknown as { depth: number }).depth,
+          ...(e.frame !== undefined ? { frame: e.frame } : {}),
+          ...(img.flipX ? { flip: true } : {}),
+        });
+      }
+      return { biome: this.meta.biome, anchors, slabs, props };
+    };
+
     this.copyBtn.on("pointerdown", () => {
-      const layout = this.editable.map((e) => ({
-        key: e.key,
-        x: Math.round(e.obj.x),
-        y: Math.round(e.obj.y),
-        scale: +e.obj.scaleX.toFixed(2),
-        ...(e.frame !== undefined ? { frame: e.frame } : {}),
-      }));
-      const json = JSON.stringify(layout, null, 1);
+      const json = JSON.stringify(serialise(), null, 1);
       navigator.clipboard?.writeText(json).then(
         () => this.toast("layout copied — paste it to Claude to bake it in"),
         () => console.log(json),
@@ -1384,9 +2135,90 @@ export class CampScene extends Phaser.Scene {
       console.log("[camp layout]", json);
     });
 
+    // 💾 keeps the work through a reload; SHIFT-click throws the save away and
+    // drops back to the layout baked into CAMP_LAYOUTS.
+    this.saveBtn!.on("pointerdown", (_p: Phaser.Input.Pointer, _x: number, _y: number, ev?: { shiftKey?: boolean }) => {
+      const revert = !!(ev?.shiftKey ?? this.input.keyboard?.addKey("SHIFT")?.isDown);
+      if (revert) {
+        localStorage.removeItem(campSaveKey(this.meta.biome));
+        this.toast("saved layout discarded — reload for the baked one");
+        this.saveBtn!.setText("💾 save layout");
+        return;
+      }
+      try {
+        localStorage.setItem(campSaveKey(this.meta.biome), JSON.stringify(serialise()));
+        this.toast(`${this.meta.biome} layout saved — it'll survive a reload (shift-click to discard)`);
+        this.saveBtn!.setText("💾 saved ✓");
+        this.time.delayedCall(1400, () => this.saveBtn?.setText("💾 save layout"));
+      } catch {
+        this.toast("couldn't save — storage unavailable");
+      }
+    });
+
+    // keyboard nudges for the selected piece — the fiddly bits a drag can't do
+    this.input.keyboard?.on("keydown", (ev: KeyboardEvent) => {
+      if (!this.editMode || !selected) return;
+      if (selected.locked) return; // pinned in place until you tap 🔒
+      const o = selected.obj as unknown as Phaser.GameObjects.Image & { depth: number };
+      // NB: use ev.CODE, not ev.key — holding shift turns "[" and "]" into "{"
+      // and "}", so a key-based check silently ignored every shifted shortcut.
+      const k = ev.code || ev.key;
+      const isSlab = selected.key.startsWith("slab:");
+      if (k === "BracketLeft" || k === "BracketRight") {
+        const dir = k === "BracketRight" ? 1 : -1;
+        if (isSlab) {
+          // slabs RESIZE rather than scale, so their ground texture never stretches
+          const ts = o as unknown as Phaser.GameObjects.TileSprite;
+          const step = ev.shiftKey ? 0 : dir * (ev.altKey ? 4 : 20);
+          const vstep = ev.shiftKey ? dir * (ev.altKey ? 4 : 20) : 0;
+          ts.setSize(Math.max(24, ts.width + step), Math.max(24, ts.height + vstep));
+          this.fitSlab(ts); // keep one vertical repeat as it grows
+        } else if (selected.frame !== undefined && ev.shiftKey) {
+          // tall_grass & friends cycle their FRAME instead
+          const total = this.textures.get(o.texture.key).frameTotal - 1;
+          selected.frame = Phaser.Math.Wrap((selected.frame ?? 0) + dir, 0, total);
+          o.setFrame(selected.frame);
+        } else o.setScale(Math.max(0.2, +(o.scaleX + dir * 0.05).toFixed(2)));
+      } else if (k === "KeyF") o.setFlipX(!o.flipX);
+      else if (k === "Comma" || k === "Period") {
+        // keep pressing , and the piece passes BEHIND the ground band (BACK_LAYER)
+        o.setDepth(Phaser.Math.Clamp(o.depth + (k === "Period" ? 1 : -1), -8, 12));
+        this.reparentByDepth(o);
+      }
+      else if (k === "Delete" || k === "Backspace") removeSel();
+      else if (k === "ArrowLeft" || k === "ArrowRight") o.x += (k === "ArrowRight" ? 1 : -1) * (ev.shiftKey ? 10 : 1);
+      else if (k === "ArrowUp" || k === "ArrowDown") o.y += (k === "ArrowDown" ? 1 : -1) * (ev.shiftKey ? 10 : 1);
+      else return;
+      ev.preventDefault();
+      showSel(selected);
+    });
+
+    /** True when a tap landed on the editor's own chrome — those must not grab a prop. */
+    const onEditorUI = (p: Phaser.Input.Pointer) => {
+      if (palette.visible) {
+        // the palette panel is the first child rect; treat its whole box as chrome
+        const panel = palette.list[0] as Phaser.GameObjects.Rectangle;
+        const b = panel.getBounds();
+        if (Phaser.Geom.Rectangle.Contains(b, p.x, p.y)) return true;
+      }
+      for (const btn of [this.editBtn, this.copyBtn, this.addBtn, this.saveBtn, this.previewBtn]) {
+        if (btn?.visible && Phaser.Geom.Rectangle.Contains(btn.getBounds(), p.x, p.y)) return true;
+      }
+      return false;
+    };
+
     // manual drag / select: convert screen px -> propBox-local (inside the scaled container)
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
       if (!this.editMode) return;
+      if (onEditorUI(p)) return; // clicking ＋ / 📋 / ✔ or the palette must not drag the camp
+      // tapped the lock chip -> pin/free the selected piece
+      if (selected && lockBtn.visible && Phaser.Geom.Rectangle.Contains(boundsOf(lockBtn), p.x, p.y)) {
+        selected.locked = !selected.locked;
+        this.toast(selected.locked ? `locked ${selected.key} — it won't move until you free it` : `unlocked ${selected.key}`);
+        showSel(selected);
+        dragging = null;
+        return;
+      }
       // tapped the ✕ badge -> remove the selected prop
       if (selected && badge.visible && Phaser.Geom.Rectangle.Contains(boundsOf(badge), p.x, p.y)) {
         removeSel();
@@ -1394,13 +2226,33 @@ export class CampScene extends Phaser.Scene {
       }
       const lx = (p.x - this.propBox.x) / this.campScale;
       const ly = (p.y - this.propBox.y) / this.campScale;
-      let best: { e: EditableProp; d: number } | null = null;
-      for (const e of this.editable) {
-        const d = Phaser.Math.Distance.Between(lx, ly, e.obj.x, e.obj.y - 20);
-        if (d < 90 && (!best || d < best.d)) best = { e, d };
+      // Hit-test what you actually CLICKED ON. (A radius around each prop's base
+      // can't reach a tree's canopy 140px up, which made tall props unselectable
+      // — and then the keyboard nudges silently did nothing.)
+      const under = this.editable.filter(
+        (e) => e.obj.visible && Phaser.Geom.Rectangle.Contains(boundsOf(e.obj), p.x, p.y),
+      );
+      // frontmost first...
+      under.sort((a, b) => (b.obj as unknown as { depth: number }).depth - (a.obj as unknown as { depth: number }).depth);
+      // ...but CLICK AGAIN on the same spot to cycle deeper, so a big background
+      // slab buried under half the camp is still reachable.
+      const same = Phaser.Math.Distance.Between(p.x, p.y, lastPick.x, lastPick.y) < 6;
+      lastPick = { x: p.x, y: p.y, i: same ? lastPick.i + 1 : 0 };
+      let best: EditableProp | null = under.length ? under[lastPick.i % under.length] : null;
+      // fall back to nearest-base for slivers (grass tufts) the bounds may miss
+      if (!best) {
+        let bd = 90;
+        for (const e of this.editable) {
+          if (!e.obj.visible) continue;
+          const d = Phaser.Math.Distance.Between(lx, ly, e.obj.x, e.obj.y - 20);
+          if (d < bd) {
+            bd = d;
+            best = e;
+          }
+        }
       }
-      dragging = best?.e ?? null;
-      showSel(dragging);
+      showSel(best);
+      dragging = best?.locked ? null : best; // locked: selectable, not draggable
     });
     this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
       if (!this.editMode || !dragging || !p.isDown) return;
@@ -1430,11 +2282,17 @@ export class CampScene extends Phaser.Scene {
 
     this.campScale = Math.min(vh / DH, vw / DW); // fit by height AND width — never sprawl past the edges
     // offset so the (asymmetric) composition is visually centred: hill far-left, portal right edge
-    this.propBox.setPosition(Math.round(vw / 2 - CONTENT_CX * this.campScale), groundY).setScale(this.campScale);
+    const px = Math.round(vw / 2 - CONTENT_CX * this.campScale);
+    this.propBox.setPosition(px, groundY).setScale(this.campScale);
+    this.backBox?.setPosition(px, groundY).setScale(this.campScale); // identical transform
+    if (this.snowZone) this.snowZone.width = vw + 40; // snow spans the new width
     this.biomeLabel.setPosition(14, 10);
     this.menuBtn.setPosition(vw - 14, 8);
     this.editBtn?.setPosition(vw - 14, 44); // dev buttons stack under the menu chip
     this.copyBtn?.setPosition(vw - 14, 74);
+    this.addBtn?.setPosition(vw - 14, 104);
+    this.saveBtn?.setPosition(vw - 14, 134);
+    this.previewBtn?.setPosition(vw - 14, 164);
   }
 
   update(_t: number, delta: number) {
@@ -1445,6 +2303,17 @@ export class CampScene extends Phaser.Scene {
       c.img.x -= c.speed * d;
       const hw = c.img.displayWidth / 2;
       if (c.img.x < -hw) c.img.x = vw + hw; // wrap around
+    }
+    // markers ride their owner, so dragging an NPC in the editor takes its
+    // "?" / plaque / glow along instead of stranding them at the old anchor
+    for (let i = this.followers.length - 1; i >= 0; i--) {
+      const f = this.followers[i];
+      if (!f.owner.active || !f.obj.active) {
+        this.followers.splice(i, 1);
+        continue;
+      }
+      f.obj.x = f.owner.x + f.dx;
+      f.obj.y = f.owner.y + f.dy;
     }
   }
 }

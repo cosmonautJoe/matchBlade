@@ -143,6 +143,40 @@ const SLIME_SCALE = 2.7;
 // boss: the Cindermage (Evil Wizard pack, CC0) — 150x150 frames, feet at y101, faces right natively
 const BOSS_SCALE = 1.25;
 const BOSS_ORIGIN = 0.675;
+
+// How each creature variant is dressed on the lane. animPrefix drives the
+// `${prefix}-{idle,walk,hurt,attack,death}` keys built in buildAnims; scale/
+// origin are measured per sheet (foot fraction). faceLeft flips right-facing
+// art to look up-lane; fakeDeath means "no death frames — topple + fade in
+// killOrc". flat means "not a slime" (skip the squish-in sfx).
+/** `hitAt` is WHERE in the attack animation the blow connects (0..1 of its length). */
+type CreatureRig = { prefix: string; idleTex: string; scale: number; origin: number; faceLeft?: boolean; fakeDeath?: boolean; flat?: boolean; bob?: boolean; lunge?: boolean; hover?: number; barOff?: number; hitAt?: number };
+const CREATURE_RIG: Record<string, CreatureRig> = {
+  green: { prefix: "orc", idleTex: "slime-idle", scale: SLIME_SCALE, origin: SLIME_ORIGIN },
+  blue: { prefix: "orc2", idleTex: "slime2-idle", scale: SLIME_SCALE, origin: SLIME_ORIGIN },
+  dark: { prefix: "orc3", idleTex: "slime3-idle", scale: SLIME_SCALE, origin: SLIME_ORIGIN },
+  // 48×32 charger — faces LEFT natively (toward the hero), so no flip. Real
+  // pawing idle + gallop; the attack LUNGES so the gallop rides real forward
+  // motion into a gore. Death topples (no death frames in this pack). barOff
+  // lifts the HP bar clear of the boar's back (it's low and wide, not tall).
+  boar: { prefix: "boar", idleTex: "boar-idle", scale: 2.7, origin: 0.97, fakeDeath: true, flat: true, lunge: true, barOff: 82, hitAt: 0.7 },
+  // Monster pack — 150px, full anim sets, face RIGHT natively so flip to face
+  // the hero. Real death frames (no fake topple). foot y101/150 → origin 0.673.
+  goblin: { prefix: "goblin", idleTex: "goblin-idle", scale: 2.6, origin: 0.673, faceLeft: true, flat: true, barOff: 104, hitAt: 0.62 },
+  mushroom: { prefix: "mushroom", idleTex: "mushroom-idle", scale: 2.7, origin: 0.673, faceLeft: true, flat: true, barOff: 104, hitAt: 0.6 },
+  // NB: the skeleton is drawn much larger in-frame than its packmates (45x51 of
+  // content vs the goblin's 33x36), so it needs a LOWER scale to stand at a
+  // comparable height — at 2.6 it towered ~2x the hero.
+  skeleton: { prefix: "skeleton", idleTex: "skeleton-idle", scale: 1.9, origin: 0.673, faceLeft: true, flat: true, barOff: 104, hitAt: 0.62 },
+  // the eye FLIES — hover it off the ground with a gentle float (spawnOrc)
+  eye: { prefix: "eye", idleTex: "eye-idle", scale: 2.4, origin: 0.62, faceLeft: true, flat: true, hover: 42, barOff: 104 },
+  // the glacial pass: a frozen skeleton (recoloured) and a hovering ice elemental
+  frostskel: { prefix: "frostskel", idleTex: "frostskel-idle", scale: 1.9, origin: 0.673, faceLeft: true, flat: true, barOff: 104, hitAt: 0.62 },
+  // NB: the generated frames draw a much larger creature than the bought pack
+  // (78x93px of content vs the goblin's 33x36), so its scale is far lower to
+  // sit at a comparable on-screen size. Foot fraction measured at 0.760.
+  icelem: { prefix: "icelem", idleTex: "icelem-idle", scale: 1.05, origin: 0.76, faceLeft: true, flat: true, barOff: 104 },
+};
 const BOSS_ENGAGE_GAP = 220; // the robe and fire breath still need a wider stance
 const BOSS_NAME = "MALGRIM THE CINDERMAGE";
 // ---- Malgrim's Infernal Shell Game (the boss is a MODE BREAK) ---------------
@@ -206,7 +240,7 @@ const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite
 const HP_W = 70;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
-const SCROLL_PER_SEC = 0.02; // pressure gained per second while engaged
+const SCROLL_PER_SEC = 0.017; // pressure gained per second while engaged
 const STRIKE_MS = 4800; // enemy strike cadence
 // spell casts (staff matches): the bolt leaves the staff partway into the cast,
 // flies, and everything downstream (damage number, hurt, death) lands on impact
@@ -262,6 +296,34 @@ const RUN_BIOMES: Record<string, RunBiome> = {
     floorFile: "worlds/forest/floor.png",
     groundKey: "forest-ground",
     crop: [0, 0, 112, 96],
+  },
+  snow: {
+    // vnitti's Glacial Mountains — the same hand as the plains, gone cold
+    parallax: [
+      { key: "snow-sky", file: "worlds/snow/sky.png", scroll: 0.04 },
+      { key: "snow-clouds-bg", file: "worlds/snow/clouds_bg.png", scroll: 0.08 },
+      { key: "snow-mtn", file: "worlds/snow/glacial_mountains.png", scroll: 0.16 },
+      { key: "snow-clouds-3", file: "worlds/snow/clouds_mg_3.png", scroll: 0.24 },
+      { key: "snow-clouds-2", file: "worlds/snow/clouds_mg_2.png", scroll: 0.34 },
+      { key: "snow-clouds-1", file: "worlds/snow/clouds_mg_1.png", scroll: 0.5 },
+    ],
+    floorKey: "snow-floor",
+    floorFile: "worlds/snow/floor.png", // GandalfHardcore Floor Tiles2 (winter band)
+    groundKey: "snow-ground",
+    crop: [16, 384, 64, 96], // the snow-lipped block, same layout as the grass one
+  },
+  dungeon: {
+    // ORIGINAL art, generated by scripts/gen_dungeon.py — a torchlit brick
+    // corridor: far wall, stone colonnade, near-black pillars + chains
+    parallax: [
+      { key: "dungeon-wall", file: "worlds/dungeon/wall.png", scroll: 0.08 },
+      { key: "dungeon-arches", file: "worlds/dungeon/arches.png", scroll: 0.28 },
+      { key: "dungeon-fore", file: "worlds/dungeon/fore.png", scroll: 0.55 },
+    ],
+    floorKey: "dungeon-floor",
+    floorFile: "worlds/dungeon/floor.png",
+    groundKey: "dungeon-ground",
+    crop: [0, 0, 64, 96], // the whole generated band (flagstone lip + dark earth)
   },
 };
 
@@ -332,7 +394,8 @@ class GameScene extends Phaser.Scene {
   private floor!: Phaser.GameObjects.TileSprite;
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
-  private orcAnim = "orc"; // anim-key prefix of the current foe (orc / orc2 / orc3 / boss)
+  private orcAnim = "orc"; // anim-key prefix of the current foe (orc / boar / goblin / boss …)
+  private orcRig: CreatureRig | null = null; // how the current foe is dressed (null for the boss)
   private orcDefense: Defense = "none"; // the current foe's armor school (badge + callouts)
   private defenseTaught = false; // first resisted/weak hit per foe shows a callout
   private defBadge!: Phaser.GameObjects.Text; // 🛡⚔ / 🛡🪄 beside the HP bar
@@ -443,6 +506,30 @@ class GameScene extends Phaser.Scene {
       sheet(`slime${n}-hurt`, `slime${n}_hurt.png`, 64, 64);
       sheet(`slime${n}-death`, `slime${n}_death.png`, 64, 64);
     }
+    // boar (48×32 frames — the sprites are 48 wide, NOT 32: slicing at 32 cut
+    // each boar in half and caused the sliding/clipping). idle(4)/run(6)/hit(4).
+    sheet("boar-idle", "boar_idle.png", 48, 32);
+    sheet("boar-run", "boar_run.png", 48, 32);
+    sheet("boar-hit", "boar_hit.png", 48, 32);
+    // Monster_Creatures_Fantasy pack — full 150×150 sheets, face RIGHT (flipped
+    // to face the hero). Each: idle, walk/run, attack, hurt (Take Hit), death.
+    for (const [k, f] of [
+      ["goblin-idle", "goblin_idle"], ["goblin-walk", "goblin_run"], ["goblin-attack", "goblin_melee"],
+      ["goblin-throw", "goblin_throw"], ["goblin-hurt", "goblin_hurt"], ["goblin-death", "goblin_death"],
+      ["mushroom-idle", "mushroom_idle"], ["mushroom-walk", "mushroom_run"], ["mushroom-attack", "mushroom_melee"],
+      ["mushroom-hurt", "mushroom_hurt"], ["mushroom-death", "mushroom_death"],
+      ["skeleton-idle", "skeleton_idle"], ["skeleton-walk", "skeleton_walk"], ["skeleton-attack", "skeleton_attack"],
+      ["skeleton-hurt", "skeleton_hurt"], ["skeleton-death", "skeleton_death"],
+      ["eye-idle", "eye_fly"], ["eye-walk", "eye_fly"], ["eye-attack", "eye_attack"],
+      ["eye-hurt", "eye_hurt"], ["eye-death", "eye_death"],
+      // the glacial pass (generated: scripts/gen_frost_skeleton.py + gen_ice_elemental.py)
+      ["frostskel-idle", "frostskel_idle"], ["frostskel-walk", "frostskel_walk"], ["frostskel-attack", "frostskel_attack"],
+      ["frostskel-hurt", "frostskel_hurt"], ["frostskel-death", "frostskel_death"],
+      ["icelem-idle", "icelem_idle"], ["icelem-walk", "icelem_walk"], ["icelem-attack", "icelem_attack"],
+      ["icelem-hurt", "icelem_hurt"], ["icelem-death", "icelem_death"],
+    ] as const)
+      sheet(k, `${f}.png`, 150, 150);
+    sheet("goblin-bomb", "goblin_bomb.png", 100, 100); // 19-frame bomb (fuse burns down)
     // boss: the Cindermage (Evil Wizard pack, CC0) — every BOSS_EVERYth foe
     sheet("boss-idle", "boss_idle.png", 150, 150);
     sheet("boss-move", "boss_move.png", 150, 150);
@@ -475,8 +562,8 @@ class GameScene extends Phaser.Scene {
       summon: "summon.wav", fireball1: "fireball1.wav", fireball2: "fireball2.wav", fireball3: "fireball3.wav",
       // ambient forest bed under the run (rain variant on wet runs)
       amb_day: "amb_day.mp3", amb_rain: "amb_rain.mp3",
-      // music (xDeviruchi, CC-BY): the road's song + the boss's war-drums
-      music_journey: "music_journey.mp3", music_boss: "music_boss.mp3",
+      // music (xDeviruchi, CC-BY): the road's song, the boss's war-drums, the deep's hush
+      music_journey: "music_journey.mp3", music_boss: "music_boss.mp3", music_dungeon: "music_dungeon.mp3",
     };
     for (const [k, f] of Object.entries(audio)) if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
     for (let i = 1; i <= TILE_SFX; i++)
@@ -485,7 +572,8 @@ class GameScene extends Phaser.Scene {
 
   create() {
     this.meta = loadMeta();
-    this.run = newRun(this.meta.swordLevel, forgeCap(this.meta.biome)); // forge levels bite all run; at the zone cap the blade sunders
+    // forge + study bite all run; the zone fields its own bestiary
+    this.run = newRun(this.meta.swordLevel, forgeCap(this.meta.biome), this.meta.biome, this.meta.staffLevel);
     this.chestsOpened = 0;
     this.busy = false;
     this.down = null;
@@ -493,7 +581,8 @@ class GameScene extends Phaser.Scene {
     this.orcDying = false;
     this.orcGap = ENGAGE_GAP;
     this.bossBar = null;
-    this.rainy = Math.random() < RAIN_CHANCE;
+    // no weather underground; the pass snows instead of raining
+    this.rainy = this.meta.biome === "snow" || this.meta.biome === "dungeon" ? false : Math.random() < RAIN_CHANCE;
     this.heroLockX = false;
     this.overShown = false;
     this.runCompleteShown = false;
@@ -577,9 +666,10 @@ class GameScene extends Phaser.Scene {
     this.amb = this.sound.add(this.rainy ? "amb_rain" : "amb_day", { loop: true });
     this.amb.play();
     setSoundLevel(this.amb, ambV(ambBase));
-    // the road's song under it all (the boss swaps in his own war-drums)
+    // the road's song under it all (the boss swaps in his own war-drums);
+    // underground, the deep hums its own uneasy tune
     this.music = null;
-    this.playMusic("music_journey", 0.26, 1600);
+    this.playMusic(this.roadMusicKey(), 0.26, 1600);
     const onAudio = () => {
       if (this.amb) {
         this.tweens.killTweensOf(this.amb);
@@ -602,6 +692,11 @@ class GameScene extends Phaser.Scene {
     // pause menu: Esc (desktop) or the ☰ chip (see buildPanels)
     this.input.keyboard?.on("keydown-ESC", () => this.openMenu());
 
+    // Opaque camera: the runner is a letterboxed centre column, so on tall/square
+    // viewports there's empty space above and below it. Phaser stacks visible
+    // scenes, and a lingering camp scene would show its SKY through that gap.
+    // Painting our own background makes the run visually self-contained.
+    this.cameras.main.setBackgroundColor(0x0a0b0f);
     this.cameras.main.fadeIn(300, 5, 6, 10);
     // intro: the hero jogs in from off the left edge to meet the first foe.
     // Slow both approaches together so the hero's run reads at a natural pace.
@@ -618,16 +713,18 @@ class GameScene extends Phaser.Scene {
       onComplete: () => (this.heroLockX = false),
     });
 
-    // strike cadence self-schedules so Scout's Spurs can stretch the interval mid-run;
-    // each strike casts its dread over the board first (strikeTelegraph)
+    // strike cadence self-schedules so Scout's Spurs can stretch the interval and
+    // each foe's own tempo can quicken it (boars are fast); the dread telegraph
+    // leads every blow.
     const strikeLoop = () => {
       this.strike();
-      const wait = this.spursActive ? SPURS_STRIKE_MS : STRIKE_MS;
-      this.time.delayedCall(wait - STRIKE_TELE_MS, () => this.strikeTelegraph());
+      const wait = this.strikeWait();
+      this.time.delayedCall(Math.max(120, wait - STRIKE_TELE_MS), () => this.strikeTelegraph());
       this.time.delayedCall(wait, strikeLoop);
     };
-    this.time.delayedCall(STRIKE_MS - STRIKE_TELE_MS, () => this.strikeTelegraph());
-    this.time.delayedCall(STRIKE_MS, strikeLoop);
+    const first = this.strikeWait();
+    this.time.delayedCall(Math.max(120, first - STRIKE_TELE_MS), () => this.strikeTelegraph());
+    this.time.delayedCall(first, strikeLoop);
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
     // the Peddler's goods: items bought at camp arrive already packed in slots
@@ -686,6 +783,32 @@ class GameScene extends Phaser.Scene {
       mk(`${p}-death`, `slime${n}-death`, 0, 9, 12, 0);
       mk(`${p}-attack`, `slime${n}-walk`, 0, 7, 12, 0);
     }
+    // boar — a clean 48px pack: 4-frame pawing idle, 6-frame gallop, 4-frame
+    // hurt (frames 1 & 3 are white damage-flashes → hurt uses the brown frame).
+    // No attack/death frames: the CHARGE is the gallop (+lunge), death a topple.
+    mk("boar-idle", "boar-idle", 0, 3, 6, -1);
+    mk("boar-walk", "boar-run", 0, 5, 14, -1);
+    mk("boar-hurt", "boar-hit", 0, 0, 1, 0); // brown recoil; the red hero-strike tint is the flash
+    mk("boar-attack", "boar-run", 0, 5, 20, 0); // a galloping charge (+ the lunge surge)
+    mk("boar-death", "boar-idle", 0, 0, 1, 0); // brown standing; the topple+fade sells the death
+    // Monster pack — full state sets (idle/walk/attack/hurt/death) per creature.
+    // [prefix, idleEnd, walkEnd, atkEnd, hurtEnd, deathEnd] (0-indexed last frame)
+    for (const [p, ie, we, ae, he, de] of [
+      ["goblin", 3, 7, 7, 3, 3] as const,
+      ["mushroom", 3, 7, 7, 3, 3] as const,
+      ["skeleton", 3, 3, 7, 3, 3] as const,
+      ["eye", 7, 7, 7, 3, 3] as const,
+      ["frostskel", 3, 3, 7, 3, 3] as const, // recoloured skeleton — same frame layout
+      ["icelem", 3, 7, 7, 3, 3] as const, // generated: idle4 walk8 attack8 hurt4 death4
+    ]) {
+      mk(`${p}-idle`, `${p}-idle`, 0, ie, 6, -1);
+      mk(`${p}-walk`, `${p}-walk`, 0, we, 12, -1);
+      mk(`${p}-attack`, `${p}-attack`, 0, ae, 14, 0);
+      mk(`${p}-hurt`, `${p}-hurt`, 0, he, 14, 0);
+      mk(`${p}-death`, `${p}-death`, 0, de, 10, 0);
+    }
+    mk("goblin-throw", "goblin-throw", 0, 11, 14, 0); // the goblin's bomb hurl (Attack3)
+    mk("goblin-bomb-spin", "goblin-bomb", 0, 18, 22, -1); // the thrown bomb, fuse burning
     // boss anims plug into the same `${orcAnim}-*` key scheme the slimes use
     mk("boss-idle", "boss-idle", 0, 7, 8, -1);
     mk("boss-walk", "boss-move", 0, 7, 10, -1);
@@ -1089,6 +1212,35 @@ class GameScene extends Phaser.Scene {
         }),
       );
     }
+
+    // the glacial pass snows, always — fat lazy flakes wandering down the lane
+    if (this.meta.biome === "snow") {
+      if (!this.textures.exists("snowflake")) {
+        const cv = document.createElement("canvas");
+        cv.width = cv.height = 5;
+        const g = cv.getContext("2d")!;
+        const gr = g.createRadialGradient(2.5, 2.5, 0.3, 2.5, 2.5, 2.5);
+        gr.addColorStop(0, "rgba(255,255,255,0.95)");
+        gr.addColorStop(1, "rgba(230,240,255,0)");
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 5, 5);
+        this.textures.addCanvas("snowflake", cv);
+      }
+      this.inBox(
+        this.add.particles(0, 0, "snowflake", {
+          x: { min: GRID_X, max: GRID_X + UI_W },
+          y: LANE_Y - 4,
+          speedY: { min: 26, max: 55 },
+          speedX: { min: -18, max: 10 },
+          accelerationX: { min: -8, max: 8 }, // a wandering drift, not a fall
+          lifespan: 4200,
+          quantity: 1,
+          frequency: 120,
+          alpha: { start: 0.9, end: 0.15 },
+          scale: { min: 0.6, max: 1.3 },
+        }),
+      );
+    }
   }
 
   // --- board ---
@@ -1178,7 +1330,7 @@ class GameScene extends Phaser.Scene {
     // the dead stay where they fell; the hero surges up past them instead.
     if (this.orc && this.phase === "fight" && !this.orcDying) this.orc.x = heroX + this.orcGap;
     if (this.orc) {
-      const barY = GROUND_Y - 56; // above the slime's head
+      const barY = GROUND_Y - (this.orcRig?.barOff ?? 56); // clear each creature's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
       this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
       this.defBadge.setPosition(this.orc.x + HP_W / 2 + 6, barY);
@@ -1257,7 +1409,8 @@ class GameScene extends Phaser.Scene {
 
     // Cinder Flask: the foe burns — one tick per second while it lives
     // (held during the boss arena: wards fall to taps there, not to fire)
-    if (this.burnLeft > 0 && !this.arenaActive) {
+    // (also held for the boss: fire can't touch him outside his arena either)
+    if (this.burnLeft > 0 && !this.arenaActive && this.run.enemy?.kind !== "boss") {
       if (this.run.enemy && this.orc && !this.orcDying) {
         this.burnLeft = Math.max(0, this.burnLeft - dts);
         this.burnAcc += dts;
@@ -1386,16 +1539,24 @@ class GameScene extends Phaser.Scene {
 
     // the variant (and its defense) is rolled in run.ts makeEnemy — dress to match
     const variant = this.run.enemy.variant;
-    this.orcAnim = variant === "green" ? "orc" : variant === "blue" ? "orc2" : "orc3";
+    const rig = CREATURE_RIG[variant] ?? CREATURE_RIG.green;
+    this.orcAnim = rig.prefix;
+    this.orcRig = rig;
     this.orcDefense = this.run.enemy.defense;
     this.defenseTaught = false;
-    const idleTex = this.orcAnim === "orc" ? "slime-idle" : this.orcAnim === "orc2" ? "slime2-idle" : "slime3-idle";
 
+    // flyers hover off the ground (update() only drives x, so y stays put)
+    const gy = GROUND_Y - (rig.hover ?? 0);
     const orc = this.inBox(
-      this.add.sprite(ENTER_X, GROUND_Y, idleTex).setOrigin(0.5, SLIME_ORIGIN).setScale(SLIME_SCALE).play(`${this.orcAnim}-walk`),
+      this.add.sprite(ENTER_X, gy, rig.idleTex).setOrigin(0.5, rig.origin).setScale(rig.scale).setFlipX(!!rig.faceLeft).play(`${this.orcAnim}-walk`),
     );
     this.orc = orc;
-    this.sfx(this.pick(["squish1", "squish2"]), 0.32, 0.95 + Math.random() * 0.1); // one squelch as it bounces in
+    if (rig.hover) this.tweens.add({ targets: orc, y: gy - 9, duration: 1100, yoyo: true, repeat: -1, ease: "Sine.easeInOut" }); // a lazy float
+    if (rig.bob) this.tweens.add({ targets: orc, scaleY: rig.scale * 1.035, duration: 900, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    // slimes squelch in; the flyer beats its wings; everything else thuds a footfall
+    if (rig.hover) this.sfx("summon", 0.25, 1.5);
+    else if (rig.flat) this.sfx(this.pick(["step2", "step4"]), 0.3, 0.85);
+    else this.sfx(this.pick(["squish1", "squish2"]), 0.32, 0.95 + Math.random() * 0.1);
     this.enemyHpBg.setVisible(true);
     this.enemyHpBar.setVisible(true);
     this.defBadge.setText(this.orcDefense === "hide" ? "🛡⚔" : this.orcDefense === "ward" ? "🛡🪄" : "").setVisible(this.orcDefense !== "none");
@@ -1441,6 +1602,7 @@ class GameScene extends Phaser.Scene {
     this.orcDying = false;
     this.phase = "advance";
     this.orcAnim = "boss";
+    this.orcRig = null; // the boss has real death frames — clear any creature rig (no fake topple)
     this.orcDefense = this.run.enemy?.defense ?? "ward"; // his wards drink magic — bring a blade
     this.defenseTaught = false;
     this.defBadge.setVisible(false); // the boss bar carries his ward mark instead
@@ -1692,6 +1854,8 @@ class GameScene extends Phaser.Scene {
     } else {
       if (hasMelee) {
         this.playCombo(combo, spell ? undefined : this.heroBaseAnim()); // the cast takes over if one follows
+        this.orc.setTint(0xff6a6a); // a red flash on the struck foe
+        this.time.delayedCall(150, () => this.orc?.clearTint());
         this.orc.play(`${this.orcAnim}-hurt`).once("animationcomplete", () => {
           if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-${this.phase === "fight" ? "idle" : "walk"}`);
         });
@@ -1790,8 +1954,13 @@ class GameScene extends Phaser.Scene {
       const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xffd7a0, 0.28).setDepth(45));
       this.tweens.add({ targets: flash, fillAlpha: 0, duration: 320, onComplete: () => flash.destroy() });
     }
-    this.floatDamage(spell.dmg, t >= 4, spell.mod);
-    this.teachDefense(spell.mod);
+    // nothing landed (Malgrim outside his arena drinks it) — say so, don't float "-0"
+    if (spell.dmg <= 0) {
+      this.floatChip((this.orc?.x ?? SAFE_X) - 4, GROUND_Y - 96, "WARDED!", { size: 22, tint: [0xe8dcff, 0xc9a0ff, 0x9a6ae0, 0x5a3a9a], stroke: "#140a26" });
+    } else {
+      this.floatDamage(spell.dmg, t >= 4, spell.mod);
+      this.teachDefense(spell.mod);
+    }
     if (spell.burn && this.run.enemy && !killed) {
       this.burnLeft = Math.max(this.burnLeft, SPELL_BURN_SECS); // Pyroclasm sticks
       this.burnAcc = 0;
@@ -2023,6 +2192,11 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  /** The road's own tune: the journey theme above ground, the deep's hush below. */
+  private roadMusicKey(): string {
+    return this.meta.biome === "dungeon" ? "music_dungeon" : "music_journey";
+  }
+
   /** Switch the run's music bed to `key`: old fades out, new enters at level. */
   private playMusic(key: string, base: number, fadeMs = 900) {
     if (!this.cache.audio.exists(key)) return;
@@ -2147,6 +2321,12 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  /** Milliseconds until the next strike: base cadence × the foe's own tempo (Spurs override). */
+  private strikeWait(): number {
+    const base = this.spursActive ? SPURS_STRIKE_MS : STRIKE_MS;
+    return Math.round(base * (this.run.enemy?.strikeMult ?? 1));
+  }
+
   private killOrc(afterMs = 760) {
     const wasBoss = this.orcAnim === "boss";
     if (!wasBoss) this.sfx("death", 0.16); // slime death — kept well in the background
@@ -2175,9 +2355,22 @@ class GameScene extends Phaser.Scene {
       });
       this.tweens.killTweensOf(dying);
       dying.play(`${this.orcAnim}-death`);
-      dying.once("animationcomplete", () => {
-        this.tweens.add({ targets: dying, alpha: 0, duration: wasBoss ? 700 : 260, onComplete: () => dying.destroy() });
-      });
+      if (this.orcRig?.fakeDeath) {
+        // no death frames: it keels over — topple, drop, and fade where it fell
+        this.tweens.add({
+          targets: dying,
+          angle: dying.flipX ? 82 : -82,
+          y: dying.y + 10,
+          alpha: 0,
+          duration: 440,
+          ease: "Quad.easeIn",
+          onComplete: () => dying.destroy(),
+        });
+      } else {
+        dying.once("animationcomplete", () => {
+          this.tweens.add({ targets: dying, alpha: 0, duration: wasBoss ? 700 : 260, onComplete: () => dying.destroy() });
+        });
+      }
       // the kill bounty pops over the corpse as the final swing lands
       this.floatScore(dying.x + 14, GROUND_Y - 104, wasBoss ? 400 : 100, {
         size: wasBoss ? 44 : 34,
@@ -2188,7 +2381,7 @@ class GameScene extends Phaser.Scene {
     if (wasBoss) {
       this.bossSpoils(dying?.x ?? SAFE_X + BOSS_ENGAGE_GAP);
       // his drums die with him: the road's song returns — unless the road is done
-      if (this.run.killed < RUN_COMPLETE_AT) this.playMusic("music_journey", 0.26, 1600);
+      if (this.run.killed < RUN_COMPLETE_AT) this.playMusic(this.roadMusicKey(), 0.26, 1600);
       else this.fadeOutMusic(1400);
     }
 
@@ -3065,7 +3258,7 @@ class GameScene extends Phaser.Scene {
         this.tweens.add({ targets: flash, fillAlpha: 0, duration: 420, onComplete: () => flash.destroy() });
         this.time.delayedCall(260, () => {
           if (gen !== this.arenaGen) return;
-          if (this.run.enemy) dealDamage(this.run, this.run.enemy.hp); // the killing blow: score, surge, the lot
+          if (this.run.enemy) dealDamage(this.run, this.run.enemy.hp, true); // force: the arena's killing blow — score, surge, the lot
           this.killOrc(700); // death + bossSpoils + the road onward
           this.surgeAfterKill(800);
           this.arenaActive = false;
@@ -3125,19 +3318,101 @@ class GameScene extends Phaser.Scene {
     this.showBoard();
   }
 
-  private strike(force = false) {
+  /**
+   * The goblin hurls a bomb: it leaves the hand partway into the throw, arcs to
+   * the hero (fuse burning), and bursts on arrival. Returns ms until it lands,
+   * so the strike's hurt FX can wait for the boom.
+   */
+  private throwGoblinBomb(): number {
+    const LEAD = 430; // bomb leaves the hand this far into the throw anim
+    const FLIGHT = 430; // arc time to the hero
+    this.time.delayedCall(LEAD, () => {
+      if (!this.orc || this.orcDying || this.run.over) return;
+      const sx = this.orc.x - 24;
+      const sy = GROUND_Y - 62;
+      const tx = this.hero.x + 12;
+      const ty = GROUND_Y - 28;
+      const bomb = this.inBox(this.add.sprite(sx, sy, "goblin-bomb", 0).setScale(0.62).setDepth(46).play("goblin-bomb-spin"));
+      this.sfx("fireball1", 0.3, 1.25);
+      this.arcTo(bomb, sx, sy, tx, ty, FLIGHT, 64, () => {
+        bomb.destroy();
+        const burst = this.inBox(
+          this.add
+            .particles(tx, ty, "spark", { speed: { min: 90, max: 260 }, lifespan: { min: 200, max: 480 }, scale: { start: 1.3, end: 0 }, blendMode: "ADD", tint: 0xffb050, emitting: false })
+            .setDepth(46),
+        );
+        burst.explode(20);
+        this.time.delayedCall(600, () => burst.destroy());
+        this.sfx(this.pick(["hit2", "hit3"]), 0.5);
+      });
+    });
+    return LEAD + FLIGHT;
+  }
+
+  /**
+   * An enemy attack. The blow is applied ON CONTACT — partway into the attack
+   * animation (or when a thrown bomb lands) — not the instant the swing starts.
+   * Pressure drives the hero's x every frame, so applying it up front shoved the
+   * player back before the sword had even come down.
+   * `pierce` ignores banked guard for this one hit (the tutorial's demo).
+   */
+  private strike(force = false, pierce = false) {
     if (!force && this.tutorial?.active) return; // the tutorial scripts its own strikes
     if (this.run.over || this.phase !== "fight" || this.orcDying || !this.orc || !this.run.enemy) return;
-    const blockBefore = this.run.block;
-    const net = enemyStrike(this.run);
     const isBoss = this.orcAnim === "boss";
-    const blocked = this.run.block < blockBefore;
+
+    // pick the attack: the goblin alternates a melee swing (steps in) and a
+    // thrown bomb (arcs across, landing later than a swing would)
+    let attackKey = `${this.orcAnim}-attack`;
+    let doLunge = !!this.orcRig?.lunge;
+    let bomb = false;
+    if (this.orcAnim === "goblin" && Math.random() < 0.5) {
+      attackKey = "goblin-throw";
+      bomb = true;
+      doLunge = false;
+    } else if (this.orcAnim === "goblin") doLunge = true;
+
+    // the wind-up is audible immediately; the hit is not
     if (isBoss) this.sfx(this.pick(["fireball1", "fireball2", "fireball3"]), 0.55); // fire roars across the gap
-    else this.sfx("slimeatk", 0.3); // slime lunges
-    if (blocked) // armour soaked some/all of it -> flare + clang on contact
-      this.time.delayedCall(90, () => {
+    else this.sfx("slimeatk", 0.3);
+
+    this.orc.play(attackKey).once("animationcomplete", () => {
+      if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
+    });
+
+    // when the blow actually connects
+    const animMs = this.anims.get(attackKey)?.duration ?? 300;
+    const contactMs = bomb ? this.throwGoblinBomb() : Math.round(animMs * (this.orcRig?.hitAt ?? 0.55));
+
+    // a charging foe SURGES so its rush PEAKS on contact — driven through orcGap
+    // so update()'s per-frame x-control doesn't fight it
+    if (doLunge && !this.orcDying) {
+      const rest = this.orcGap;
+      this.tweens.add({
+        targets: this,
+        orcGap: Math.max(48, rest - 54),
+        duration: 130,
+        delay: Math.max(0, contactMs - 130),
+        yoyo: true,
+        ease: "Quad.easeIn",
+        onComplete: () => (this.orcGap = rest),
+      });
+    }
+
+    // ---- THE BLOW LANDS ----
+    this.time.delayedCall(contactMs, () => {
+      // fell mid-swing? then it never connects
+      if (this.run.over || this.orcDying || !this.run.enemy) return;
+      const saved = pierce ? this.run.block : null;
+      if (pierce) this.run.block = 0;
+      const blockBefore = this.run.block;
+      const net = enemyStrike(this.run);
+      const blocked = this.run.block < blockBefore;
+      const used = blockBefore - this.run.block;
+      if (saved !== null) this.run.block = saved; // the demo only pretends to be unguarded
+
+      if (blocked) {
         this.sfx(this.pick(["block1", "block2", "block3"]), 0.45);
-        const used = blockBefore - this.run.block;
         if (used > 1)
           this.floatChip(this.hero.x + 28, GROUND_Y - 100, `-${used}🛡`, {
             size: 20,
@@ -3147,22 +3422,18 @@ class GameScene extends Phaser.Scene {
           }); // deep foes chew through the guard — the cost is shown, not hidden
         this.showBlockImpact(isBoss, net <= 0);
         this.boardGuardRipple(); // the guard's clang rings around the puzzle frame too
-      });
-    this.orc.play(`${this.orcAnim}-attack`).once("animationcomplete", () => {
-      if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
-    });
-    if (net > 0) {
-      this.cameras.main.shake(isBoss ? 260 : 150, isBoss ? 0.009 : 0.006);
-      this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
-      this.time.delayedCall(isBoss ? 200 : 130, () => this.hero.clearTint());
-      this.boardHitReact(isBoss); // the blow lands where the player is LOOKING: on the board
-    } else if (blocked) {
-      // PERFECT block: run.ts already banked the riposte shove (BLOCK_PUSHBACK)
-      // — the hero steps up via update(); sell the foe being knocked away too
-      this.time.delayedCall(120, () => {
+      }
+
+      if (net > 0) {
+        this.cameras.main.shake(isBoss ? 260 : 150, isBoss ? 0.009 : 0.006);
+        this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
+        this.time.delayedCall(isBoss ? 200 : 130, () => this.hero.clearTint());
+        this.boardHitReact(isBoss); // the blow lands where the player is LOOKING: on the board
+      } else if (blocked) {
+        // PERFECT block: run.ts banked the riposte shove (BLOCK_PUSHBACK) — the
+        // hero steps up via update(); sell the foe being knocked away too
         if (!this.orc || this.orcDying) return;
         const rest = this.orcGap; // strikes are seconds apart — no overlap to guard
-
         this.tweens.add({
           targets: this,
           orcGap: rest + 34,
@@ -3177,8 +3448,9 @@ class GameScene extends Phaser.Scene {
           tint: [0xeef6ff, 0xbfe0ff, 0x6ea8e0, 0x3a6a9a],
           stroke: "#050d16",
         });
-      });
-    }
+      }
+      this.refreshHud();
+    });
   }
 
   /** A clean guard read: luminous crest, contact sparks, and a tiny foe recoil. */
@@ -4109,12 +4381,7 @@ class GameScene extends Phaser.Scene {
   /** Scripted strike for the tutorial beats; pierce ignores banked block (the knockback demo). */
   public demoStrike(pierce: boolean): boolean {
     if (this.run.over || this.phase !== "fight" || !this.orc || this.orcDying || !this.run.enemy) return false;
-    if (pierce) {
-      const saved = this.run.block;
-      this.run.block = 0;
-      this.strike(true);
-      this.run.block = saved;
-    } else this.strike(true);
+    this.strike(true, pierce); // pierce is honoured at CONTACT, not up front
     return true;
   }
   public markTutorialSeen() {
@@ -4478,11 +4745,35 @@ class GameScene extends Phaser.Scene {
    * A new biome = one more branch here.
    */
   private buildPanelTheme(): {
-    kind: "plains" | "forest";
+    kind: "plains" | "forest" | "snow" | "dungeon";
     body: number;
     edge: number;
     decor: { key: string; edge: "top" | "bottom" | "side"; h: number; alpha: number }[];
   } {
+    if (this.meta.biome === "dungeon") {
+      this.bakeDungeonPanelArt();
+      return {
+        kind: "dungeon",
+        body: 0x141218,
+        edge: 0x453e52,
+        decor: [
+          { key: "ui-dungeon-chains", edge: "top", h: 46, alpha: 0.95 },
+          { key: "ui-dungeon-rubble", edge: "bottom", h: 36, alpha: 0.95 },
+        ],
+      };
+    }
+    if (this.meta.biome === "snow") {
+      this.bakeSnowPanelArt();
+      return {
+        kind: "snow",
+        body: 0x10151d,
+        edge: 0x3a4a63,
+        decor: [
+          { key: "ui-snow-icicles", edge: "top", h: 44, alpha: 0.95 },
+          { key: "ui-snow-drift", edge: "bottom", h: 48, alpha: 0.95 },
+        ],
+      };
+    }
     if (this.meta.biome === "forest") {
       this.bakeForestPanelArt();
       return {
@@ -4788,17 +5079,230 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Snow rails: an icicle-fanged frost line (top) and deep drifts with buried pines (bottom). */
+  private bakeSnowPanelArt() {
+    if (!this.textures.exists("ui-snow-icicles")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 44;
+      const g = cv.getContext("2d")!;
+      // packed frost line the icicles grow from
+      g.fillStyle = "rgba(214,230,245,0.85)";
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(256, 0);
+      g.lineTo(256, 5);
+      for (let x = 256; x >= 0; x -= 10) g.lineTo(x, 4 + Math.random() * 4);
+      g.closePath();
+      g.fill();
+      // icicles: tapering translucent fangs, a bright edge on each
+      for (let x = 5; x < 256; x += 7 + Math.random() * 10) {
+        const len = 8 + Math.random() * (Math.random() < 0.25 ? 34 : 18);
+        const w = 2 + Math.random() * 3;
+        const grad = g.createLinearGradient(0, 4, 0, 4 + len);
+        grad.addColorStop(0, "rgba(200,224,244,0.9)");
+        grad.addColorStop(1, "rgba(170,210,240,0.25)");
+        g.fillStyle = grad;
+        g.beginPath();
+        g.moveTo(x - w, 4);
+        g.lineTo(x + w, 4);
+        g.lineTo(x + (Math.random() * 2 - 1), 4 + len);
+        g.closePath();
+        g.fill();
+        g.strokeStyle = "rgba(240,250,255,0.55)";
+        g.lineWidth = 0.8;
+        g.beginPath();
+        g.moveTo(x - w + 0.5, 4);
+        g.lineTo(x, 4 + len * 0.9);
+        g.stroke();
+      }
+      this.textures.addCanvas("ui-snow-icicles", cv);
+    }
+    if (!this.textures.exists("ui-snow-drift")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 48;
+      const g = cv.getContext("2d")!;
+      // back drift: dusk-blue shadow mounds
+      g.fillStyle = "rgba(150,175,205,0.5)";
+      for (const [mx, mr, my] of [[30, 70, 60], [130, 90, 62], [225, 70, 58]] as const) {
+        g.beginPath();
+        g.ellipse(mx, my, mr, 30, 0, Math.PI, 0);
+        g.fill();
+      }
+      // little snowed-under pines poking out of the back drift
+      for (const px of [46, 152, 232]) {
+        const x = px + Math.random() * 10;
+        const h = 18 + Math.random() * 10;
+        g.fillStyle = "#1e3a2a";
+        for (let t = 0; t < 3; t++) {
+          const w = 9 - t * 2.4;
+          const y = 48 - 14 - (t * h) / 3.2;
+          g.beginPath();
+          g.moveTo(x - w, y);
+          g.lineTo(x + w, y);
+          g.lineTo(x, y - h / 2.4);
+          g.closePath();
+          g.fill();
+        }
+        g.fillStyle = "rgba(235,244,252,0.9)"; // snow caught on the boughs
+        g.beginPath();
+        g.ellipse(x, 48 - 14 - h * 0.62, 5, 1.8, 0, 0, Math.PI * 2);
+        g.fill();
+        g.beginPath();
+        g.ellipse(x + 2, 48 - 14 - h * 0.3, 6.5, 2, 0, 0, Math.PI * 2);
+        g.fill();
+      }
+      // front drift: bright wind-carved snow
+      g.fillStyle = "rgba(228,240,250,0.95)";
+      g.beginPath();
+      g.moveTo(0, 48);
+      let y = 34;
+      for (let x = 0; x <= 256; x += 16) {
+        y = 30 + Math.sin(x * 0.06) * 5 + Math.random() * 3;
+        g.quadraticCurveTo(x - 8, y - 4, x, y);
+      }
+      g.lineTo(256, 48);
+      g.closePath();
+      g.fill();
+      // sparkles in the crust
+      g.fillStyle = "rgba(255,255,255,0.95)";
+      for (let i = 0; i < 22; i++) {
+        const sx = 4 + Math.random() * 248;
+        const sy = 36 + Math.random() * 10;
+        g.fillRect(sx, sy, 1.2, 1.2);
+      }
+      this.textures.addCanvas("ui-snow-drift", cv);
+    }
+  }
+
+  /** Dungeon rails: chain-and-cobweb fringe (top), ember-lit rubble with old bones (bottom). */
+  private bakeDungeonPanelArt() {
+    if (!this.textures.exists("ui-dungeon-chains")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 46;
+      const g = cv.getContext("2d")!;
+      // a rough stone lintel the chains bolt into
+      g.fillStyle = "rgba(58,60,72,0.9)";
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(256, 0);
+      g.lineTo(256, 6);
+      for (let x = 256; x >= 0; x -= 14) g.lineTo(x, 5 + Math.random() * 3);
+      g.closePath();
+      g.fill();
+      // cobwebs sagging in the corners of each tile-repeat
+      g.strokeStyle = "rgba(200,205,215,0.28)";
+      g.lineWidth = 1;
+      for (const wx of [10, 132]) {
+        for (let k = 1; k <= 4; k++) {
+          g.beginPath();
+          g.moveTo(wx - 10, 4);
+          g.quadraticCurveTo(wx + k * 7 - 12, 6 + k * 5, wx + k * 9, 4);
+          g.stroke();
+        }
+        for (let k = 0; k < 3; k++) {
+          g.beginPath();
+          g.moveTo(wx + k * 10 - 4, 4);
+          g.lineTo(wx + k * 6, 20 - k * 3);
+          g.stroke();
+        }
+      }
+      // hanging chains of varied fall, a hook on each
+      for (const [chx, ln] of [[34, 30], [78, 18], [120, 36], [176, 24], [222, 32]] as const) {
+        g.strokeStyle = "#4a4c5c";
+        g.lineWidth = 1.4;
+        for (let y = 6; y < 6 + ln; y += 6) {
+          g.strokeRect(chx - 1.6, y, 3.2, 5); // links
+        }
+        g.fillStyle = "#585a6a";
+        g.beginPath();
+        g.arc(chx, 6 + ln + 3, 3, Math.PI * 0.8, Math.PI * 2.4); // the hook
+        g.stroke();
+      }
+      this.textures.addCanvas("ui-dungeon-chains", cv);
+    }
+    if (!this.textures.exists("ui-dungeon-rubble")) {
+      const cv = document.createElement("canvas");
+      cv.width = 256;
+      cv.height = 36;
+      const g = cv.getContext("2d")!;
+      // the rubble line
+      g.fillStyle = "rgba(48,50,60,0.9)";
+      g.beginPath();
+      g.moveTo(0, 36);
+      for (let x = 0; x <= 256; x += 10) g.lineTo(x, 26 + Math.random() * 6);
+      g.lineTo(256, 36);
+      g.fill();
+      // tumbled stone blocks
+      g.strokeStyle = "rgba(20,20,26,0.8)";
+      g.lineWidth = 1;
+      for (let i = 0; i < 16; i++) {
+        const x = 4 + Math.random() * 244;
+        const y = 24 + Math.random() * 8;
+        const w = 6 + Math.random() * 9;
+        const h = 4 + Math.random() * 5;
+        g.fillStyle = `rgba(${62 + (Math.random() * 14) | 0},${64 + (Math.random() * 14) | 0},${76 + (Math.random() * 14) | 0},0.95)`;
+        g.save();
+        g.translate(x, y);
+        g.rotate((Math.random() * 2 - 1) * 0.3);
+        g.fillRect(-w / 2, -h / 2, w, h);
+        g.strokeRect(-w / 2, -h / 2, w, h);
+        g.restore();
+      }
+      // old bones in the shadow of the stones
+      g.strokeStyle = "#b8b2a4";
+      g.lineWidth = 1.6;
+      for (const [bx, by, ang] of [[52, 30, 0.4], [190, 31, -0.25]] as const) {
+        g.save();
+        g.translate(bx, by);
+        g.rotate(ang);
+        g.beginPath();
+        g.moveTo(-5, 0);
+        g.lineTo(5, 0);
+        g.stroke();
+        for (const ex of [-5, 5]) for (const ey of [-1.6, 1.6]) { g.beginPath(); g.arc(ex, ey, 1.3, 0, Math.PI * 2); g.fillStyle = "#b8b2a4"; g.fill(); }
+        g.restore();
+      }
+      // a skull half-buried, watching
+      const sx = 120 + Math.random() * 16;
+      g.fillStyle = "#c4beb0";
+      g.beginPath();
+      g.arc(sx, 30, 4.4, Math.PI, 0);
+      g.fill();
+      g.fillRect(sx - 4.4, 30, 8.8, 3);
+      g.fillStyle = "#141218";
+      g.fillRect(sx - 2.6, 28.4, 1.8, 2);
+      g.fillRect(sx + 0.8, 28.4, 1.8, 2);
+      // embers breathing in the cracks
+      for (let i = 0; i < 9; i++) {
+        const x = 8 + Math.random() * 240;
+        const y = 30 + Math.random() * 4;
+        g.fillStyle = `rgba(255,${120 + (Math.random() * 60) | 0},40,${0.35 + Math.random() * 0.4})`;
+        g.fillRect(x, y, 1.4, 1.4);
+      }
+      this.textures.addCanvas("ui-dungeon-rubble", cv);
+    }
+  }
+
   // ---- panel critters: small living touches wandering the rails --------------
 
-  /** Living touches over the rails, by zone: wings and pollen, or leaf-fall and glow. */
-  private buildPanelLife(kind: "plains" | "forest") {
+  /** Living touches over the rails, by zone: wings, leaf-fall, snowfall, or dust and embers. */
+  private buildPanelLife(kind: "plains" | "forest" | "snow" | "dungeon") {
     for (const side of ["left", "right"] as const) {
       if (kind === "plains") {
         for (const tint of [0xffd070, 0xd8a8e8]) this.spawnButterfly(side, tint);
         for (let i = 0; i < 4; i++) this.spawnMote(side, i * 1100);
-      } else {
+      } else if (kind === "forest") {
         for (let i = 0; i < 3; i++) this.spawnFallingLeaf(side, i * 2300);
         for (let i = 0; i < 3; i++) this.spawnFirefly(side);
+      } else if (kind === "snow") {
+        for (let i = 0; i < 5; i++) this.spawnSnowfall(side, i * 1300);
+        for (let i = 0; i < 3; i++) this.spawnTwinkle(side);
+      } else {
+        for (let i = 0; i < 4; i++) this.spawnDust(side, i * 1500);
+        for (let i = 0; i < 3; i++) this.spawnEmber(side, i * 1900);
       }
     }
   }
@@ -4887,6 +5391,94 @@ class GameScene extends Phaser.Scene {
       });
     };
     this.time.delayedCall(delay, fall);
+  }
+
+  /** A rail snowflake: white mote swaying down the panel, melting into the drift. */
+  private spawnSnowfall(side: "left" | "right", delay: number) {
+    const flake = this.add.image(0, 0, "spark").setTint(0xf0f8ff).setAlpha(0);
+    const fall = () => {
+      if (!flake.active) return;
+      const r = side === "left" ? this.panelRectL : this.panelRectR;
+      const x0 = r.x + 8 + Math.random() * Math.max(1, r.width - 16);
+      flake.setPosition(x0, r.y + 46).setAlpha(0).setScale(0.25 + Math.random() * 0.3);
+      const ms = 6000 + Math.random() * 4000;
+      const sway = 8 + Math.random() * 10;
+      this.tweens.add({ targets: flake, alpha: 0.8, duration: 700 });
+      this.tweens.addCounter({
+        from: 0,
+        to: 1,
+        duration: ms,
+        onUpdate: (tw) => {
+          const u = tw.getValue() ?? 0;
+          flake.setPosition(x0 + Math.sin(u * Math.PI * 4) * sway, r.y + 46 + u * (r.height - 96));
+          if (u > 0.88) flake.setAlpha(0.8 * (1 - (u - 0.88) / 0.12)); // melts into the drift
+        },
+        onComplete: () => this.time.delayedCall(300 + Math.random() * 1500, fall),
+      });
+    };
+    this.time.delayedCall(delay, fall);
+  }
+
+  /** Dungeon dust: a faint grey speck drifting slantwise through the torchlight. */
+  private spawnDust(side: "left" | "right", delay: number) {
+    const m = this.add.image(0, 0, "spark").setTint(0x8a8698).setAlpha(0).setScale(0.2);
+    const drift = () => {
+      if (!m.active) return;
+      const p = this.panelPoint(side);
+      m.setPosition(p.x, p.y).setAlpha(0);
+      const ms = 5000 + Math.random() * 4000;
+      this.tweens.add({ targets: m, alpha: { from: 0, to: 0.4 }, duration: ms * 0.4, yoyo: true, hold: ms * 0.2 });
+      this.tweens.add({
+        targets: m,
+        x: m.x + (Math.random() * 40 - 20),
+        y: m.y + 24 + Math.random() * 30, // dust settles, slowly
+        duration: ms,
+        ease: "Sine.easeInOut",
+        onComplete: () => this.time.delayedCall(400 + Math.random() * 1600, drift),
+      });
+    };
+    this.time.delayedCall(delay, drift);
+  }
+
+  /** A stray ember: rises out of the rubble cracks, gutters, and dies. */
+  private spawnEmber(side: "left" | "right", delay: number) {
+    const e = this.add.image(0, 0, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff9040).setAlpha(0).setScale(0.28);
+    const rise = () => {
+      if (!e.active) return;
+      const r = side === "left" ? this.panelRectL : this.panelRectR;
+      e.setPosition(r.x + 10 + Math.random() * Math.max(1, r.width - 20), r.bottom - 30).setAlpha(0);
+      const ms = 2600 + Math.random() * 2200;
+      this.tweens.add({ targets: e, alpha: { from: 0, to: 0.85 }, duration: ms * 0.3, yoyo: true, hold: ms * 0.15 });
+      this.tweens.add({
+        targets: e,
+        y: e.y - 40 - Math.random() * 50,
+        x: e.x + (Math.random() * 24 - 12),
+        duration: ms,
+        ease: "Sine.easeOut",
+        onComplete: () => this.time.delayedCall(600 + Math.random() * 2600, rise),
+      });
+    };
+    this.time.delayedCall(delay, rise);
+  }
+
+  /** A frost twinkle: a cold star that flares somewhere new each breath. */
+  private spawnTwinkle(side: "left" | "right") {
+    const t = this.add.image(0, 0, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0xcfe8ff).setAlpha(0).setScale(0.3);
+    const glint = () => {
+      if (!t.active) return;
+      const p = this.panelPoint(side);
+      t.setPosition(p.x, p.y).setAlpha(0).setScale(0.25);
+      this.tweens.add({
+        targets: t,
+        alpha: { from: 0, to: 0.9 },
+        scale: { from: 0.25, to: 0.55 },
+        duration: 500 + Math.random() * 400,
+        yoyo: true,
+        ease: "Sine.easeInOut",
+        onComplete: () => this.time.delayedCall(600 + Math.random() * 2600, glint),
+      });
+    };
+    this.time.delayedCall(Math.random() * 2000, glint);
   }
 
   /** A firefly: additive glow, breathing pulse, slow aimless drift. */
@@ -5212,6 +5804,20 @@ const game = new Phaser.Game({
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
   scene: [TitleScene, CampScene, GameScene, MenuScene], // boot: title -> camp; DEPART starts the run, death returns; menu overlays camp/run
 });
+
+// pixelArt: true is right for the sprites but forces nearest-neighbour onto
+// TEXT glyph textures too — any scaled text (centre column, floating chips,
+// the title) renders jagged. Patch the factory so every Text object created
+// anywhere gets linear filtering; the sprites keep their crunch.
+const textFactory = Phaser.GameObjects.GameObjectFactory.prototype.text;
+Phaser.GameObjects.GameObjectFactory.prototype.text = function (
+  this: Phaser.GameObjects.GameObjectFactory,
+  ...args: Parameters<typeof textFactory>
+) {
+  const t = textFactory.apply(this, args);
+  t.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+  return t;
+};
 
 // Master volume, once, for the whole session — every scene mixes under the same
 // ceiling. (Setting this inside a scene made loudness depend on scene history.)

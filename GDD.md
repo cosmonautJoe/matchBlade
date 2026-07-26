@@ -168,8 +168,25 @@ renders + drives it. This is the DESIGN §4 loop expressed as **one fail value**
 ### 5.1 Actors
 - **Hero:** the Soldier/Warrior (`warrior.png`, 80×64), `HERO_SCALE = 3.8`.
   Marches in at run start, then his screen-x is driven purely by *pressure*.
-- **Enemies:** slimes (legacy `orc-*` anim keys), variant pool by depth —
-  `k<3`: base slime; `k<8`: + variant 2; `k≥8`: variants 2 & 3. `SLIME_SCALE = 3.7`.
+- **Enemies:** a **zone-aware bestiary** (`makeEnemy(killed, biome)` in run.ts;
+  `CREATURE_RIG` dresses each in main.ts). Every road fields its own roster,
+  still depth-gated (early / mid / deep tiers), with **slimes anchoring both**:
+  - **Plains:** green slime, **boar** (fast charger — 0.55× HP, strikes ~2×
+    faster, no defense), blue slime (ward), **goblin** (ward, 0.85× HP).
+  - **Forest:** green slime, **mushroom** (hide, 1.25× HP, slow), dark slime
+    (hide), blue slime (ward).
+  - **Snow (Glacial Pass):** **frost skeleton** (hide) and **ice elemental**
+    (ward, hovers) — no slimes survive the pass. The two opposite defenses force
+    the player to switch damage schools inside one zone.
+  - Snow art is generated, not bought: `scripts/gen_frost_skeleton.py` palette-
+    swaps the skeleton into ice (the same technique behind the slime variants),
+    and `scripts/gen_ice_elemental.py` draws an ORIGINAL crystal creature
+    (faceted core, orbiting shards, frost mist) across all five states.
+  Per-creature knobs: `VARIANT_HP_MULT`, `VARIANT_STRIKE_MULT` (the foe's own
+  `strikeMult` scales the scene's strike cadence). Art: slimes are a full
+  idle/walk/hurt/death pack; the **boar** ships idle/run/hit (death faked as a
+  topple); the **goblin/mushroom** ship an attack sheet only — idle holds frame 0
+  with a breathing scale-bob, death is a fake topple+fade. `SLIME_SCALE = 2.7`.
 - **Skull ☠** at the far left (`SKULL_X`) — the death line.
 
 ### 5.2 The single fail axis — *pressure* ∈ [0, 1]
@@ -215,7 +232,8 @@ Applied in `applyMatches(run, counts)` per resolved cascade:
 - **HP:** `ENEMY_BASE_HP = 9 + kills × ENEMY_HP_GROWTH(3)` — base foe dies to
   ~one strong combo; scales each kill.
 - **Power:** `ENEMY_BASE_POWER = 0.075 + kills × ENEMY_POWER_GROWTH(0.015)`.
-- **Strikes** fire on a `STRIKE_MS = 4800ms` cadence: `enemyStrike()` — block
+- **Strikes** fire on a `STRIKE_MS = 4800ms` cadence, scaled by the foe's
+  `strikeMult` (boars ~2× faster) and Scout's Spurs: `enemyStrike()` — block
   soaks first, remainder shoves pressure; on a soaked hit a `block1/2/3` clang
   plays; on net damage, camera shake + a red hero tint.
 - **Weapon→animation:** 3-match `hero-attack`, 4 adds `hero-attack2`, 5+ adds
@@ -339,7 +357,13 @@ A live **buff readout** under the quests shows charges/timers (`🗡️×2 📯9
 
 The caravan marches through a series of biomes; each redresses both the **run**
 (`RUN_BIOMES` in main.ts) and the **camp** (`CAMP_BIOMES` in camp.ts), routed off
-`meta.biome`. Shipped biomes: **plains** (`grass`) and **forest**.
+`meta.biome`. Shipped biomes: **plains** (`grass`), **forest**, **snow**
+(vnitti *Glacial Mountains* parallax + GandalfHardcore Floor Tiles2 winter band;
+the lane always snows there, rails wear icicles/drifts, forgeCap 9), and
+**dungeon** (100% ORIGINAL generated art — `scripts/gen_dungeon.py` bakes the
+torchlit brick wall / stone colonnade / pillar+chain layers and the flagstone
+floor; Mysterious Dungeon music bed, no weather, chains/rubble rails with dust
+and embers, forgeCap 12).
 
 ### 9.1 Run parallax (back → front, with scroll factor)
 - **Plains:** `sky` (0.04) · `clouds-mid` (0.1) · `mtn-far` (0.16) · `mtn` (0.3)
@@ -417,6 +441,23 @@ enter; departs by walking the hero into the portal (`scene.start("game")`).
   common foe) and the panel closes shop: "a harder land will ask for a harder
   edge." Cost curve **`forgeCost(level) = 20 + level × 15` ore** (20, 35, …).
   Forge quests measure the blade's absolute level (deltas break under caps).
+### 11.4b Aldwin the Mage (second recruit) + the Study
+- **The forge's mirror for magic**, found at the **FOREST camp onward**
+  (`wizardAvailable(biome)`), so he starts a zone later than Wren. Unhired he
+  waits under a violet **"?"**; hire cost **`WIZARD_COST = 40 wood + 40 ore +
+  5 diamonds`** — a scholar's price in reagents *and* a focus-stone.
+- **The Study** (tap Aldwin once hired): sells staff levels at **+4 damage on
+  EVERY cast** (`SPELL_BONUS_PER_LEVEL`), folded into `raw` before the foe's
+  ward multiplier — so it lifts Firebolt/Fireball/Pyroclasm *and* the Stormcall
+  scroll. Cost **`studyCost(level) = 25 + level x 18`** ore (25, 43, 61 ...).
+- **Capped per zone**, one tier behind the blade since he joins later —
+  **`studyCap`: forest 3, snow 6, dungeon 9** (plains 0: he isn't there yet).
+  At the cap the panel closes shop: *"the leylines here are spent."*
+- Art: `scripts/gen_mage.py` recolours the Evil Wizard sheet (Malgrim's pack)
+  from fire-red into arcane blue by HUE, keeping skin tones, so he reads as a
+  scholar of the caravan rather than the boss who burns it.
+- Same character budget as Wren: one sprite, a name, one line of dialogue.
+
 - Sprites: `smith.png` (WarriorWoman sheet). One portrait, a name, one line of
   dialogue — the **character budget** (no dialogue trees; recruits never fight
   beside you — that's sequel scope).
@@ -466,15 +507,50 @@ through:
 - Same character budget as Wren: one sprite, a name, one line — no dialogue
   trees.
 
+### 11.5c Per-biome camp layouts
+The camp is no longer one static dressing reused everywhere — `CampLayout` holds
+BOTH the prop list and the anchors for the folk (hero, smith, furnace, Aldwin,
+Wayfarer, portal, Peddler), so each road pitches its camp differently:
+- **Plains** — the original roadside pitch (unchanged).
+- **Forest** — a woodcutters' clearing: the folk span **10..355** instead of the
+  plains huddle at **85..300** (the forest gains Aldwin, so it needed the elbow
+  room), and the dressing changes character — log piles and a cook pot instead
+  of market crates, birches and cattails instead of verge tufts.
+- Snow/dungeon fall back to the plains pitch until they're dressed.
+- **Sizing note:** `tree1/2/3` are 256x208; anything over s~1.3 swallows the
+  clearing, so big timber only frames the EDGES and the middle uses small props.
+- Camps are FLAT (one ground line). A multi-floor/terraced variant was built and
+  rejected — the stacked look fought the camp's readability.
+- Wren's tarp tent travels with the caravan, so she still walks out of it to
+  whichever forge the layout pitched.
+
 ### 11.6 Biomes & the road gate
-- `BIOME_ORDER = [plains, forest]`; each biome has its own quest pool
+- `BIOME_ORDER = [plains, forest, snow, dungeon]`; each biome has its own quest pool
   (`QUEST_POOLS`).
 - **Clearing the *whole* current pool → `roadOpen()` true** → the Wayfarer's
   board shows a **"take the road onward"** button → `advanceBiome()` bumps the
   biome, clears active oaths, saves, and rebuilds the camp in the new world.
   (Hiring/forging alone does **not** advance — quests gate the road.)
-- **TEMP debug:** tapping the camp biome tag flips plains↔forest (remove before
+- **TEMP debug:** tapping the camp biome tag cycles the biomes (remove before
   release).
+
+### 11.5d The in-camp editor (dev only)
+`✎ edit` in the camp (DEV builds) is a full layout tool — the camps are authored
+in-game, then the copied JSON is baked into `CAMP_LAYOUTS`.
+- **Drag anything**, props *and* the folk (hero, Wren, Aldwin, the Wayfarer, the
+  Peddler, the forge, the portal) — NPCs register as `npc:` editables.
+- **`＋ pieces`** opens the building set: every prop texture the camp preloads
+  (32 pieces, animated ones included), tap to drop it in the middle of camp.
+- **Floor slabs** (3 shades) build background terraces out of the biome's own
+  ground. The tint fakes aerial perspective — the further back a shelf reads,
+  the paler and cooler it gets. One vertical texture repeat spans each slab
+  (`fitSlab`), or the grass lip stripes down the whole cliff.
+- **Keys on the selection:** `[` `]` scale (or resize a slab; `shift` = height),
+  `shift+[ ]` cycles a frame, `F` flips, `,` `.` depth, arrows nudge
+  (`shift` = x10), `Del` removes.
+- **`📋 copy layout`** emits `{ biome, anchors, slabs, props }` — exactly the
+  shape `CampLayout` wants, so a paste can be baked in directly.
+- Taps on the editor's own chrome never grab a prop underneath.
 
 ### 11.7 Win condition
 The caravan **completes the journey** — clear the last biome, everyone home.
@@ -552,6 +628,7 @@ cropped ground slices.
 - `music_title.mp3` (*Title Theme*) — camp.
 - `music_journey.mp3` (*And The Journey Begins*) — the run.
 - `music_boss.mp3` (*Prepare for Battle!*) — boss approach through boss death.
+- `music_dungeon.mp3` (*Mysterious Dungeon*) — the delve's road music.
 Remaining pack tracks (Decisive Battle, Mysterious Dungeon, The Icy Cave…) are
 on deck for future biomes/moments.
 
@@ -644,7 +721,7 @@ potion `POTION_GROUND=0.12`/`POTION_GUARD=2` charges, Bulwark Brew = 6 charges,
 tiers `60/30/10` (boss `25/45/30`).
 
 **Meta (`meta.ts`):** `BLACKSMITH_COST={wood:30, ore:30}`,
-`forgeCost=20+15·level`, `MAX_ACTIVE=3` quests, `BIOME_ORDER=[plains, forest]`.
+`forgeCost=20+15·level`, `MAX_ACTIVE=3` quests, `BIOME_ORDER=[plains, forest, snow, dungeon]`.
 
 ---
 

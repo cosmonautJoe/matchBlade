@@ -20,8 +20,8 @@ export const WOOD = 5;
 export const ORE = 6;
 export const POTION = 7; // rare board gift: tapped (not matched) to drink
 
-/** Which slime sheet the scene dresses the foe in (boss = the Cindermage). */
-export type EnemyVariant = "green" | "blue" | "dark" | "boss";
+/** Which creature the scene dresses the foe in (boss = the Cindermage). */
+export type EnemyVariant = "green" | "blue" | "dark" | "boar" | "goblin" | "mushroom" | "skeleton" | "eye" | "frostskel" | "icelem" | "boss";
 /**
  * Defenses — the reason tile CHOICE matters (DESIGN: physical vs spell):
  *   hide — iron hide: swords glance off (x0.5), spells burn through (x1.5)
@@ -37,6 +37,7 @@ export interface Enemy {
   hp: number;
   maxHp: number;
   power: number; // pressure a full strike adds, before block
+  strikeMult: number; // <1 strikes FASTER, >1 slower (scene scales its cadence)
 }
 
 export interface Resources {
@@ -54,7 +55,9 @@ export interface RunState {
   score: number;
   resources: Resources;
   over: boolean;
+  biome: string; // the road we're on — picks which creatures the zone fields
   swordBonus: number; // forge upgrades: extra damage folded into the first sword hit
+  spellBonus: number; // Aldwin's study: extra damage folded into every cast
   sunderEdge: boolean; // blade at the zone's forge cap: sword matches fell non-boss foes outright
   // ---- run-item buffs (src/items.ts; the scene sets these, we honour them) ----
   whetstone: number; // charges: sword matches that count as full 5-match combos
@@ -68,6 +71,7 @@ export interface RunState {
 export const SWORD_MAIN = 5; // first swing — a 3-match
 export const SWORD_EXTRA = 2; // each extra sword beyond 3 (max 2 follow-ups)
 export const SWORD_BONUS_PER_LEVEL = 5; // forge level -> first-strike bonus
+export const SPELL_BONUS_PER_LEVEL = 4; // Aldwin's study level -> damage on EVERY cast
 // A blade at its zone's forge cap SUNDERS: any sword match fells a non-boss
 // foe in one stroke, iron hide included. (Bosses are arena fights — the board
 // retracts — so steel never reaches them anyway.)
@@ -95,6 +99,15 @@ export const ENEMY_BASE_HP = 9;
 export const ENEMY_HP_GROWTH = 3; // +hp per prior kill
 export const ENEMY_BASE_POWER = 0.075;
 export const ENEMY_POWER_GROWTH = 0.015;
+// Plains uses a gentler, uninterrupted knockback curve. Its challenge comes
+// from the deeper roster and bosses, not sudden pressure spikes at breakpoints.
+export const PLAINS_POWER_GROWTH = 0.005;
+export const PLAINS_DEEP_START = 8;
+export const PLAINS_DEEP_HP_MULT = 0.8;
+// ...and a gentler HP curve to match. Damage per match is FLAT until a forge
+// level lands (5 for a 3-match at forge 0), so the global +3/kill turned late
+// plains fights into 8-9 match slogs. At +1.5 a foe stays a 2-6 match kill.
+export const PLAINS_HP_GROWTH = 1.5;
 
 // --- bosses: every Nth foe is the Cindermage (DESIGN.md §4) --------------------
 // A boss fight has no intermediate kills to relieve pressure, so the scroll
@@ -121,36 +134,85 @@ const VARIANT_DEFENSE: Record<EnemyVariant, Defense> = {
   green: "none", // plain flesh — the tutorial-friendly slime
   blue: "ward", // arcane sheen: spells fizzle, steel bites deep
   dark: "hide", // iron hide: swords glance off, spells burn through
+  boar: "none", // a wild charger — no armour, just speed
+  goblin: "ward", // quick and cunning; magic slides off, steel bites
+  mushroom: "hide", // a rubbery cap turns blades; fire cooks it
+  skeleton: "hide", // old bones turn blades; magic shatters them
+  eye: "ward", // a floating arcane eye; spells wash off, steel pops it
+  frostskel: "hide", // frozen bones, harder still — steel glances, fire cooks
+  icelem: "ward", // living ice drinks magic; a blade cracks it clean
   boss: "ward", // the Cindermage's wards drink magic — bring a blade
 };
 
-export function makeEnemy(killed: number, rand: () => number = Math.random): Enemy {
+// per-creature combat feel (defaults 1). Kept near the slime baseline (1.0) so
+// the new mobs read as quick to fell like the slimes; boars/eyes are fragile.
+const VARIANT_HP_MULT: Partial<Record<EnemyVariant, number>> = { boar: 0.4, goblin: 0.85, mushroom: 1.0, skeleton: 0.95, eye: 0.7, frostskel: 1.0, icelem: 0.8 };
+const VARIANT_STRIKE_MULT: Partial<Record<EnemyVariant, number>> = { boar: 0.9, goblin: 0.95, mushroom: 1.2, skeleton: 1.0, eye: 0.85, frostskel: 1.0, icelem: 1.1 };
+
+// Each road fields its own bestiary, still depth-gated for the difficulty ramp.
+// Each zone owns exactly ONE slime colour (no cross-zone blending) plus its
+// signature creature(s). Zones without an entry fall back to the classic
+// green/blue/dark ramp.
+type ZonePool = { early: EnemyVariant[]; mid: EnemyVariant[]; deep: EnemyVariant[] };
+const ZONE_POOLS: Record<string, ZonePool> = {
+  plains: {
+    early: ["green", "boar"],
+    mid: ["green", "boar", "goblin"],
+    deep: ["green", "goblin", "boar"],
+  },
+  forest: {
+    early: ["blue", "mushroom"],
+    mid: ["blue", "mushroom", "eye"],
+    deep: ["blue", "mushroom", "eye"],
+  },
+  dungeon: {
+    early: ["dark", "skeleton"],
+    mid: ["dark", "skeleton", "eye"],
+    deep: ["dark", "skeleton", "eye"],
+  },
+  // no slimes survive the pass — the cold fields its own dead and its own ice.
+  // hide vs ward across the two, so the player must switch schools here.
+  snow: {
+    early: ["frostskel", "icelem"],
+    mid: ["frostskel", "icelem"],
+    deep: ["frostskel", "icelem"],
+  },
+};
+const DEFAULT_POOL: ZonePool = { early: ["green"], mid: ["green", "blue"], deep: ["blue", "dark"] };
+
+export function makeEnemy(killed: number, biome = "plains", rand: () => number = Math.random): Enemy {
   const boss = (killed + 1) % BOSS_EVERY === 0;
-  // deeper pools mirror the old scene-side variant roll: green early, the
-  // warded blue joins mid-run, the iron-hided dark slime rules the deeps
-  const pool: EnemyVariant[] = killed < 3 ? ["green"] : killed < 8 ? ["green", "blue"] : ["blue", "dark"];
-  const variant: EnemyVariant = boss ? "boss" : pool[(rand() * pool.length) | 0];
-  const hp = Math.round((ENEMY_BASE_HP + killed * ENEMY_HP_GROWTH) * (boss ? BOSS_HP_MULT : 1));
+  const zp = ZONE_POOLS[biome] ?? DEFAULT_POOL;
+  const tier = killed < 3 ? zp.early : killed < 8 ? zp.mid : zp.deep;
+  const variant: EnemyVariant = boss ? "boss" : tier[(rand() * tier.length) | 0];
+  const hpMult = boss ? BOSS_HP_MULT : VARIANT_HP_MULT[variant] ?? 1;
+  const easeDeepPlains = biome === "plains" && killed >= PLAINS_DEEP_START && !boss;
+  const plainsHpMult = easeDeepPlains ? PLAINS_DEEP_HP_MULT : 1;
+  const growth = biome === "plains" ? PLAINS_HP_GROWTH : ENEMY_HP_GROWTH;
+  const hp = Math.max(1, Math.round((ENEMY_BASE_HP + killed * growth) * hpMult * plainsHpMult));
   return {
     kind: boss ? "boss" : "orc",
     variant,
     defense: VARIANT_DEFENSE[variant],
     hp,
     maxHp: hp,
-    power: ENEMY_BASE_POWER + killed * ENEMY_POWER_GROWTH,
+    power: ENEMY_BASE_POWER + killed * (biome === "plains" ? PLAINS_POWER_GROWTH : ENEMY_POWER_GROWTH),
+    strikeMult: boss ? 1 : VARIANT_STRIKE_MULT[variant] ?? 1,
   };
 }
 
-export function newRun(swordLevel = 0, forgeCapLevel = Number.POSITIVE_INFINITY): RunState {
+export function newRun(swordLevel = 0, forgeCapLevel = Number.POSITIVE_INFINITY, biome = "plains", staffLevel = 0): RunState {
   return {
     pressure: 0,
     block: 0,
-    enemy: makeEnemy(0),
+    enemy: makeEnemy(0, biome),
     killed: 0,
     score: 0,
     resources: { wood: 0, ore: 0, treasure: 0, keys: 0 },
     over: false,
+    biome,
     swordBonus: swordLevel * SWORD_BONUS_PER_LEVEL,
+    spellBonus: staffLevel * SPELL_BONUS_PER_LEVEL,
     sunderEdge: swordLevel >= forgeCapLevel,
     whetstone: 0,
     surgeMult: 1,
@@ -198,9 +260,15 @@ function clampPressure(s: RunState) {
 /**
  * Deal direct damage to the current enemy (matches, item blasts, burns all
  * funnel through here). Handles score, the kill, and the forward surge.
+ *
+ * The BOSS is immune to ordinary damage: he is only felled by his arena
+ * minigame, whose execution passes `force`. Without this, the ~1.6s of his
+ * walk-in — before the arena takes over — left him damageable, and a banked
+ * sword match could chip or even kill him as he strode in.
  */
-export function dealDamage(s: RunState, damage: number): boolean {
+export function dealDamage(s: RunState, damage: number, force = false): boolean {
   if (!s.enemy || damage <= 0) return false;
+  if (s.enemy.kind === "boss" && !force) return false;
   s.enemy.hp -= damage;
   s.score += damage * 5;
   if (s.enemy.hp <= 0) {
@@ -258,7 +326,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   let spell: SpellOutcome | null = null;
   if (staves >= 3) {
     const tier: 3 | 4 | 5 = staves >= 5 ? 5 : staves === 4 ? 4 : 3;
-    const raw = SPELL_DMG[tier] + Math.max(0, staves - 5) * SPELL_EXTRA;
+    const raw = SPELL_DMG[tier] + Math.max(0, staves - 5) * SPELL_EXTRA + s.spellBonus; // Aldwin's study sharpens every cast
     const sM = spellMult(defense);
     spell = {
       dmg: Math.max(1, Math.round(raw * sM)),
@@ -266,6 +334,14 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
       mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak",
       burn: tier >= SPELL_BURN_TIER,
     };
+  }
+
+  // Malgrim shrugs off the board entirely (see dealDamage) — report NO damage
+  // rather than letting the scene float numbers his HP bar will never honour.
+  if (s.enemy?.kind === "boss") {
+    hits = [];
+    spell = null;
+    swordMod = "none";
   }
 
   const damage = hits.reduce((a, b) => a + b, 0) + (spell?.dmg ?? 0);
@@ -279,8 +355,9 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
  * foe's ward like any other magic. Returns what landed.
  */
 export function castBlast(s: RunState, raw: number): { dmg: number; mod: DamageMod; killed: boolean } {
+  if (s.enemy?.kind === "boss") return { dmg: 0, mod: "resist", killed: false }; // his wards drink it whole
   const sM = spellMult(s.enemy?.defense ?? "none");
-  const dmg = Math.max(1, Math.round(raw * sM));
+  const dmg = Math.max(1, Math.round((raw + s.spellBonus) * sM)); // the study sharpens scrolls too
   const killed = dealDamage(s, dmg);
   return { dmg, mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak", killed };
 }
@@ -288,7 +365,7 @@ export function castBlast(s: RunState, raw: number): { dmg: number; mod: DamageM
 /** Spawn the next enemy — the scene calls this after the death animation. */
 export function spawnNext(s: RunState): Enemy | null {
   if (s.over) return null;
-  s.enemy = makeEnemy(s.killed);
+  s.enemy = makeEnemy(s.killed, s.biome);
   return s.enemy;
 }
 

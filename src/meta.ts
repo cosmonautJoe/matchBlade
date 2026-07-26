@@ -31,6 +31,8 @@ export interface MetaState {
   // recruits & upgrades
   blacksmithHired: boolean;
   swordLevel: number; // each forge level = +1 damage on the first sword hit
+  wizardHired: boolean; // Aldwin joins at the FOREST camp (the smith's magic mirror)
+  staffLevel: number; // each study level = +SPELL_BONUS_PER_LEVEL on every cast
   // cumulative stats
   slain: number;
   chestsOpened: number;
@@ -63,6 +65,8 @@ export function defaultMeta(): MetaState {
     totalOre: 0,
     blacksmithHired: false,
     swordLevel: 0,
+    wizardHired: false,
+    staffLevel: 0,
     slain: 0,
     chestsOpened: 0,
     bestDepth: 0,
@@ -171,7 +175,24 @@ export function forgeCost(level: number): number {
  * The next zone raises the ceiling (and fields foes that demand it).
  */
 export function forgeCap(biome: string): number {
-  return biome === "forest" ? 6 : 3;
+  return biome === "dungeon" ? 12 : biome === "snow" ? 9 : biome === "forest" ? 6 : 3;
+}
+
+// --- Aldwin the Mage: the forge's mirror for magic ---------------------------
+// He's found at the FOREST camp, so he starts a zone later than Wren and asks
+// for a scholar's price (reagents AND a diamond focus).
+export const WIZARD_COST = { wood: 40, ore: 40, treasure: 5 };
+/** Ore cost of the next study level (level is the CURRENT level). */
+export function studyCost(level: number): number {
+  return 25 + level * 18; // 25, 43, 61, ...
+}
+/** The staff's ceiling per zone — one tier behind the blade, since he joins later. */
+export function studyCap(biome: string): number {
+  return biome === "dungeon" ? 9 : biome === "snow" ? 6 : biome === "forest" ? 3 : 0;
+}
+/** Aldwin only turns up once the caravan reaches the forest. */
+export function wizardAvailable(biome: string): boolean {
+  return biome !== "plains";
 }
 
 export function canAfford(m: MetaState, cost: { wood?: number; ore?: number; treasure?: number }): boolean {
@@ -191,7 +212,7 @@ export function spend(m: MetaState, cost: { wood?: number; ore?: number; treasur
 //   run-depth — one run (after accepting) must reach `target` depth
 //   state     — a milestone flag (e.g. blacksmith hired)
 export type QuestKind = "delta" | "run-depth" | "state";
-export type DeltaStat = "slain" | "chestsOpened" | "totalWood" | "totalOre" | "swordLevel";
+export type DeltaStat = "slain" | "chestsOpened" | "totalWood" | "totalOre" | "swordLevel" | "staffLevel";
 
 export interface Quest {
   id: string;
@@ -228,11 +249,33 @@ export const FOREST_QUESTS: Quest[] = [
   { id: "f_depth30", label: "Clear the road to the second boss", shortLabel: "clear the road", reward: 45, kind: "run-depth", target: 20 },
 ];
 
+// The pass strips the caravan back to survival: bigger hauls, the full road, a blade at its true peak.
+export const SNOW_QUESTS: Quest[] = [
+  { id: "s_slay80", label: "Slay 80 creatures of the pass", shortLabel: "slay the pass", reward: 30, kind: "delta", stat: "slain", target: 80 },
+  { id: "s_chests15", label: "Crack open 15 treasure chests", shortLabel: "open chests", reward: 30, kind: "delta", stat: "chestsOpened", target: 15 },
+  { id: "s_wood180", label: "Haul 180 wood back to camp", shortLabel: "haul wood", reward: 35, kind: "delta", stat: "totalWood", target: 180 },
+  { id: "s_ore180", label: "Haul 180 ore back to camp", shortLabel: "haul ore", reward: 35, kind: "delta", stat: "totalOre", target: 180 },
+  { id: "s_forge9", label: "Forge the blade to its glacial peak", shortLabel: "glacial peak", reward: 45, kind: "delta", stat: "swordLevel", target: 9 },
+  { id: "s_depth20", label: "Clear the frozen road to the second boss", shortLabel: "clear the pass", reward: 60, kind: "run-depth", target: 20 },
+];
+
+// The delve is the journey's end (for now): the dark asks for everything.
+export const DUNGEON_QUESTS: Quest[] = [
+  { id: "d_slay120", label: "Slay 120 horrors of the deep", shortLabel: "slay the deep", reward: 40, kind: "delta", stat: "slain", target: 120 },
+  { id: "d_chests20", label: "Crack open 20 treasure chests", shortLabel: "open chests", reward: 40, kind: "delta", stat: "chestsOpened", target: 20 },
+  { id: "d_wood240", label: "Haul 240 wood back to the delve-camp", shortLabel: "haul wood", reward: 45, kind: "delta", stat: "totalWood", target: 240 },
+  { id: "d_ore240", label: "Haul 240 ore back to the delve-camp", shortLabel: "haul ore", reward: 45, kind: "delta", stat: "totalOre", target: 240 },
+  { id: "d_forge12", label: "Forge the blade to its final peak", shortLabel: "final peak", reward: 60, kind: "delta", stat: "swordLevel", target: 12 },
+  { id: "d_depth20", label: "Clear the dark road to the second boss", shortLabel: "clear the deep", reward: 80, kind: "run-depth", target: 20 },
+];
+
 // Ordered march of the caravan. Each biome has a quest pool that gates the next.
-export const BIOME_ORDER = ["plains", "forest"] as const;
+export const BIOME_ORDER = ["plains", "forest", "snow", "dungeon"] as const;
 export const QUEST_POOLS: Record<string, Quest[]> = {
   plains: PLAINS_QUESTS,
   forest: FOREST_QUESTS,
+  snow: SNOW_QUESTS,
+  dungeon: DUNGEON_QUESTS,
 };
 
 /** The quest pool for the biome the caravan is currently camped in. */
@@ -267,7 +310,8 @@ export function questProgress(
   }
   // forge quests measure the blade's ABSOLUTE level (caps make deltas
   // unreachable if accepted after a forging) — other stats count from accept
-  let have = q.stat === "swordLevel" ? statOf(m, q.stat) : statOf(m, q.stat!) - aq.base;
+  const absolute = q.stat === "swordLevel" || q.stat === "staffLevel"; // capped levels: measure absolutely
+  let have = absolute ? statOf(m, q.stat!) : statOf(m, q.stat!) - aq.base;
   if (live) {
     if (q.stat === "slain") have += live.kills;
     else if (q.stat === "chestsOpened") have += live.chests;

@@ -27,6 +27,7 @@ export class TitleScene extends Phaser.Scene {
   private btnStart!: Phaser.GameObjects.Container;
   private btnLoad!: Phaser.GameObjects.Container;
   private foot!: Phaser.GameObjects.Text;
+  private version!: Phaser.GameObjects.Text; // build number, bottom-right
   private starting = false;
   private uiScale = 1; // layout()'s shrink factor — hover/press tweens scale off this
 
@@ -101,6 +102,11 @@ export class TitleScene extends Phaser.Scene {
       .text(0, 0, "an early build — your camp saves itself", { fontFamily: "monospace", fontSize: "12px", color: "#5d6675", stroke: "#0a0b0f", strokeThickness: 3 })
       .setOrigin(0.5, 1)
       .setDepth(20);
+    // build version, bottom-right — fed from package.json by vite's define
+    this.version = this.add
+      .text(0, 0, `v${__APP_VERSION__}`, { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffffff", stroke: "#0a0b0f", strokeThickness: 4 })
+      .setOrigin(1, 1)
+      .setDepth(20);
 
     // lay out first (it also starts the tile bobs), THEN fade in over it — the
     // bob and fade are separate tweens, so they coexist; a mid-intro resize just
@@ -108,7 +114,7 @@ export class TitleScene extends Phaser.Scene {
     this.layout();
     this.title.setAlpha(0);
     this.tweens.add({ targets: this.title, alpha: 1, duration: 600, ease: "Sine.easeOut" });
-    for (const o of [this.tagline, this.btnStart, this.btnLoad, this.foot, ...this.tiles]) {
+    for (const o of [this.tagline, this.btnStart, this.btnLoad, this.foot, this.version, ...this.tiles]) {
       o.setAlpha(0);
       this.tweens.add({ targets: o, alpha: 1, duration: 500, delay: 350, ease: "Sine.easeOut" });
     }
@@ -207,6 +213,7 @@ export class TitleScene extends Phaser.Scene {
     this.btnStart.setScale(s).setPosition(cx, vh * 0.7);
     this.btnLoad.setScale(s).setPosition(cx, vh * 0.7 + 72 * s);
     this.foot.setScale(s).setPosition(cx, vh - 10);
+    this.version.setScale(s).setPosition(vw - 10, vh - 8);
   }
 
   update(_t: number, delta: number) {
