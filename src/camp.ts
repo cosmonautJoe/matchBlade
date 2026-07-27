@@ -64,6 +64,17 @@ const PEDDLER_ORIGIN_IDLE = 63 / 80;
 const PEDDLER_ORIGIN_WALK = 66 / 80;
 const PEDDLER_PRICES: Record<ItemTier, number> = { common: 10, uncommon: 20, rare: 35 };
 const PEDDLER_REROLL = 5; // 💎 to spin fresh wares
+// Her barks. Most of them exist to teach ONE thing the game otherwise never
+// says out loud: a warden's blow goes straight through your guard, and she is
+// the only place to buy anything that helps.
+const PEDDLER_BARKS = [
+  "Met a warden yet? Their blows go straight through a shield. Mine's the only stall that helps with that.",
+  "Warden's Salve, scout — takes half the sting out of every blow one of them lands.",
+  "A Warding Bell, maybe? Rings the worst hit right off you. Cheap, for what it saves.",
+  "Charms for boss-work, over here. Shields won't save you from a warden. My goods might.",
+  "Gems for gear! And a word of advice — don't walk into a boss without something of mine in your pack.",
+  "You'll meet something big down that road. Come see me first.",
+];
 const MAX_STOCKED = 3; // items you can pack for one run
 
 type EditableProp = {
@@ -414,6 +425,7 @@ export class CampScene extends Phaser.Scene {
   // the Peddler: armored road-merchant selling run items for diamonds
   private peddler: Phaser.GameObjects.Sprite | null = null;
   private shopOffers: ItemDef[] = []; // this visit's three wares
+  private peddlerBark: Phaser.GameObjects.Container | null = null;
 
   // dev layout editor: drag props around, then copy the layout as JSON
   private campScale = 1;
@@ -497,6 +509,7 @@ export class CampScene extends Phaser.Scene {
     this.departSign = null;
     this.cutscene = false;
     this.peddler = null;
+    this.peddlerBark = null;
     this.meta = loadMeta();
     // a 💾-saved edit wins over the baked table, so work-in-progress survives reloads
     this.lay = loadSavedLayout(this.meta.biome) ?? campLayout(this.meta.biome);
@@ -839,7 +852,10 @@ export class CampScene extends Phaser.Scene {
     }
 
     // the Peddler's pitch — only once she's followed the glitter into camp
-    if (this.meta.peddlerArrived || previewAll) this.buildPeddler(false);
+    if (this.meta.peddlerArrived || previewAll) {
+      this.buildPeddler(false);
+      this.startPeddlerBarks();
+    }
 
     // DEPART: humming portal (right side of camp)
     const portal = sprite("portal", "portal-spin", this.lay.portal.x, 9 + AY(this.lay.portal), AS(this.lay.portal, 2.6), 5);
@@ -1179,11 +1195,61 @@ export class CampScene extends Phaser.Scene {
 
   // ===== the Peddler: gems for gear =====
 
-  /** Roll this visit's three wares (distinct, never boss trophies). */
+  /**
+   * Roll this visit's three wares (distinct, never boss trophies).
+   *
+   * One slot is always a WARDEN-CHARM. Her whole pitch is that a boss fight is
+   * survivable if you shop first, and that only reads if the goods are actually
+   * on the table when the player walks up.
+   */
   private rollShopOffers() {
     const pool = ITEMS.filter((i) => !i.bossOnly);
     Phaser.Utils.Array.Shuffle(pool);
-    this.shopOffers = pool.slice(0, 3);
+    const aids = pool.filter((i) => i.bossAid);
+    const rest = pool.filter((i) => !i.bossAid);
+    const offers = aids.length ? [aids[0], ...rest.slice(0, 2)] : rest.slice(0, 3);
+    this.shopOffers = Phaser.Utils.Array.Shuffle(offers); // ...but not always in the same seat
+  }
+
+  /**
+   * A parchment bark over her head — the nudge that she stocks warden-charms.
+   * Fires on a loose timer while you're in camp, and never while a dialog or
+   * the shop panel is up (she should not talk over herself).
+   */
+  private sayPeddler(text: string) {
+    if (!this.peddler || this.peddlerBark) return;
+    const W = 300;
+    const body = this.add
+      .text(0, 0, text, { fontFamily: "monospace", fontSize: "13px", color: "#3a2212", wordWrap: { width: W - 26 }, lineSpacing: 4 })
+      .setOrigin(0.5);
+    const h = Math.max(34, body.height + 20);
+    const bg = this.add.rectangle(0, 0, W, h, 0xf0dcae).setStrokeStyle(3, 0x6b4023);
+    const tail = this.add.triangle(0, h / 2 + 7, 0, 0, 16, 0, 8, 12, 0xf0dcae);
+    const root = this.add.container(this.peddler.x, this.peddler.y - 172, [bg, tail, body]).setDepth(24).setAlpha(0).setScale(0.7);
+    this.propBox.add(root);
+    this.peddlerBark = root;
+    this.tweens.add({ targets: root, alpha: 1, scale: 1, duration: 220, ease: "Back.easeOut" });
+    this.tweens.add({
+      targets: root,
+      alpha: 0,
+      y: root.y - 18,
+      duration: 420,
+      delay: 4200,
+      onComplete: () => {
+        root.destroy();
+        if (this.peddlerBark === root) this.peddlerBark = null;
+      },
+    });
+  }
+
+  /** Loose loop of Peddler barks while camp is up. */
+  private startPeddlerBarks() {
+    const say = () => {
+      if (!this.peddler || this.panelOpen || this.cutscene || this.editMode) return; // never talk over a panel or a cutscene
+      this.sayPeddler(PEDDLER_BARKS[(Math.random() * PEDDLER_BARKS.length) | 0]);
+    };
+    this.time.delayedCall(4500, say);
+    this.time.addEvent({ delay: 21000, loop: true, callback: () => this.time.delayedCall(Math.random() * 8000, say) });
   }
 
   /** Play a peddler anim with its matching foot-line origin (the sheets differ). */

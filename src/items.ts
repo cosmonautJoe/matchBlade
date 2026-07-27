@@ -21,6 +21,9 @@ export interface ItemDef {
   desc: string; // tooltip body
   hint: string; // tooltip footer ("tap to use" variants)
   bossOnly?: boolean; // only appears in the boss-hoard table
+  bossAid?: boolean; // a warden-charm: only does anything inside a boss arena.
+  // The Peddler always keeps one of these on her table (see rollShopOffers) —
+  // her whole pitch is that a boss fight is survivable if you shop first.
 }
 
 export type ChestPull = { kind: "wood" | "ore" | "treasure" | "item"; n: number; icon: string; item?: ItemDef };
@@ -38,6 +41,10 @@ export const LEDGER_SECS = 20;
 export const WHETSTONE_CHARGES = 3;
 export const PAN_EXTRA_PULLS = 2;
 export const SAPPER_RADIUS = 1; // 3x3
+// Warden-charms. Deliberately modest: a boss arena pierces your guard entirely,
+// so these take the edge off a mistake rather than buying one back.
+export const SALVE_MULT = 0.5; // a warden's blow lands at half force
+export const BELL_CHARGES = 2; // RED blows softened to ordinary ones
 
 const TAP = "tap to use";
 const AIM = "tap, then pick a tile";
@@ -79,6 +86,11 @@ export const ITEMS: ItemDef[] = [
     desc: `Cook the books: for ${LEDGER_SECS}s wood, ore and gem matches pay double.`, hint: TAP },
   { id: "ink", name: "Cartographer's Ink", glyph: "🗺️", tier: "common", target: "none",
     desc: "Chart the road: see what the next three encounters hold, for the rest of the run.", hint: TAP },
+  // ---- warden-charms (the Peddler's speciality; dead weight outside a boss) ----
+  { id: "wardsalve", name: "Warden's Salve", glyph: "🩹", tier: "uncommon", target: "none", bossAid: true,
+    desc: "A warden's blows land at HALF force for the rest of the run. Their wards still pierce your guard — you just keep your feet.", hint: `${TAP} · boss fights only` },
+  { id: "wardbell", name: "Warding Bell", glyph: "🔔", tier: "common", target: "none", bossAid: true,
+    desc: `Rung against ruin: the next ${BELL_CHARGES} RED blows in a boss arena land as ordinary ones instead of double.`, hint: `${TAP} · boss fights only` },
 ];
 
 export function itemById(id: string): ItemDef | undefined {

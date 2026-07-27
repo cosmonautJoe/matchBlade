@@ -43,7 +43,13 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
 
 ## Dev hooks (DEV builds only)
 - `__mb` = GameScene: `.debugBoss()`, `.debugChest()`, `.debugCombo()`,
-  `.debugItem(id?)`, `.rigSwapMatch(type)`.
+  `.debugItem(id?)`, `.rigSwapMatch(type)`, `.debugBossIn(biome)`,
+  `.debugArenaStage(0..3)`.
+- **Boss bar** (bottom-left of the run screen): jump straight to any zone boss
+  (MALGRIM / GORRACH / WARDEN — each writes `meta.biome`, restarts the run and
+  rigs the warden with 6 guard banked), skip to arena stage I/II/III or the
+  FINISH, and bank +9 guard. It's a DOM overlay, not canvas text — two arenas
+  listen on screen-wide tap catchers that would otherwise eat the clicks.
 - `__mbCamp` = CampScene (has an in-camp layout editor, "✎ edit").
 - `?tutorial` URL param force-replays the run tutorial; `?intro` force-replays
   the camp arrival cutscene.

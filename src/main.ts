@@ -52,6 +52,7 @@ import {
   castBlast,
   drinkPotion,
   enemyStrike,
+  pierceStrike,
   spawnNext,
   scroll,
   BOSS_EVERY,
@@ -77,6 +78,8 @@ import {
   HEARTH_PRESSURE,
   LEDGER_SECS,
   WHETSTONE_CHARGES,
+  SALVE_MULT,
+  BELL_CHARGES,
   PAN_EXTRA_PULLS,
   SAPPER_RADIUS,
 } from "./items";
@@ -179,62 +182,218 @@ const CREATURE_RIG: Record<string, CreatureRig> = {
 };
 const BOSS_ENGAGE_GAP = 220; // the robe and fire breath still need a wider stance
 const BOSS_NAME = "MALGRIM THE CINDERMAGE";
-// ---- Malgrim's Infernal Shell Game (the boss is a MODE BREAK) ---------------
-// The scroll stops, the board retracts, burning portals rise in its place and
-// Malgrim hides among decoys. Tap the REAL one (cyan staff glint) before he
-// casts; each correct hit cracks one of his three wards. Decoy taps / timeouts
-// fire a fireball — guard charges from the puzzle phase absorb them.
-// Three wards, and every ward is its own mechanic:
-//   I  FIND HIM         — spot the cyan glint among red decoys (reaction)
-//   II TRACK HIM        — he glints, then everyone cloaks and SHUFFLES (tracking)
-//   III RETURN HIS FIRE — fireball tennis. He takes the far court and serves
-//                         with a shrinking timing ring; tap as the ball meets
-//                         your guard to reflect it into him. Rallies speed up,
-//                         he fakes wind-ups, and the VIOLET ball is a lie — it
-//                         passes harmlessly unless you swing at it. Three
-//                         returns break the final ward.
-// Wards I/II: his cast is a visible ember bar; a hit in its RED tail
-// (ARENA_CRIT_FRAC) shatters the whole ward at once — the daring end early.
-// Ward III entries: castMs = the serve's FLIGHT time; fake/pair are chances.
-type ArenaDeal = { portals: number; decoys: number; castMs: number; hops: number; swaps: number; fake?: number; pair?: number };
-const ARENA_WARDS: { title: string; sub: string; taunt: string; deals: ArenaDeal[] }[] = [
-  {
-    title: "WARD I — FIND HIM",
-    sub: "the REAL Cindermage glints cyan — tap him before his cast fills",
-    taunt: "“Amusing, scout. Again!”",
-    deals: [
-      { portals: 4, decoys: 2, castMs: 2600, hops: 0, swaps: 0 },
-      { portals: 5, decoys: 3, castMs: 2200, hops: 0, swaps: 0 },
-    ],
-  },
-  {
-    title: "WARD II — TRACK HIM",
-    sub: "watch the glint… then follow him through the shuffle",
-    taunt: "“Your eyes betray you!”",
-    deals: [
-      { portals: 6, decoys: 3, castMs: 2100, hops: 0, swaps: 2 },
-      { portals: 6, decoys: 4, castMs: 1800, hops: 0, swaps: 3 },
-    ],
-  },
-  {
-    title: "WARD III — RETURN HIS FIRE",
-    sub: "tap as his fire meets your guard — and NEVER swing at the violet",
-    taunt: "“BURN WITH ME!”",
-    deals: [
-      { portals: 0, decoys: 0, castMs: 1350, hops: 0, swaps: 0, fake: 0, pair: 0 },
-      { portals: 0, decoys: 0, castMs: 1100, hops: 0, swaps: 0, fake: 0.5, pair: 0 },
-      { portals: 0, decoys: 0, castMs: 950, hops: 0, swaps: 0, fake: 0.25, pair: 0.65 },
-    ],
-  },
+
+// =============================================================================
+// THE BOSS GRAMMAR — three colours, one rule: HOW LONG YOU TOUCH.
+// =============================================================================
+// Every warden speaks this, so what you learn fighting Malgrim in the plains
+// still reads in the glacial pass. The fights differ in theme and staging, not
+// in vocabulary — the Undertale trick, where colour IS the rule.
+//
+//   GOLD  ●  TOUCH ONCE   — tap it. A discrete strike.
+//   BLUE  ╱  CUT IT       — swipe across it, the way its arrow points.
+//   RED   ✖  NEVER TOUCH   — a lie sitting among the gold (tapping burns you),
+//                            or a hazard sweeping at you (get clear). Both
+//                            resolve to "no contact", so red never needs
+//                            re-teaching.
+//
+// GOLD and BLUE are both COMMITTED AT AN INSTANT — that is deliberate. An
+// earlier pass made blue a press-and-hold and every blue stage died the same
+// death: holding is passive (the only skill is when to stop), your finger sits
+// on top of the thing you are meant to be watching, and three bosses ended up
+// running the same "hold it, wait, let go" puzzle. A swipe keeps the timing
+// commitment that makes the good stages good, and adds a direction to read.
+const G_GOLD = 0xffd24a;
+const G_GOLD_EDGE = 0xfff2b0;
+const G_BLUE = 0x3aa8ff;
+const G_BLUE_EDGE = 0xbfe8ff;
+const G_RED = 0xe03a2a;
+const G_RED_EDGE = 0xff9d6a;
+// What a mistake costs in an arena, in enemy strikes. A strike is turned by
+// guard if you have it and eats ground if you don't, so these scale with how
+// well you played the board before the fight — which is the point.
+//   MISS  — too slow, wrong way, whiffed: the ordinary cost of failing.
+//   RED   — you touched the one thing the grammar says never to touch. The
+//           colour has to mean something, so it costs double and locks you out.
+// How fast the boss closes the gap the hero has lost (approach units/sec), and
+// how quickly the hero walks off a knockback (px/sec).
+const BOSS_CLOSE_RATE = 3.2;
+const KNOCK_RECOVER = 46;
+const KNOCK_MISS = 16; // px he reels on an ordinary miss...
+const KNOCK_RED = 38; // ...and on a RED violation
+const ARENA_MISS_STRIKES = 1;
+const ARENA_RED_STRIKES = 2;
+const ARENA_RED_LOCK_MS = 650; // and you are left open afterwards
+const EARLY_SWING_LOCK_MS = 240; // shorter than any parry window on purpose: an early
+// swing should cost you the beat, not forfeit the parry outright
+const TRAIL_LIFE_MS = 210; // how long a segment of the blade streak lingers
+/** A drag must cover this much design-space before it counts as a cut. */
+const SWIPE_MIN = 52;
+/** ...and land within this many degrees of the arrow it was asked for. */
+const SWIPE_TOL = 55;
+type SwipeDir = "up" | "down" | "left" | "right";
+const SWIPE_GLYPH: Record<SwipeDir, string> = { up: "↑", down: "↓", left: "←", right: "→" };
+const SWIPE_ANGLE: Record<SwipeDir, number> = { right: 0, down: 90, left: 180, up: -90 };
+/** Per-boss stage cards. Every warden runs exactly three, then the execution. */
+type StageCard = { title: string; sub: string; taunt: string };
+const BOSS_STAGES: Record<string, StageCard[]> = {
+  malgrim: [
+    { title: "WARD I — THE EMBER COURT", sub: "● tap the GOLD images — ✖ the RED ones burn", taunt: "“Amusing, scout. Again!”" },
+    { title: "WARD II — THE EMBER FALL", sub: "● tap GOLD — ╱ cut BLUE the way it points — ✖ let RED fall", taunt: "“Your hands are too slow!”" },
+    { title: "WARD III — RETURN HIS FIRE", sub: "● tap GOLD at your guard — ✖ never swing at RED", taunt: "“BURN WITH ME!”" },
+  ],
+  gorrach: [
+    { title: "HORN I — THE CHARGE", sub: "✖ the RED path is the trampling — ● tap the GOLD as he passes", taunt: "“Stand still, little scout.”" },
+    { title: "HORN II — TURN HIS AXE", sub: "╱ cut BLUE aside — ● tap GOLD to counter — ✖ RED is a feint", taunt: "“You will not turn me!”" },
+    { title: "HORN III — LOCK HORNS", sub: "● tap on GOLD — ✖ never on RED — and everything drifts", taunt: "" },
+  ],
+  hoarfrost: [
+    { title: "RIME I — BREAK THE ICE", sub: "● tap GOLD plates — ╱ cut BLUE ones — ✖ RED bites", taunt: "“Cold outlasts steel, warmling.”" },
+    { title: "RIME II — THE WHITEOUT", sub: "✖ drag clear of the RED fall — ● tap the GOLD warmth", taunt: "“Then reach into the cold yourself.”" },
+    { title: "RIME III — THE FROZEN HEART", sub: "✖ RED shards — ● tap the GOLD core through the gap", taunt: "" },
+  ],
+};
+// Ward III is a RALLY, and it is built to crescendo. Each entry is one VOLLEY:
+// `balls` fire in sequence `stagger` ms apart, and you must return every GOLD in
+// the volley before it counts — one return no longer ends the exchange. `castMs`
+// is each ball's flight time, `redChance` how often a ball after the first is the
+// lie, `fake` a wind-up that throws nothing, and early/late tighten the window.
+// It opens as a single slow serve and ends as a four-ball barrage.
+type TennisShot = {
+  castMs: number;
+  balls?: number;
+  redChance?: number;
+  stagger?: number;
+  fake?: number;
+  early?: number;
+  late?: number;
+  restMs?: number;
+  call?: string;
+};
+const TENNIS_SHOTS: TennisShot[] = [
+  { castMs: 1350, restMs: 1000, call: "RETURN IT!" },
+  { castMs: 1150, fake: 0.4, restMs: 900, call: "AGAIN — FASTER!" },
+  { castMs: 1000, balls: 2, redChance: 0.5, stagger: 320, restMs: 820, call: "TWO AT ONCE!" },
+  { castMs: 880, balls: 3, redChance: 0.4, stagger: 265, fake: 0.3, early: 125, late: 100, restMs: 720, call: "HE OPENS UP — THREE!" },
+  { castMs: 760, balls: 4, redChance: 0.35, stagger: 205, early: 110, late: 88, restMs: 600, call: "“BURN WITH ME!”" },
 ];
-const ARENA_TOTAL_DEALS = ARENA_WARDS.reduce((s, w) => s + w.deals.length, 0);
-const ARENA_CRIT_FRAC = 0.68; // cast fraction where the bar burns red — hits here break the whole ward
-const ARENA_FIREBALL_MS = 420; // his punishment bolt's flight time
 // fireball tennis timing (ward III)
 const TENNIS_EARLY_MS = 140; // the tap window opens this early before the ball meets the guard
 const TENNIS_LATE_MS = 110; // ...and forgives this much lateness
 const TENNIS_WHIFF_LOCK_MS = 380; // a swing at nothing leaves you open — mashing loses
-const TENNIS_PAIR_STAGGER_MS = 280; // the violet lie leads, the true fire follows
+// ---- GORRACH'S GORING RUN (forest boss arena) ------------------------------
+// Three horns, three different games, then the execution.
+//   HORN I   THE CHARGE    — three trampled paths. He paws, one path lights
+//                            RED, then he charges it. Tap another path to leap
+//                            clear. The telegraph shortens; the last charge
+//                            lights TWO paths and only one is safe.
+//   HORN II  THE LABYRINTH — he stamps a route through the standing stones.
+//                            Repeat it. Round 3 must be repeated BACKWARDS.
+//   HORN III LOCK HORNS    — a sweeping marker over a shrinking purchase band.
+//                            Tap inside it to shove him back a notch; five
+//                            notches break him. Miss and he takes ground back.
+const GORE_LANES = 3;
+const GORE_CHARGES: { tell: number; run: number; blind: number }[] = [
+  { tell: 950, run: 520, blind: 1 }, // blind = how many paths light up
+  { tell: 700, run: 440, blind: 1 },
+  { tell: 560, run: 380, blind: 2 }, // two lit, one lie — read them both
+];
+const ROPE_ROUNDS = 3; // hauls needed to break Horn II
+// TURN HIS AXE. `windup` is the whole swing; only the last `window` ms of it
+// can be answered. `reveal` is how far through he shows the colour, so a low
+// number is kinder. `roam` scatters the mark, `prompts` throws several at once.
+// Tuning note, learned the hard way: `window` must stay comfortably above human
+// reaction (~250ms) once you ALSO have to read a colour, and `reveal` has to
+// leave real thinking time before the window opens. A 250ms window behind a
+// late reveal is the floor, not a target. On the doubled round keep `stagger`
+// larger than `window` so the two marks resolve in sequence instead of
+// overlapping — two simultaneous windows is a different (and unfair) game.
+const PARRY_ROUNDS: { need: number; windup: number; window: number; reveal: number; red: number; prompts: number; stagger?: number; rest: number; roam: boolean }[] = [
+  { need: 3, windup: 1400, window: 520, reveal: 0.32, red: 0.2, prompts: 1, rest: 640, roam: false },
+  { need: 4, windup: 1200, window: 440, reveal: 0.38, red: 0.25, prompts: 1, rest: 560, roam: true },
+  { need: 5, windup: 1050, window: 360, reveal: 0.42, red: 0.3, prompts: 2, stagger: 520, rest: 500, roam: true },
+];
+const HORNS_NOTCHES = 5; // shoves needed to break the lock
+const HORNS_MAX_REDS = 3;
+// One row per notch: the gold band narrows, the sweep quickens, RED stripes
+// multiply, the zones drift harder inside their slots, and the shove clock
+// tightens. Fractions are of the bar's width.
+const HORNS_STEPS: { gold: number; red: number; reds: number; sweep: number; drift: number; clock: number }[] = [
+  { gold: 0.19, red: 0.11, reds: 1, sweep: 1150, drift: 0, clock: 6500 },
+  { gold: 0.16, red: 0.12, reds: 1, sweep: 1000, drift: 0.9, clock: 6000 },
+  { gold: 0.13, red: 0.12, reds: 2, sweep: 880, drift: 1.4, clock: 5500 },
+  { gold: 0.105, red: 0.13, reds: 2, sweep: 760, drift: 1.9, clock: 5000 },
+  { gold: 0.08, red: 0.13, reds: 3, sweep: 640, drift: 2.4, clock: 4500 },
+];
+// ---- THE THREE RIMES (snow boss arena) -------------------------------------
+//   RIME I   BREAK THE ICE   — he seals you in. Frost plates crust the arena,
+//                              three taps each; new ones keep forming and the
+//                              freeze meter fills FASTER the more are alive.
+//   RIME II  COUNTER-SIGILS  — he casts a rune; tap its OPPOSITE. Then the
+//                              MIRROR flips the rule and you tap the SAME one.
+//   RIME III THE FROZEN HEART— his core orbits behind a ring of shards with one
+//                              gap. Strike only as the gap comes round.
+const RIME_PLATES_TO_CLEAR = 12; // shatters needed (every 4 = one step)
+const RIME_PLATE_TAPS = 3;
+const RIME_FREEZE_MS = 15000; // the seal closes in this long with ONE plate alive
+const RIME_PLATE_SPAWN_MS = 1250; // a fresh plate crusts over this often
+const RIME_MAX_PLATES = 7;
+const HEART_HITS = 4; // clean core strikes that break the last rime
+const HEART_SHARDS = 5;
+const HEART_SPIN_FROM = 95; // deg/sec at the first hit...
+const HEART_SPIN_TO = 215; // ...and after the third
+const HEART_GAP_FROM = 40; // half-width (deg) of the opening, first hit...
+const HEART_GAP_TO = 19; // ...and last
+const HEART_LOCK_MS = 700; // a shard turns your blade — you're open this long
+
+// ---- the zone bosses -------------------------------------------------------
+// Every road has its own warden, and each one is a DIFFERENT game — the fight
+// is a mode break, not a bigger slime. A def carries the lane dressing (sheet
+// prefix, scale, foot fraction, name banner) and how many minigame steps its
+// arena is worth (the boss bar drains against that total).
+//   plains / dungeon — MALGRIM THE CINDERMAGE : the Infernal Shell Game
+//   forest           — GORRACH THE HORNED     : the Goring Run (mino_v1.1_free)
+//   snow             — THE HOARFROST WARDEN   : the Three Rimes (Frost_Guardian)
+type BossDef = {
+  key: string; // anim-key prefix — `${key}-{idle,walk,attack,hurt,death}`
+  name: string;
+  scale: number;
+  origin: number; // foot fraction, measured by scripts/gen_bosses.py
+  gap: number; // engage distance (bigger silhouettes need more room)
+  faceLeft: boolean; // TRUE only if the pack faces RIGHT natively and needs flipping to
+  // glare up-lane at the hero. The Cindermage does; the minotaur and the
+  // guardian are already drawn facing left, so flipping them turned their backs.
+  hasDeath: boolean; // false = no death frames, topple + fade instead
+  hasHurt: boolean; // false = flash-tint instead of a hurt anim
+  steps: number; // total arena steps — the boss bar drains 1/steps at a time
+  wardMark: string; // the glyph on his bar — every boss carries run.ts's "ward" defense
+  nameTint: [number, number, number, number];
+  veil: number; // the colour the lane bleeds while he approaches
+  accent: string; // notice colour for his lines
+  arena: "shells" | "goring" | "rimes";
+};
+const BOSS_DEFS: Record<string, BossDef> = {
+  malgrim: {
+    key: "boss", name: BOSS_NAME, scale: BOSS_SCALE, origin: BOSS_ORIGIN, gap: BOSS_ENGAGE_GAP,
+    faceLeft: true, hasDeath: true, hasHurt: true, steps: 11, wardMark: "🛡🪄",
+    nameTint: [0xfff2d0, 0xffd280, 0xf2903b, 0xc9581f], veil: 0x1a0505, accent: "#ff9d6a", arena: "shells",
+  },
+  gorrach: {
+    // Minotaur — 288x160 frames, content 108px tall, feet at y144/160.
+    key: "mino", name: "GORRACH THE HORNED", scale: 1.05, origin: 0.9, gap: 250,
+    faceLeft: false, hasDeath: false, hasHurt: false, steps: 11, wardMark: "🛡🪄",
+    nameTint: [0xffe8c8, 0xf0b070, 0xc2632c, 0x7a2f16], veil: 0x0d1a08, accent: "#ffb06a", arena: "goring",
+  },
+  hoarfrost: {
+    // Frost Guardian — 192x128 frames, content 92px tall, feet at y110/128.
+    key: "frost", name: "THE HOARFROST WARDEN", scale: 1.25, origin: 0.859, gap: 240,
+    faceLeft: false, hasDeath: true, hasHurt: true, steps: 10, wardMark: "🛡🪄",
+    nameTint: [0xf2fdff, 0xbfe8ff, 0x6fa8dd, 0x30538f], veil: 0x061424, accent: "#8ff4ff", arena: "rimes",
+  },
+};
+/** Which warden holds which road. Unlisted roads fall back to the Cindermage. */
+const BOSS_FOR_BIOME: Record<string, string> = { plains: "malgrim", forest: "gorrach", snow: "hoarfrost", dungeon: "malgrim" };
+const bossForBiome = (biome: string) => BOSS_DEFS[BOSS_FOR_BIOME[biome] ?? "malgrim"];
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
 const HP_W = 70;
@@ -400,10 +559,17 @@ class GameScene extends Phaser.Scene {
   private defenseTaught = false; // first resisted/weak hit per foe shows a callout
   private defBadge!: Phaser.GameObjects.Text; // 🛡⚔ / 🛡🪄 beside the HP bar
 
-  // Malgrim's Infernal Shell Game (boss arena — see ARENA_WARDS)
+  // the zone's boss arena (Malgrim's shell game / Gorrach's goring run / the three rimes)
+  private boss: BossDef = BOSS_DEFS.malgrim; // set from meta.biome in create()
   private arenaActive = false;
   private arenaGen = 0; // generation counter: stale arena timers bail out
   private arenaObjs: Phaser.GameObjects.GameObject[] = []; // live portal/figure props
+  private arenaTimers: Phaser.Time.TimerEvent[] = []; // looping arena clocks (seal, ring spin) — torn down with the props
+  private swipeTargets: { x: number; y: number; r: number; dir: SwipeDir; alive: boolean; onHit: (ang: number) => void; onWrong?: () => void }[] = [];
+  private swingLockUntil = 0; // an early swing commits the blade: gated nodes refuse until this passes
+  private trailPts: { x: number; y: number; t: number }[] = []; // recent drag points — the blade streak
+  private trailGfx: Phaser.GameObjects.Graphics | null = null;
+  private swipeFrom: { x: number; y: number } | null = null; // where the current drag began (design-local)
   private arenaWard = 0; // which ward we're breaking (0..2)
   private arenaDealIdx = 0; // which deal within the ward
   private arenaDealsDone = 0; // drives the boss bar drain (out of ARENA_TOTAL_DEALS)
@@ -414,8 +580,11 @@ class GameScene extends Phaser.Scene {
   private rainy = false; // rolled per run: rain ambience + streaks over the lane
   private amb: Phaser.Sound.BaseSound | null = null; // looping forest bed under the run
   private music: Phaser.Sound.BaseSound | null = null; // the run's song (journey on the road, war-drums at the boss)
+  private fadingSounds: Phaser.Sound.BaseSound[] = []; // tracks mid-fade — no longer `music`, still ours to stop
   private musicBase = 0; // current track's design volume — audio-changed re-levels against it
   private heroLockX = false; // freeze hero x while a killing swing lands, then surge
+  private heroKnock = 0; // px the hero is currently reeling backwards (decays); a felt shove
+  private bossHold = false; // a stage has parked the boss somewhere of its own (tennis' far court)
   private enemyHpBar!: Phaser.GameObjects.Rectangle;
   private enemyHpBg!: Phaser.GameObjects.Rectangle;
   private scoreText!: Phaser.GameObjects.Text;
@@ -432,6 +601,7 @@ class GameScene extends Phaser.Scene {
   private leftPanel!: Phaser.GameObjects.Rectangle;
   private rightPanel!: Phaser.GameObjects.Rectangle;
   private gearText!: Phaser.GameObjects.Text;
+  private devJumpBoss = false; // set by init(): rig this run's first foe as the boss
   private menuBtn!: Phaser.GameObjects.Text; // ☰ opens the pause menu (Esc works too)
   private hintBtn!: Phaser.GameObjects.Text; // 💡 lights up a valid swap on the board
   private hintObjs: Phaser.GameObjects.GameObject[] = []; // active hint rings (cleared on next move)
@@ -486,6 +656,11 @@ class GameScene extends Phaser.Scene {
     super("game");
   }
 
+  /** Scene data — the dev boss bar restarts the run with `bossJump` to rig the warden. */
+  init(data?: { bossJump?: boolean }) {
+    this.devJumpBoss = !!data?.bossJump;
+  }
+
   preload() {
     // CampScene boots first and shares several keys (hero, parallax, floor) —
     // guard every load so re-entering the run never re-queues existing assets.
@@ -530,12 +705,28 @@ class GameScene extends Phaser.Scene {
     ] as const)
       sheet(k, `${f}.png`, 150, 150);
     sheet("goblin-bomb", "goblin_bomb.png", 100, 100); // 19-frame bomb (fuse burns down)
-    // boss: the Cindermage (Evil Wizard pack, CC0) — every BOSS_EVERYth foe
-    sheet("boss-idle", "boss_idle.png", 150, 150);
-    sheet("boss-move", "boss_move.png", 150, 150);
-    sheet("boss-attack", "boss_attack.png", 150, 150);
-    sheet("boss-hurt", "boss_hurt.png", 150, 150);
-    sheet("boss-death", "boss_death.png", 150, 150);
+    // ---- the zone's boss (only his sheets load — they're the biggest in the game)
+    const bossKey = bossForBiome(loadMeta().biome).key;
+    if (bossKey === "boss") {
+      // the Cindermage (Evil Wizard pack, CC0) — plains & the deep
+      sheet("boss-idle", "boss_idle.png", 150, 150);
+      sheet("boss-move", "boss_move.png", 150, 150);
+      sheet("boss-attack", "boss_attack.png", 150, 150);
+      sheet("boss-hurt", "boss_hurt.png", 150, 150);
+      sheet("boss-death", "boss_death.png", 150, 150);
+    } else if (bossKey === "mino") {
+      // Gorrach (mino_v1.1_free) — no hurt/death frames in the pack
+      sheet("mino-idle", "mino_idle.png", 288, 160);
+      sheet("mino-walk", "mino_walk.png", 288, 160);
+      sheet("mino-attack", "mino_attack.png", 288, 160);
+    } else {
+      // the Hoarfrost Warden (Frost_Guardian_FREE_v1.0) — a full set
+      sheet("frost-idle", "frost_idle.png", 192, 128);
+      sheet("frost-walk", "frost_walk.png", 192, 128);
+      sheet("frost-attack", "frost_attack.png", 192, 128);
+      sheet("frost-hurt", "frost_hurt.png", 192, 128);
+      sheet("frost-death", "frost_death.png", 192, 128);
+    }
     // world backdrop for the current biome: parallax layers + floor atlas (meta.biome picks the set)
     this.world = RUN_BIOMES[loadMeta().biome] ?? RUN_BIOMES.plains;
     const img = (key: string, file: string) => {
@@ -574,6 +765,7 @@ class GameScene extends Phaser.Scene {
     this.meta = loadMeta();
     // forge + study bite all run; the zone fields its own bestiary
     this.run = newRun(this.meta.swordLevel, forgeCap(this.meta.biome), this.meta.biome, this.meta.staffLevel);
+    this.boss = bossForBiome(this.meta.biome); // each road has its own warden and its own game
     this.chestsOpened = 0;
     this.busy = false;
     this.down = null;
@@ -584,6 +776,8 @@ class GameScene extends Phaser.Scene {
     // no weather underground; the pass snows instead of raining
     this.rainy = this.meta.biome === "snow" || this.meta.biome === "dungeon" ? false : Math.random() < RAIN_CHANCE;
     this.heroLockX = false;
+    this.heroKnock = 0;
+    this.bossHold = false;
     this.overShown = false;
     this.runCompleteShown = false;
     this.lastScoreShown = 0;
@@ -613,6 +807,9 @@ class GameScene extends Phaser.Scene {
     this.arenaActive = false;
     this.arenaGen++;
     this.arenaObjs = [];
+    this.arenaTimers = [];
+    this.swipeTargets = [];
+    this.swipeFrom = null;
     this.arenaWard = 0;
     this.arenaDealIdx = 0;
     this.arenaDealsDone = 0;
@@ -669,6 +866,7 @@ class GameScene extends Phaser.Scene {
     // the road's song under it all (the boss swaps in his own war-drums);
     // underground, the deep hums its own uneasy tune
     this.music = null;
+    this.fadingSounds = [];
     this.playMusic(this.roadMusicKey(), 0.26, 1600);
     const onAudio = () => {
       if (this.amb) {
@@ -683,10 +881,12 @@ class GameScene extends Phaser.Scene {
     this.game.events.on("audio-changed", onAudio);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off("audio-changed", onAudio);
-      this.amb?.stop();
+      this.killSound(this.amb);
       this.amb = null;
-      this.music?.stop();
+      this.killSound(this.music);
       this.music = null;
+      for (const s of this.fadingSounds) this.killSound(s); // caught mid-fade — the tween won't outlive us
+      this.fadingSounds = [];
     });
 
     // pause menu: Esc (desktop) or the ☰ chip (see buildPanels)
@@ -750,7 +950,17 @@ class GameScene extends Phaser.Scene {
       this.tutorial.start();
     }
 
+    this.installSwipeReader();
+
     if (import.meta.env.DEV) (globalThis as unknown as { __mb: GameScene }).__mb = this;
+
+    // the dev bar restarted us to reach this road's warden — put him on the lane
+    if (this.devJumpBoss && import.meta.env.DEV) {
+      this.devJumpBoss = false;
+      this.tutorial = null;
+      this.run.block = 6; // arriving at a boss with no guard makes every miss lethal — not a useful test
+      this.time.delayedCall(300, () => this.debugBoss());
+    }
   }
 
   private buildAnims() {
@@ -809,12 +1019,32 @@ class GameScene extends Phaser.Scene {
     }
     mk("goblin-throw", "goblin-throw", 0, 11, 14, 0); // the goblin's bomb hurl (Attack3)
     mk("goblin-bomb-spin", "goblin-bomb", 0, 18, 22, -1); // the thrown bomb, fuse burning
-    // boss anims plug into the same `${orcAnim}-*` key scheme the slimes use
-    mk("boss-idle", "boss-idle", 0, 7, 8, -1);
-    mk("boss-walk", "boss-move", 0, 7, 10, -1);
-    mk("boss-attack", "boss-attack", 0, 7, 14, 0);
-    mk("boss-hurt", "boss-hurt", 0, 3, 12, 0);
-    mk("boss-death", "boss-death", 0, 4, 10, 0);
+    // boss anims plug into the same `${orcAnim}-*` key scheme the slimes use.
+    // Only the zone's own warden was preloaded, so build against what exists.
+    if (this.textures.exists("boss-idle")) {
+      mk("boss-idle", "boss-idle", 0, 7, 8, -1);
+      mk("boss-walk", "boss-move", 0, 7, 10, -1);
+      mk("boss-attack", "boss-attack", 0, 7, 14, 0);
+      mk("boss-hurt", "boss-hurt", 0, 3, 12, 0);
+      mk("boss-death", "boss-death", 0, 4, 10, 0);
+    }
+    if (this.textures.exists("mino-idle")) {
+      // Gorrach: 16-frame breathing idle, 12-frame stomp, 16-frame axe swing.
+      // No hurt/death art — hurt reuses the idle head (the white flash sells the
+      // hit) and death reuses idle under killOrc's topple.
+      mk("mino-idle", "mino-idle", 0, 15, 12, -1);
+      mk("mino-walk", "mino-walk", 0, 11, 12, -1);
+      mk("mino-attack", "mino-attack", 0, 15, 20, 0);
+      mk("mino-hurt", "mino-idle", 0, 1, 8, 0);
+      mk("mino-death", "mino-idle", 0, 0, 1, 0);
+    }
+    if (this.textures.exists("frost-idle")) {
+      mk("frost-idle", "frost-idle", 0, 5, 7, -1);
+      mk("frost-walk", "frost-walk", 0, 9, 11, -1);
+      mk("frost-attack", "frost-attack", 0, 13, 16, 0);
+      mk("frost-hurt", "frost-hurt", 0, 6, 14, 0);
+      mk("frost-death", "frost-death", 0, 15, 12, 0);
+    }
   }
 
   /** Crop a seamless ground slice (grass top + dirt, no rocky side edges) from the biome floor atlas. */
@@ -1021,6 +1251,7 @@ class GameScene extends Phaser.Scene {
     // the whole board mid-run ("my board just reset?!"), so the gear ships hidden
     if (import.meta.env.DEV) this.gearText.setInteractive({ useHandCursor: true }).on("pointerdown", () => this.debugCombo());
     else this.gearText.setVisible(false);
+    this.buildDevBar();
     this.rotateHint = this.add
       .text(0, 0, "↻ rotate to landscape", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
       .setOrigin(0.5, 0)
@@ -1322,13 +1553,26 @@ class GameScene extends Phaser.Scene {
       this.floor.tilePositionX += d / this.floor.tileScaleX;
     }
 
+    this.drawSwipeTrail();
+
     const heroX = this.heroXForPressure();
-    if (!this.heroLockX) this.hero.x = heroX; // held put while a killing swing lands
+    // a blow leaves the hero reeling: he is driven back off his mark and walks
+    // it off, so losing ground is something you SEE, not just a bar moving
+    if (this.heroKnock > 0) this.heroKnock = Math.max(0, this.heroKnock - (delta / 1000) * KNOCK_RECOVER);
+    if (!this.heroLockX) this.hero.x = heroX - this.heroKnock; // held put while a killing swing lands
     // enemy pushes the hero toward the skull. NOT while it's dying: a killing
     // blow drops pressure instantly, and chaining the corpse to the new heroX
     // would teleport it forward (visible during a spell kill's bolt flight) —
     // the dead stay where they fell; the hero surges up past them instead.
     if (this.orc && this.phase === "fight" && !this.orcDying) this.orc.x = heroX + this.orcGap;
+    // ...and in the ARENA the boss presses his advantage. Without this he stayed
+    // planted while pressure dragged the hero leftwards, so the stance silently
+    // stretched across the lane and the fight stopped reading as a fight. He
+    // closes smoothly rather than snapping, so it looks like him advancing.
+    else if (this.orc && this.phase === "arena" && !this.orcDying && !this.bossHold && this.run.enemy?.kind === "boss") {
+      const want = this.hero.x + this.orcGap;
+      this.orc.x = Phaser.Math.Linear(this.orc.x, want, Math.min(1, (delta / 1000) * BOSS_CLOSE_RATE));
+    }
     if (this.orc) {
       const barY = GROUND_Y - (this.orcRig?.barOff ?? 56); // clear each creature's head
       this.enemyHpBg.setPosition(this.orc.x, barY);
@@ -1485,7 +1729,7 @@ class GameScene extends Phaser.Scene {
     if (this.phase !== "chest" && !this.chest) {
       k++;
       sc++;
-      if (this.run.enemy?.kind === "boss" || (this.orcAnim === "boss" && this.orc)) sc = CHEST_EVERY; // his hoard follows him out
+      if (this.run.enemy?.kind === "boss" || (this.orcAnim === this.boss.key && this.orc)) sc = CHEST_EVERY; // his hoard follows him out
     }
     while (out.length < n) {
       if (sc >= CHEST_EVERY && chestHasRoom) {
@@ -1587,7 +1831,7 @@ class GameScene extends Phaser.Scene {
 
   private enterFight() {
     if (this.run.over || !this.orc || this.orcDying) return;
-    if (this.orcAnim === "boss") {
+    if (this.orcAnim === this.boss.key) {
       this.startBossArena(); // Malgrim doesn't trade blows — he plays his shell game
       return;
     }
@@ -1596,40 +1840,43 @@ class GameScene extends Phaser.Scene {
     this.hero.play("hero-idle", true);
   }
 
-  /** ===== THE BOSS ===== the Cindermage strides in under a darkening sky. */
+  /** ===== THE BOSS ===== the zone's warden strides in under a darkening sky. */
   private spawnBoss() {
     if (this.run.over) return;
+    const B = this.boss;
     this.orcDying = false;
     this.phase = "advance";
-    this.orcAnim = "boss";
-    this.orcRig = null; // the boss has real death frames — clear any creature rig (no fake topple)
+    this.orcAnim = B.key;
+    // Gorrach's pack ships no death frames — rig a fake topple for him; the
+    // others fall properly, so clear the rig.
+    this.orcRig = B.hasDeath ? null : { prefix: B.key, idleTex: `${B.key}-idle`, scale: B.scale, origin: B.origin, fakeDeath: true, flat: true };
     this.orcDefense = this.run.enemy?.defense ?? "ward"; // his wards drink magic — bring a blade
     this.defenseTaught = false;
     this.defBadge.setVisible(false); // the boss bar carries his ward mark instead
-    this.orcGap = BOSS_ENGAGE_GAP;
+    this.orcGap = B.gap;
     this.hero.play("hero-walk", true);
     this.sfx("summon", 0.55, 0.9);
     buzz(30);
     this.playMusic("music_boss", 0.32, 1200); // his war-drums drown the road's song
 
     // the lane darkens for his approach; the veil lifts as he plants his staff
-    const veil = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x1a0505, 0).setDepth(20));
+    const veil = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, B.veil, 0).setDepth(20));
     this.tweens.add({ targets: veil, fillAlpha: 0.38, duration: 800 });
 
     const orc = this.inBox(
       this.add
-        .sprite(ENTER_X, GROUND_Y, "boss-idle")
-        .setOrigin(0.5, BOSS_ORIGIN)
-        .setScale(BOSS_SCALE)
-        .setFlipX(true) // pack faces right; he walks in from the right, glaring left
-        .play("boss-walk"),
+        .sprite(ENTER_X, GROUND_Y, `${B.key}-idle`)
+        .setOrigin(0.5, B.origin)
+        .setScale(B.scale)
+        .setFlipX(B.faceLeft) // he walks in from the right and must glare left, at the hero
+        .play(`${B.key}-walk`),
     );
     this.orc = orc;
 
     // name banner over the lane while he closes the distance
     const nm = this.inBox(
       this.add
-        .text(CXC, LANE_Y + 64, BOSS_NAME, {
+        .text(CXC, LANE_Y + 64, B.name, {
           fontFamily: "monospace",
           fontStyle: "bold",
           fontSize: "30px",
@@ -1642,7 +1889,7 @@ class GameScene extends Phaser.Scene {
         .setScale(0.3)
         .setAlpha(0),
     );
-    nm.setTint(0xfff2d0, 0xffd280, 0xf2903b, 0xc9581f); // ember gradient
+    nm.setTint(...B.nameTint); // ember for the mage, hide-and-bronze for the bull, glacier for the warden
     this.tweens.add({ targets: nm, alpha: 1, scale: 1, duration: 420, ease: "Back.easeOut", delay: 300 });
     this.tweens.add({ targets: nm, alpha: 0, y: nm.y - 20, duration: 500, delay: 2600, onComplete: () => nm.destroy() });
 
@@ -1669,7 +1916,7 @@ class GameScene extends Phaser.Scene {
     const BH = 13;
     const root = this.add.container(CXC, LANE_Y + 30).setDepth(31);
     const label = this.add
-      .text(0, -10, `☠ ${BOSS_NAME} · 🛡🪄`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "13px", color: "#ffb3a0" })
+      .text(0, -10, `☠ ${this.boss.name} · ${this.boss.wardMark}`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "13px", color: "#ffb3a0" })
       .setOrigin(0.5, 1);
     const bg = this.add.rectangle(0, 0, BW, BH, 0x000000, 0.6).setStrokeStyle(2, 0x8a2d2d);
     const fill = this.add.rectangle(-BW / 2 + 2, 0, BW - 4, BH - 4, 0xe05a5a).setOrigin(0, 0.5);
@@ -2180,15 +2427,36 @@ class GameScene extends Phaser.Scene {
    * sound's config follows the fade — a loop restart mid-fade can't pop it
    * back to its old level.
    */
+  /**
+   * Stop a track for good. `destroy` (not just `stop`) so it leaves the sound
+   * manager — every run adds its own bed + song, and restarts would otherwise
+   * pile up silent Sound objects for the whole session.
+   */
+  private killSound(snd: Phaser.Sound.BaseSound | null) {
+    if (!snd) return;
+    this.tweens.killTweensOf(snd); // no fade tween left to poke a destroyed sound
+    snd.stop();
+    snd.destroy();
+  }
+
   private fadeSoundOut(snd: Phaser.Sound.BaseSound, ms: number) {
     this.tweens.killTweensOf(snd);
     const from = (snd as unknown as { volume: number }).volume;
+    // A fading track is no longer `this.music`, so SHUTDOWN's `this.music.stop()`
+    // can't reach it — and a scene restart mid-fade kills the tween before it
+    // ever stops the sound, leaving it looping under the next scene's song.
+    // Park it here so shutdown can always finish the job.
+    this.fadingSounds.push(snd);
+    const drop = () => {
+      this.killSound(snd);
+      this.fadingSounds = this.fadingSounds.filter((s) => s !== snd);
+    };
     this.tweens.addCounter({
       from,
       to: 0,
       duration: ms,
       onUpdate: (tw) => setSoundLevel(snd, tw.getValue() ?? 0),
-      onComplete: () => snd.stop(),
+      onComplete: drop,
     });
   }
 
@@ -2328,7 +2596,7 @@ class GameScene extends Phaser.Scene {
   }
 
   private killOrc(afterMs = 760) {
-    const wasBoss = this.orcAnim === "boss";
+    const wasBoss = this.orcAnim === this.boss.key;
     if (!wasBoss) this.sfx("death", 0.16); // slime death — kept well in the background
     this.orcDying = true;
     this.spursActive = false; // per-foe item effects die with the foe
@@ -2379,7 +2647,7 @@ class GameScene extends Phaser.Scene {
       });
     }
     if (wasBoss) {
-      this.bossSpoils(dying?.x ?? SAFE_X + BOSS_ENGAGE_GAP);
+      this.bossSpoils(dying?.x ?? SAFE_X + this.boss.gap);
       // his drums die with him: the road's song returns — unless the road is done
       if (this.run.killed < RUN_COMPLETE_AT) this.playMusic(this.roadMusicKey(), 0.26, 1600);
       else this.fadeOutMusic(1400);
@@ -2529,6 +2797,124 @@ class GameScene extends Phaser.Scene {
     this.refreshHud();
   }
 
+  // ---- DEV boss bar ---------------------------------------------------------
+  // A strip of jump buttons along the bottom edge, built only in DEV builds.
+  // The three wardens live on different roads, so jumping to one means writing
+  // meta.biome and restarting the run — preload() re-reads the biome and pulls
+  // that boss's sheets. The stage buttons skip straight into an arena beat.
+
+  /**
+   * DEV only: build the boss-jump strip.
+   *
+   * It's a DOM overlay, not Phaser text, on purpose: two of the arenas listen
+   * on screen-wide tap catchers (Lock Horns, fireball tennis), and an in-canvas
+   * button sitting under one of those gets its tap eaten by the fight instead —
+   * clicking "WARDEN" mid-Lock-Horns just registered as a missed shove. A DOM
+   * layer sits above the canvas entirely, so it always wins.
+   */
+  private buildDevBar() {
+    if (!import.meta.env.DEV) return;
+    document.getElementById("mb-devbar")?.remove(); // a scene restart rebuilds it
+    const el = document.createElement("div");
+    el.id = "mb-devbar";
+    el.style.cssText =
+      "position:fixed;left:6px;bottom:6px;z-index:2147483000;display:flex;gap:4px;flex-wrap:wrap;pointer-events:none;font:bold 12px system-ui,sans-serif";
+    const mk = (label: string, colour: string, fn: () => void) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.style.cssText =
+        `pointer-events:auto;cursor:pointer;background:#0c0f16ee;color:${colour};` +
+        "border:1px solid #2a2d38;border-radius:4px;padding:4px 8px;font:inherit";
+      b.addEventListener("pointerdown", (e) => e.stopPropagation()); // never reaches the board/arena beneath
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fn();
+      });
+      el.appendChild(b);
+    };
+    mk("☠ MALGRIM", "#ffd280", () => this.debugBossIn("plains"));
+    mk("☠ GORRACH", "#f0b070", () => this.debugBossIn("forest"));
+    mk("☠ WARDEN", "#bfe8ff", () => this.debugBossIn("snow"));
+    mk("▸ I", "#9fe6a0", () => this.debugArenaStage(0));
+    mk("▸ II", "#9fe6a0", () => this.debugArenaStage(1));
+    mk("▸ III", "#9fe6a0", () => this.debugArenaStage(2));
+    mk("▸ FINISH", "#ff9d6a", () => this.debugArenaStage(3));
+    mk("+9 guard", "#bfe0ff", () => {
+      this.run.block += 9; // every stage punishes misses with a real strike — bank guard for a long study session
+      this.refreshHud();
+      this.notice("+9 GUARD", "#bfe0ff");
+    });
+    document.body.appendChild(el);
+    this.events.once("shutdown", () => el.remove());
+    this.events.once("destroy", () => el.remove());
+  }
+
+  /**
+   * DEV: start a fresh run on `biome` with the first foe rigged as its warden.
+   * Writes meta so preload() pulls the right boss sheets, then restarts.
+   */
+  public debugBossIn(biome: string) {
+    const m = loadMeta();
+    m.biome = biome;
+    m.tutorialSeen = true; // the tutorial gates the board and would sit on top of the arena
+    saveMeta(m);
+    this.arenaGen++; // orphan any in-flight arena timers from the run we're abandoning
+    this.arenaActive = false;
+    // hard stop, not a fade: we're restarting this instant, and a fade tween
+    // would die with the scene and leave the old track looping under the new one
+    this.killSound(this.music);
+    this.music = null;
+    for (const s of this.fadingSounds) this.killSound(s);
+    this.fadingSounds = [];
+    this.scene.start("game", { bossJump: true });
+  }
+
+  /**
+   * DEV: skip to a beat of the CURRENT boss's arena (0/1/2 = his three stages,
+   * 3 = the exposed-and-execute finish). Rigs the boss first if he isn't up.
+   */
+  public debugArenaStage(n: number) {
+    if (!this.arenaActive) {
+      this.debugBoss();
+      this.time.delayedCall(3400, () => this.debugArenaStage(n)); // let him walk in and the board retract
+      return;
+    }
+    // bump the generation so whatever stage the arena was about to open on its
+    // own bails out — otherwise the jump and the natural opening both run
+    const gen = ++this.arenaGen;
+    this.clearArenaObjs();
+    void this.hideBoard(); // we may have jumped in before the board finished retracting
+    this.arenaWard = n;
+    this.arenaDealIdx = 0;
+    this.arenaWardMissed = false;
+    if (n >= 3) {
+      this.arenaDealsDone = this.boss.steps;
+      this.drainBossBar();
+      this.arenaExecution(gen);
+      return;
+    }
+    if (this.boss.arena === "goring") {
+      // 3 charges, then 3 routes, then 5 shoves
+      this.arenaDealsDone = n === 0 ? 0 : n === 1 ? GORE_CHARGES.length : GORE_CHARGES.length + ROPE_ROUNDS;
+      this.drainBossBar();
+      if (n === 0) this.goringCharge(gen, 0);
+      else if (n === 1) this.goringParry(gen, 0);
+      else this.goringHorns(gen);
+    } else if (this.boss.arena === "rimes") {
+      this.arenaDealsDone = n === 0 ? 0 : n === 1 ? 3 : 6;
+      this.drainBossBar();
+      if (n === 0) this.rimeIce(gen);
+      else if (n === 1) this.rimeWhiteout(gen, 0);
+      else this.rimeHeart(gen);
+    } else {
+      this.arenaDealsDone = n * 3;
+      this.drainBossBar();
+      if (n === 0) this.emberCourt(gen, 0);
+      else if (n === 1) this.emberFall(gen, 0);
+      else this.startTennis(gen);
+    }
+  }
+
   /** Dev: rig the next foe to be the boss (console: __mb.debugBoss()). */
   public debugBoss() {
     this.run.killed = BOSS_EVERY - 1;
@@ -2556,19 +2942,29 @@ class GameScene extends Phaser.Scene {
       o.destroy();
     }
     this.arenaObjs = [];
+    for (const t of this.arenaTimers) t.remove(false);
+    this.arenaTimers = [];
+    this.swipeTargets = [];
+    this.swipeFrom = null;
   }
 
-  /** Even spread of portal mouths across the retracted board's rect. */
-  private arenaPortalSpots(n: number): { x: number; y: number }[] {
-    const rows = n <= 3 ? 1 : n <= 6 ? 2 : 3;
-    const cols = 3;
-    const out: { x: number; y: number }[] = [];
-    for (let r = 0; r < rows; r++)
-      for (let c = 0; c < cols; c++)
-        out.push({ x: GRID_X + ((c + 0.5) / cols) * GRID_W, y: GRID_Y + ((r + 0.5) / rows) * GRID_H });
-    return out;
+  /** Register a looping arena clock so the next stage (or death) stops it. */
+  private aTimer(t: Phaser.Time.TimerEvent) {
+    this.arenaTimers.push(t);
+    return t;
   }
 
+  /** Register an arena prop so teardown (and death mid-fight) can sweep it up. */
+  private aReg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
+    this.arenaObjs.push(o);
+    return o;
+  };
+
+  /**
+   * The board retracts and the zone's warden takes over the screen. Which game
+   * gets played is the boss's own business (BossDef.arena) — this only sets up
+   * the shared state and hands off once the last cascade has settled.
+   */
   private startBossArena() {
     this.arenaActive = true;
     const gen = ++this.arenaGen;
@@ -2577,20 +2973,25 @@ class GameScene extends Phaser.Scene {
     this.arenaDealIdx = 0;
     this.arenaDealsDone = 0;
     this.arenaWardMissed = false;
-    this.orc?.play("boss-idle");
+    this.bossHold = false;
+    this.orc?.play(`${this.boss.key}-idle`);
     this.hero.play("hero-idle", true);
-    this.notice("MALGRIM'S INFERNAL SHELL GAME", "#ff9d6a");
+    const banner =
+      this.boss.arena === "shells" ? "MALGRIM'S INFERNAL SHELL GAME" : this.boss.arena === "goring" ? "THE GORING RUN" : "THE THREE RIMES";
+    this.notice(banner, this.boss.accent);
 
-    // he quits the lane in a burst of embers — the game moves to the portals
-    this.time.delayedCall(600, () => {
-      if (gen !== this.arenaGen || !this.orc) return;
-      this.sfx("spell", 0.5, 0.8);
-      const puff = this.inBox(
-        this.add.image(this.orc.x, GROUND_Y - 40, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff8a4a).setScale(1).setDepth(30),
-      );
-      this.tweens.add({ targets: puff, scale: 3, alpha: 0, duration: 450, onComplete: () => puff.destroy() });
-      this.tweens.add({ targets: this.orc, alpha: 0, duration: 300 });
-    });
+    // Malgrim quits the lane in a burst of embers — the brutes stay put and
+    // fight from where they stand, so only he dissolves here.
+    if (this.boss.arena === "shells")
+      this.time.delayedCall(600, () => {
+        if (gen !== this.arenaGen || !this.orc) return;
+        this.sfx("spell", 0.5, 0.8);
+        const puff = this.inBox(
+          this.add.image(this.orc.x, GROUND_Y - 40, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff8a4a).setScale(1).setDepth(30),
+        );
+        this.tweens.add({ targets: puff, scale: 3, alpha: 0, duration: 450, onComplete: () => puff.destroy() });
+        this.tweens.add({ targets: this.orc, alpha: 0, duration: 300 });
+      });
 
     void (async () => {
       while (this.busy) await this.arenaWait(120); // let any final cascade settle first
@@ -2598,238 +2999,693 @@ class GameScene extends Phaser.Scene {
       await this.hideBoard();
       await this.arenaWait(420);
       if (gen !== this.arenaGen || this.run.over) return;
-      this.showWardIntro(gen);
+      if (this.boss.arena === "goring") this.goringIntro(gen);
+      else if (this.boss.arena === "rimes") this.rimesIntro(gen);
+      else this.malgrimIntro(gen);
     })();
   }
 
-  /** Announce the ward's rules (each ward is a new game), then deal. */
-  private showWardIntro(gen: number) {
+  /**
+   * A stage of any boss arena falls: fanfare, the flawless refund, his taunt,
+   * then on to whatever comes next. Every warden's stage ends through here, so
+   * the beat between games is identical no matter whose fight you are in.
+   */
+  private arenaStageClear(gen: number, msg: string, taunt: string, next: () => void, gapMs = 1900) {
+    if (gen !== this.arenaGen) return;
+    const flawless = !this.arenaWardMissed;
+    this.drainBossBar();
+    this.cameras.main.shake(240, 0.008);
+    this.sfx(`combo${Math.min(5, 3 + this.arenaWard)}`, 0.55);
+    this.notice(msg, this.boss.accent);
+    if (flawless) {
+      this.run.block += 1; // unmarked through the whole stage — a guard charge comes back
+      this.refreshHud();
+      this.time.delayedCall(700, () => {
+        if (gen === this.arenaGen) this.floatGuard(this.hero.x + 24, GROUND_Y - 90, 1);
+      });
+    }
+    this.clearArenaObjs();
+    this.arenaWard++;
+    this.arenaDealIdx = 0;
+    this.arenaWardMissed = false;
+    if (taunt)
+      this.time.delayedCall(950, () => {
+        if (gen === this.arenaGen && this.arenaActive) this.notice(taunt, this.boss.accent);
+      });
+    this.time.delayedCall(gapMs, () => {
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+      next();
+    });
+  }
+
+  /** Title card for a stage: name, then the rules, then the game starts. */
+  private arenaStageIntro(gen: number, title: string, sub: string, start: () => void) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-    const w = ARENA_WARDS[this.arenaWard];
-    this.notice(w.title, "#ffd24a");
+    this.notice(title, "#ffd24a");
     this.time.delayedCall(850, () => {
       if (gen !== this.arenaGen) return;
-      this.notice(w.sub, "#ffd7a0");
+      this.notice(sub, "#ffd7a0");
     });
-    this.time.delayedCall(1650, () => {
+    this.time.delayedCall(1700, () => {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-      if (this.arenaWard === 2) this.startTennis(gen); // the final ward is a duel, not a deal
-      else this.playArenaDeal(gen);
+      start();
     });
   }
 
-  /** One deal of the shell game — retried on a miss, advanced on a hit. */
-  private playArenaDeal(gen: number) {
-    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-    const cfg = ARENA_WARDS[this.arenaWard].deals[this.arenaDealIdx];
-    const spots = this.arenaPortalSpots(cfg.portals);
-    const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
-      this.arenaObjs.push(o);
-      return o;
-    };
+  /** The warden reels from a landed blow (or just flashes, if his pack has no hurt art). */
+  private bossReact() {
+    if (!this.orc || this.orcDying) return;
+    const k = this.boss.key;
+    if (this.boss.hasHurt) {
+      this.orc.play(`${k}-hurt`).once("animationcomplete", () => {
+        if (this.orc && this.orcAnim === k && !this.orcDying) this.orc.play(`${k}-idle`);
+      });
+    } else {
+      this.orc.setTintFill(0xffffff);
+      this.time.delayedCall(90, () => this.orc?.clearTint());
+      this.tweens.add({ targets: this.orc, x: this.orc.x + 14, duration: 90, yoyo: true, ease: "Quad.easeOut" });
+    }
+    this.cameras.main.shake(180, 0.006);
+  }
 
-    // burning portals flare up across the retracted board
-    const havePortalTex = this.textures.exists("portal");
-    spots.forEach((s, i) => {
-      const p = havePortalTex
-        ? reg(this.inBox(this.add.sprite(s.x, s.y + 26, "portal").setTint(0xff9a5a).setScale(0).setDepth(40).play("portal-spin")))
-        : reg(this.inBox(this.add.image(s.x, s.y + 26, "orb").setTint(0xff7a3a).setScale(0).setDepth(40)));
-      this.tweens.add({ targets: p, scale: havePortalTex ? 1.6 : 2.2, duration: 260, delay: i * 40, ease: "Back.easeOut" });
+  /** He swings/casts, then drops back to idle. */
+  private bossSwing() {
+    if (!this.orc || this.orcDying) return;
+    const k = this.boss.key;
+    this.orc.play(`${k}-attack`).once("animationcomplete", () => {
+      if (this.orc && this.orcAnim === k && !this.orcDying) this.orc.play(`${k}-idle`);
     });
-    this.sfx("summon", 0.35, 1.25);
+  }
 
-    void (async () => {
-      await this.arenaWait(520);
-      if (gen !== this.arenaGen || this.run.over) return;
+  /** The arena's playfield: the rect the retracted board left behind. */
+  private arenaRect() {
+    return { x: GRID_X, y: GRID_Y, w: GRID_W, h: GRID_H, cx: GRID_X + GRID_W / 2, cy: GRID_Y + GRID_H / 2 };
+  }
 
-      // feints: ghostly hops before he settles (tapping ghosts does nothing)
-      for (let h = 0; h < cfg.hops; h++) {
-        const at = spots[(Math.random() * spots.length) | 0];
-        const ghost = reg(
-          this.inBox(
-            this.add
-              .sprite(at.x, at.y + 24, "boss-idle")
-              .setOrigin(0.5, BOSS_ORIGIN)
-              .setScale(0.8)
-              .setFlipX(true)
-              .setAlpha(0.45)
-              .setTint(0xffc9a0)
-              .setDepth(41),
-          ),
-        );
-        this.sfx("spell", 0.3, 1.3 + h * 0.15);
-        this.tweens.add({ targets: ghost, alpha: 0, duration: 300, delay: 120 });
-        await this.arenaWait(340);
-        ghost.destroy();
-        if (gen !== this.arenaGen || this.run.over) return;
-      }
+  // ---- the grammar's shared parts -------------------------------------------
+  // Everything below is boss-agnostic on purpose: the wardens differ in theme
+  // and staging, never in vocabulary. See the G_* colours up top.
 
-      // the deal: one real Malgrim, cfg.decoys burning fakes
-      const order = Phaser.Utils.Array.Shuffle(spots.map((_, i) => i));
-      const realIdx = order[0];
-      const decoyIdxs = order.slice(1, 1 + cfg.decoys);
-      type Figure = { fig: Phaser.GameObjects.Sprite; glow: Phaser.GameObjects.Image | null; isReal: boolean };
-      const figures: Figure[] = [];
-      let stage: "watch" | "live" = "watch";
-      let settled = false;
-      let castTween: Phaser.Tweens.Tween | null = null;
-      const settle = () => {
-        if (settled || gen !== this.arenaGen) return false;
-        settled = true;
-        castTween?.stop();
-        return true;
-      };
-      const realOf = () => figures.find((f) => f.isReal)!;
-
-      const mkFigure = (i: number, isReal: boolean) => {
-        const s = spots[i];
-        let glow: Phaser.GameObjects.Image | null = null;
-        if (!isReal) {
-          glow = reg(
-            this.inBox(this.add.image(s.x, s.y - 14, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff4030).setScale(1.7).setAlpha(0.3).setDepth(40)),
-          );
-          this.tweens.add({ targets: glow, alpha: 0.14, duration: 420, yoyo: true, repeat: -1 });
-        }
-        const fig = reg(
-          this.inBox(
-            this.add
-              .sprite(s.x, s.y + 24, "boss-idle")
-              .setOrigin(0.5, BOSS_ORIGIN)
-              .setScale(0.4)
-              .setFlipX(true)
-              .setDepth(42)
-              .play("boss-idle"),
-          ),
-        );
-        if (!isReal) fig.setTint(0xff6a55); // decoys burn red (until the cloak)
-        this.tweens.add({ targets: fig, scale: 0.85, duration: 200, ease: "Back.easeOut" });
-        const entry: Figure = { fig, glow, isReal };
-        fig.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-          if (stage !== "live") return; // no taps while he's still dealing
-          if (entry.isReal) this.arenaHit(gen, settle, fig, castFrac());
-          else this.arenaFail(gen, settle, "decoy", realOf().fig, fig);
-        });
-        figures.push(entry);
-        return entry;
-      };
-
-      for (const d of decoyIdxs) mkFigure(d, false);
-      const real = mkFigure(realIdx, true);
-      this.sfx(this.pick(["squish1", "squish2"]), 0.2, 1.3);
-
-      // the tell: a cyan glint off the true staff (longer when he's about to shuffle)
-      await this.arenaWait(240);
-      if (gen !== this.arenaGen || settled) return;
-      const glint = reg(
-        this.inBox(
-          this.add.image(real.fig.x + 10, real.fig.y - 58, "spark").setBlendMode(Phaser.BlendModes.ADD).setTint(0x8ff4ff).setScale(0.6).setAlpha(0).setDepth(43),
-        ),
-      );
-      this.tweens.add({ targets: glint, alpha: 1, scale: 1.6, duration: 130, yoyo: true, repeat: cfg.swaps > 0 ? 4 : 2, onComplete: () => glint.destroy() });
-      this.sfx("pickup", 0.3, 1.5);
-
-      // WARD II: everyone cloaks to the same flame, then the shuffle — TRACK him
-      if (cfg.swaps > 0) {
-        await this.arenaWait(760); // let the glint be seen
-        if (gen !== this.arenaGen || settled) return;
-        for (const f of figures) {
-          f.fig.setTint(0xb06a48); // identical cloaks — colour tells you nothing now
-          f.glow?.destroy();
-          f.glow = null;
-        }
-        this.sfx("spell", 0.35, 0.9);
-        for (let sw = 0; sw < cfg.swaps; sw++) {
-          const a = figures[(Math.random() * figures.length) | 0];
-          let b = a;
-          while (b === a) b = figures[(Math.random() * figures.length) | 0];
-          const ax = a.fig.x, ay = a.fig.y, bx = b.fig.x, by = b.fig.y;
-          this.sfx("spell", 0.3, 1.35 + sw * 0.1);
-          // a squash-dip while the pair trade places (position and scale on separate tweens)
-          this.tweens.add({ targets: [a.fig, b.fig], scale: 0.68, duration: 180, yoyo: true, ease: "Sine.easeInOut" });
-          this.tweens.add({ targets: a.fig, x: bx, y: by, duration: 360, ease: "Sine.easeInOut" });
-          this.tweens.add({ targets: b.fig, x: ax, y: ay, duration: 360, ease: "Sine.easeInOut" });
-          await this.arenaWait(420);
-          if (gen !== this.arenaGen || settled) return;
-        }
-      }
-
-      // LIVE: his cast burns up the ember bar — the red tail is the crit gamble
-      stage = "live";
-      const barW = 320;
-      const bx0 = CXC - barW / 2;
-      const by0 = GRID_Y - 4;
-      reg(this.inBox(this.add.rectangle(CXC, by0, barW + 6, 16, 0x0a0b0f, 0.85).setDepth(44)));
-      reg(
+  /** The key, parked in a corner of the pit. Same three chips in every fight. */
+  private grammarLegend() {
+    const R = this.arenaRect();
+    const chips: [number, string, string][] = [
+      [G_GOLD, "●", "TAP"],
+      [G_BLUE, "╱", "CUT"],
+      [G_RED, "✖", "AVOID"],
+    ];
+    chips.forEach(([colour, glyph, word], i) => {
+      const x = R.x + 18 + i * 104;
+      const y = R.y + R.h - 20;
+      this.aReg(this.inBox(this.add.rectangle(x + 42, y, 96, 26, 0x0a0b0f, 0.75).setDepth(52)));
+      this.aReg(
         this.inBox(
           this.add
-            .rectangle(bx0 + barW * ARENA_CRIT_FRAC, by0, barW * (1 - ARENA_CRIT_FRAC), 12, 0x8a1f1f, 0.9)
-            .setOrigin(0, 0.5)
-            .setDepth(45),
+            .text(x + 42, y, `${glyph} ${word}`, {
+              fontFamily: EMOJI_FONT,
+              fontStyle: "bold",
+              fontSize: "14px",
+              color: `#${colour.toString(16).padStart(6, "0")}`,
+            })
+            .setOrigin(0.5)
+            .setDepth(53),
         ),
       );
-      const castFill = reg(this.inBox(this.add.rectangle(bx0, by0, barW, 10, 0xffa040).setOrigin(0, 0.5).setScale(0, 1).setDepth(46)));
-      const castFrac = () => castFill.scaleX;
-      castTween = this.tweens.add({
-        targets: castFill,
-        scaleX: 1,
-        duration: cfg.castMs,
-        onComplete: () => this.arenaFail(gen, settle, "timeout", realOf().fig, realOf().fig),
-      });
-    })();
+    });
   }
 
-  /** One incoming arena hit on the hero: guard turns it, otherwise the skull creeps. */
-  private arenaStrikeHero() {
-    const hadGuard = this.run.block > 0;
-    const blockBefore = this.run.block;
-    const net = enemyStrike(this.run);
-    this.refreshHud();
-    const used = blockBefore - this.run.block;
-    if (used > 1)
-      this.floatChip(this.hero.x + 28, GROUND_Y - 100, `-${used}🛡`, {
-        size: 20,
-        tint: [0xeef6ff, 0xbfe0ff, 0x6ea8e0, 0x3a6a9a],
-        stroke: "#050d16",
-        font: EMOJI_FONT,
+  /** Swung before the blow was there to meet: no damage, but you are committed. */
+  private earlySwing(x: number, y: number) {
+    // committing the blade early is the whole cost: the lockout usually eats the
+    // real window, so the punishment lands as a missed parry rather than as damage
+    this.swingLockUntil = this.time.now + EARLY_SWING_LOCK_MS;
+    this.playCombo(["hero-attack"], "hero-idle");
+    this.sfx("swing1", 0.24);
+    this.floatChip(x, y - 62, "too early!", { size: 17, tint: [0xd0d4dc, 0xb9c0cc, 0x8a8f98, 0x6a707c], stroke: "#14171f" });
+  }
+
+  /**
+   * An orb BREAKS: wedges of it spin off under gravity and fade. Used for taps
+   * and for a cut taken the wrong way — anything that smashes rather than slices.
+   */
+  private orbShatter(x: number, y: number, r: number, colour: number, pieces = 7, force = 1) {
+    for (let i = 0; i < pieces; i++) {
+      const a = (360 / pieces) * i + Math.random() * 24;
+      const rad = Phaser.Math.DegToRad(a);
+      const w = r * (0.34 + Math.random() * 0.3);
+      const shard = this.aReg(
+        this.inBox(
+          this.add
+            .triangle(x, y, 0, 0, w, -w * 0.5, w * 0.4, w * 0.7, colour, 0.95)
+            .setDepth(48)
+            .setAngle(a),
+        ),
+      );
+      const speed = (70 + Math.random() * 130) * force;
+      this.tweens.add({
+        targets: shard,
+        x: x + Math.cos(rad) * speed,
+        y: y + Math.sin(rad) * speed + 70, // gravity pulls the pieces down as they fly
+        angle: a + (Math.random() * 320 - 160),
+        alpha: 0,
+        scale: 0.35,
+        duration: 420 + Math.random() * 220,
+        ease: "Quad.easeOut",
+        onComplete: () => shard.destroy(),
       });
-    if (hadGuard && net <= 0) {
-      this.time.delayedCall(60, () => this.sfx(this.pick(["block1", "block2", "block3"]), 0.5));
-      this.showBlockImpact(true, true);
-    } else {
-      this.cameras.main.shake(260, 0.009);
-      this.hero.setTint(0xffa060);
-      this.time.delayedCall(200, () => this.hero.clearTint());
-      buzz(24);
+    }
+    const flash = this.aReg(this.inBox(this.add.circle(x, y, r * 0.9, 0xffffff, 0.85).setDepth(49)));
+    this.tweens.add({ targets: flash, scale: 1.7, alpha: 0, duration: 190, onComplete: () => flash.destroy() });
+  }
+
+  /**
+   * An orb is CLEAVED along the stroke: it falls into two halves that slide
+   * apart perpendicular to the cut, tumble, and drop away — the fruit-ninja
+   * read, so a clean slice never looks like a tap.
+   */
+  private orbCut(x: number, y: number, r: number, colour: number, ang: number) {
+    // the blade's path, flashed across the orb
+    const slash = this.aReg(
+      this.inBox(this.add.rectangle(x, y, r * 4.2, 5, 0xffffff, 0.95).setAngle(ang).setDepth(50)),
+    );
+    this.tweens.add({ targets: slash, alpha: 0, scaleX: 1.35, duration: 260, onComplete: () => slash.destroy() });
+
+    // two half-discs, split down the stroke
+    const half = (from: number, sign: number) => {
+      const piece = this.aReg(this.inBox(this.add.arc(x, y, r, from, from + 180, false, colour, 0.95).setDepth(48)));
+      const perp = Phaser.Math.DegToRad(ang + 90 * sign);
+      this.tweens.add({
+        targets: piece,
+        x: x + Math.cos(perp) * (r * 1.5),
+        y: y + Math.sin(perp) * (r * 1.5) + 80, // they part, then fall
+        angle: 45 * sign,
+        alpha: 0,
+        duration: 520,
+        ease: "Quad.easeOut",
+        onComplete: () => piece.destroy(),
+      });
+    };
+    half(ang, 1);
+    half(ang + 180, -1);
+    this.cameras.main.shake(110, 0.004);
+  }
+
+  /**
+   * The blade streak: a tapering ribbon along the last few drag points, drawn
+   * only while an arena actually wants cutting. It is what makes a swipe feel
+   * like a swing rather than a gesture the game happened to accept.
+   */
+  private drawSwipeTrail() {
+    const live = this.arenaActive && this.swipeTargets.length > 0;
+    if (!live) {
+      if (this.trailGfx) {
+        this.trailGfx.destroy();
+        this.trailGfx = null;
+      }
+      this.trailPts.length = 0;
+      return;
+    }
+    const now = this.time.now;
+    const p = this.input.activePointer;
+    if (p.isDown) {
+      const l = this.toLocal(p.x, p.y);
+      const last = this.trailPts[this.trailPts.length - 1];
+      if (!last || Phaser.Math.Distance.Between(last.x, last.y, l.x, l.y) > 6) this.trailPts.push({ x: l.x, y: l.y, t: now });
+    }
+    while (this.trailPts.length && now - this.trailPts[0].t > TRAIL_LIFE_MS) this.trailPts.shift();
+    if (!this.trailGfx) this.trailGfx = this.inBox(this.add.graphics().setDepth(62));
+    const g = this.trailGfx;
+    g.clear();
+    for (let i = 1; i < this.trailPts.length; i++) {
+      const a = this.trailPts[i - 1];
+      const b = this.trailPts[i];
+      const age = 1 - (now - b.t) / TRAIL_LIFE_MS; // newest segments are fattest and brightest
+      g.lineStyle(Math.max(1, 11 * age), 0xffffff, 0.65 * age);
+      g.lineBetween(a.x, a.y, b.x, b.y);
     }
   }
 
-  /** The boss bar is the ward meter — drain it to the current deals-done mark. */
+  /**
+   * A GOLD node: tap it once. Returns the circle so the stage can move it,
+   * time it out, or kill it. `onTap` fires at most once.
+   */
+  private goldNode(x: number, y: number, r: number, onTap: () => void, gate?: () => boolean) {
+    const g = this.aReg(
+      this.inBox(this.add.circle(x, y, r, G_GOLD, 0.9).setStrokeStyle(4, G_GOLD_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
+    );
+    let spent = false;
+    g.on("pointerdown", () => {
+      if (spent) return;
+      if (gate && !gate()) {
+        this.earlySwing(g.x, g.y); // struck before it was there to strike
+        return;
+      }
+      spent = true;
+      this.sfx("hit3", 0.5, 1.15);
+      this.orbShatter(g.x, g.y, r, G_GOLD, 7); // it BREAKS — shards, not a fade
+      g.destroy();
+      onTap();
+    });
+    this.tweens.add({ targets: g, scale: 1.08, duration: 380, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    return g;
+  }
+
+  /**
+   * A RED node: the lie among the gold. Tapping it is the mistake — it never
+   * rewards, it only ever costs, and it looks nothing like gold.
+   */
+  private redNode(x: number, y: number, r: number, onTouched: () => void) {
+    const g = this.aReg(
+      this.inBox(this.add.circle(x, y, r, G_RED, 0.85).setStrokeStyle(4, G_RED_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
+    );
+    let spent = false;
+    g.on("pointerdown", () => {
+      if (spent) return;
+      spent = true;
+      this.sfx("fireball1", 0.4, 0.8);
+      this.orbShatter(g.x, g.y, r, G_RED, 9, 1.5); // it bursts in your hand
+      g.destroy();
+      onTouched();
+    });
+    // red never pulses invitingly — it sits there and glowers
+    this.tweens.add({ targets: g, alpha: 0.65, duration: 520, yoyo: true, repeat: -1 });
+    return g;
+  }
+
+  /**
+   * Watch every drag so BLUE nodes can be cut. One reader for the whole scene:
+   * a drag is only judged when an arena is live and something is actually
+   * asking to be cut, so ordinary board swaps are never touched.
+   */
+  private installSwipeReader() {
+    this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      if (!this.arenaActive || !this.swipeTargets.length) return;
+      this.swipeFrom = this.toLocal(p.x, p.y);
+    });
+    this.input.on("pointerup", (p: Phaser.Input.Pointer) => {
+      const from = this.swipeFrom;
+      this.swipeFrom = null;
+      if (!from || !this.arenaActive || !this.swipeTargets.length) return;
+      const to = this.toLocal(p.x, p.y);
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      if (Math.hypot(dx, dy) < SWIPE_MIN) return; // a tap, not a cut
+      const ang = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
+      for (const t of [...this.swipeTargets]) {
+        if (!t.alive || !this.segHitsCircle(from.x, from.y, to.x, to.y, t.x, t.y, t.r)) continue;
+        t.alive = false; // the node re-arms itself if it was gated shut
+        if (Math.abs(Phaser.Math.Angle.ShortestBetween(ang, SWIPE_ANGLE[t.dir])) <= SWIPE_TOL) t.onHit(ang);
+        else t.onWrong?.();
+      }
+    });
+  }
+
+  /** Did the drag segment pass through this circle? */
+  private segHitsCircle(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, r: number) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const len2 = abx * abx + aby * aby || 1;
+    const t = Phaser.Math.Clamp(((cx - ax) * abx + (cy - ay) * aby) / len2, 0, 1);
+    return Phaser.Math.Distance.Between(ax + abx * t, ay + aby * t, cx, cy) <= r;
+  }
+
+  /**
+   * A BLUE node: cut across it the way its arrow points. Committed at an
+   * instant like a tap, but with a direction to read — that is the whole reason
+   * blue exists as a separate colour.
+   */
+  private swipeNode(x: number, y: number, r: number, dir: SwipeDir, onHit: () => void, onWrong?: () => void, gate?: () => boolean) {
+    const ring = this.aReg(this.inBox(this.add.circle(x, y, r, G_BLUE, 0.85).setStrokeStyle(4, G_BLUE_EDGE, 1).setDepth(44)));
+    const arrow = this.aReg(
+      this.inBox(
+        this.add
+          .text(x, y, SWIPE_GLYPH[dir], { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${Math.round(r * 1.5)}px`, color: "#ffffff" })
+          .setOrigin(0.5)
+          .setDepth(45),
+      ),
+    );
+    // a little drift along the cut line, so the direction reads without reading
+    const off = dir === "left" ? [-8, 0] : dir === "right" ? [8, 0] : dir === "up" ? [0, -8] : [0, 8];
+    this.tweens.add({ targets: arrow, x: x + off[0], y: y + off[1], duration: 420, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    const entry = { x, y, r: r + 14, dir, alive: true, onHit: (_ang: number) => {}, onWrong };
+    const kill = () => {
+      entry.alive = false;
+      this.tweens.killTweensOf(arrow);
+      ring.destroy();
+      arrow.destroy();
+    };
+    entry.onHit = (ang: number) => {
+      if (gate && !gate()) {
+        entry.alive = true; // it was not yet there to cut — stay up
+        this.earlySwing(entry.x, entry.y);
+        return;
+      }
+      this.sfx("swing2", 0.45, 1.1);
+      this.orbCut(entry.x, entry.y, r, G_BLUE, ang); // cleave it along the stroke
+      kill();
+      onHit();
+    };
+    entry.onWrong = () => {
+      if (gate && !gate()) {
+        entry.alive = true;
+        this.earlySwing(entry.x, entry.y);
+        return;
+      }
+      this.sfx("swing1", 0.3, 0.9);
+      this.orbShatter(entry.x, entry.y, r, G_BLUE, 5); // hacked apart, not cleanly cut
+      kill();
+      onWrong?.();
+    };
+    this.swipeTargets.push(entry);
+    return {
+      get alive() {
+        return entry.alive;
+      },
+      move(nx: number, ny: number) {
+        entry.x = nx;
+        entry.y = ny;
+        ring.setPosition(nx, ny);
+        arrow.setPosition(nx, ny);
+      },
+      destroy: kill,
+    };
+  }
+
+  /**
+   * One incoming arena hit on the hero. A warden's blow PIERCES the guard: it
+   * lands in full whatever the shield count says, and the pool is not spent.
+   *
+   * The guard used to turn these, which quietly gutted the whole fight — a
+   * player who banked shields on the board could eat every colour mistake for
+   * free, so the rules had no stakes. Now the only defence is playing well.
+   *
+   * `times` is the severity: a RED violation lands twice.
+   */
+  private arenaStrikeHero(times = ARENA_MISS_STRIKES) {
+    // the Warding Bell spends itself softening a RED blow to an ordinary one
+    if (times > ARENA_MISS_STRIKES && this.run.bellCharges > 0) {
+      this.run.bellCharges--;
+      times = ARENA_MISS_STRIKES;
+      this.sfx("block3", 0.55, 1.5);
+      this.notice(`the bell tolls — the blow is dulled (${this.run.bellCharges} left)`, "#8fd0ff");
+    }
+    const hits = Math.max(1, times);
+    let net = 0;
+    for (let i = 0; i < hits; i++) net += pierceStrike(this.run);
+    this.refreshHud();
+
+    // Say plainly that the shield did NOT apply. Without this the guard counter
+    // sits there untouched while the skull creeps and it reads as a bug.
+    if (this.run.block > 0)
+      this.floatChip(this.hero.x + 30, GROUND_Y - 112, "🛡 PIERCED", {
+        size: 18,
+        tint: [0xffd9d0, 0xff9d8a, 0xd2543a, 0x8a2d1f],
+        stroke: "#1a0a04",
+        font: EMOJI_FONT,
+      });
+
+    this.heroKnock = Math.max(this.heroKnock, times > 1 ? KNOCK_RED : KNOCK_MISS);
+    this.cameras.main.shake(times > 1 ? 380 : 260, times > 1 ? 0.014 : 0.009);
+    this.hero.setTint(times > 1 ? 0xff6a4a : 0xffa060);
+    this.time.delayedCall(times > 1 ? 300 : 200, () => this.hero.clearTint());
+    this.sfx(this.pick(["hit1", "hit2", "hit3"]), 0.5, times > 1 ? 0.85 : 1);
+    buzz(times > 1 ? 40 : 24);
+    void net;
+    // a heavy blow bleeds the screen red, so the difference is felt, not read
+    if (times > 1) {
+      const flash = this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, G_RED, 0.28).setDepth(70));
+      this.tweens.add({ targets: flash, fillAlpha: 0, duration: 420, onComplete: () => flash.destroy() });
+    }
+  }
+
+  /** The boss bar is the stage meter — drain it to the current beats-done mark. */
   private drainBossBar() {
     if (!this.bossBar) return;
     this.tweens.killTweensOf(this.bossBar.fill);
     this.tweens.add({
       targets: this.bossBar.fill,
-      scaleX: Math.max(0, 1 - this.arenaDealsDone / ARENA_TOTAL_DEALS),
+      scaleX: Math.max(0, 1 - this.arenaDealsDone / this.boss.steps),
       duration: 260,
       ease: "Quad.easeOut",
     });
   }
 
+  /** Malgrim's stage router — his three wards, in order. */
+  private malgrimIntro(gen: number) {
+    const c = BOSS_STAGES.malgrim[0];
+    this.arenaStageIntro(gen, c.title, c.sub, () => this.emberCourt(gen, 0));
+  }
+
+  /**
+   * WARD I — THE EMBER COURT (reaction: GOLD vs RED)
+   *
+   * His images flare across the pit and fade fast. Tap the GOLD ones; the RED
+   * ones are lies and burn you. Nothing to memorise and no shell to track —
+   * the whole test is reading colour and reaching it before it goes.
+   */
+  private emberCourt(gen: number, wave: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    this.grammarLegend();
+    const R = this.arenaRect();
+    const WAVES = [
+      { golds: 4, reds: 2, life: 1500, gap: 460 },
+      { golds: 5, reds: 3, life: 1250, gap: 380 },
+      { golds: 6, reds: 4, life: 1050, gap: 300 },
+    ];
+    const cfg = WAVES[wave];
+    let struck = 0;
+    let done = false;
+    this.arenaLabel(R.x + 14, R.y + 12, `THE EMBER COURT  ${wave + 1} / ${WAVES.length}`, "#ffd7a0", 17);
+    const tally = this.arenaLabel(R.x + R.w - 170, R.y + 12, `0 / ${cfg.golds}`, "#ffd24a", 18);
+
+    const finishWave = () => {
+      if (done) return;
+      done = true;
+      this.arenaDealsDone++;
+      this.drainBossBar();
+      this.time.delayedCall(600, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+        if (wave + 1 >= WAVES.length) {
+          const c = BOSS_STAGES.malgrim[1];
+          this.arenaStageClear(gen, "THE COURT SCATTERS — A WARD SHATTERS!", BOSS_STAGES.malgrim[0].taunt, () =>
+            this.arenaStageIntro(gen, c.title, c.sub, () => this.emberFall(gen, 0)),
+          );
+        } else {
+          this.notice("AGAIN — FASTER!", "#ffd24a");
+          this.emberCourt(gen, wave + 1);
+        }
+      });
+    };
+    const burn = () => {
+      if (done) return;
+      this.arenaWardMissed = true;
+      this.notice("a lie — it burns!", "#ff8a6a");
+      this.arenaStrikeHero(ARENA_RED_STRIKES);
+    };
+
+    // images flare in on a drum; each fades on its own clock, hit or not
+    let spawned = 0;
+    const total = cfg.golds + cfg.reds;
+    const order = Phaser.Utils.Array.Shuffle([
+      ...Array<boolean>(cfg.golds).fill(true),
+      ...Array<boolean>(cfg.reds).fill(false),
+    ]) as boolean[];
+    this.aTimer(
+      this.time.addEvent({
+        delay: cfg.gap,
+        repeat: total - 1,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          const x = R.x + 90 + Math.random() * (R.w - 180);
+          const y = R.y + 76 + Math.random() * (R.h - 200);
+          const isGold = order[spawned++];
+          this.sfx("spell", 0.26, isGold ? 1.35 : 0.85);
+          // his silhouette behind each image, so the court still reads as HIM
+          const fig = this.aReg(
+            this.inBox(
+              this.add
+                .sprite(x, y + 26, "boss-idle")
+                .setOrigin(0.5, BOSS_ORIGIN)
+                .setScale(0.62)
+                .setFlipX(true)
+                .setAlpha(0.5)
+                .setTint(isGold ? 0xffe6a0 : 0xff7a6a)
+                .setDepth(42)
+                .play("boss-idle"),
+            ),
+          );
+          const node = isGold
+            ? this.goldNode(x, y, 46, () => {
+                struck++;
+                tally.setText(`${struck} / ${cfg.golds}`);
+                this.playCombo(["hero-attack2"], "hero-idle");
+                this.bossReact();
+                if (struck >= cfg.golds) finishWave();
+              })
+            : this.redNode(x, y, 46, burn);
+          this.time.delayedCall(cfg.life, () => {
+            // a tapped node destroys itself, so only fade what is still alive
+            const live = [fig, node].filter((o) => o.scene);
+            if (!live.length) return;
+            this.tweens.add({ targets: live, alpha: 0, duration: 200, onComplete: () => live.forEach((o) => o.destroy()) });
+          });
+        },
+      }),
+    );
+    // every image has had its moment — judge the wave
+    this.aTimer(
+      this.time.addEvent({
+        delay: cfg.gap * total + cfg.life + 500,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          done = true;
+          this.arenaWardMissed = true;
+          this.notice("too slow — his court closes!", "#ff8a6a");
+          this.arenaStrikeHero();
+          this.time.delayedCall(900, () => {
+            if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+            this.emberCourt(gen, wave); // same wave, a fresh court
+          });
+        },
+      }),
+    );
+  }
+
+  /**
+   * WARD II — THE EMBER FALL (reaction: a falling line of GOLD / BLUE / RED)
+   *
+   * His fire rains down four channels. GOLD embers want a tap, BLUE ones want a
+   * cut along the arrow, and RED ones want nothing at all — let them hit the
+   * floor. Anything gold or blue that lands is a strike against you. Tempo
+   * climbs each round; the read never changes.
+   */
+  private emberFall(gen: number, round: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    this.grammarLegend();
+    const R = this.arenaRect();
+    const ROUNDS = [
+      { need: 5, dropMs: 2100, gap: 900, redChance: 0.25 },
+      { need: 6, dropMs: 1700, gap: 720, redChance: 0.3 },
+      { need: 7, dropMs: 1400, gap: 560, redChance: 0.35 },
+    ];
+    const cfg = ROUNDS[round];
+    let struck = 0;
+    let done = false;
+
+    this.arenaLabel(R.x + 14, R.y + 12, `THE EMBER FALL  ${round + 1} / ${ROUNDS.length}`, "#ffd7a0", 17);
+    const tally = this.arenaLabel(R.x + R.w - 170, R.y + 12, `0 / ${cfg.need}`, "#ffd24a", 18);
+
+    const LANES = 4;
+    const laneX = (i: number) => R.x + R.w * (0.22 + 0.185 * i);
+    const topY = R.y + 74;
+    const floorY = R.y + R.h - 62;
+    // the floor line: what reaches this has beaten you
+    this.aReg(this.inBox(this.add.rectangle(R.cx, floorY, R.w - 60, 4, 0x7d6a4a, 0.8).setDepth(41)));
+
+    const score = () => {
+      struck++;
+      tally.setText(`${struck} / ${cfg.need}`);
+      this.bossReact();
+      if (struck < cfg.need || done) return;
+      done = true;
+      this.arenaDealsDone++;
+      this.drainBossBar();
+      this.time.delayedCall(500, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+        if (round + 1 >= ROUNDS.length) {
+          const c = BOSS_STAGES.malgrim[2];
+          this.arenaStageClear(gen, "HIS FIRE FALLS SHORT — ANOTHER WARD BREAKS!", BOSS_STAGES.malgrim[1].taunt, () =>
+            this.arenaStageIntro(gen, c.title, c.sub, () => this.startTennis(gen)),
+          );
+        } else {
+          this.notice("FASTER!", "#ffd24a");
+          this.emberFall(gen, round + 1);
+        }
+      });
+    };
+    const slip = (why: string, times = ARENA_MISS_STRIKES) => {
+      if (done) return;
+      this.arenaWardMissed = true;
+      this.notice(why, "#ff8a6a");
+      this.arenaStrikeHero(times);
+    };
+
+    this.aTimer(
+      this.time.addEvent({
+        delay: cfg.gap,
+        loop: true,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          const x = laneX((Math.random() * LANES) | 0);
+          const roll = Math.random();
+          const kind: "gold" | "blue" | "red" = roll < cfg.redChance ? "red" : roll < cfg.redChance + 0.38 ? "blue" : "gold";
+          const carrier = { y: topY };
+          let handled = false;
+          this.sfx("fireball1", 0.22, kind === "red" ? 0.8 : 1.3);
+
+          let node: { move: (x: number, y: number) => void; destroy: () => void };
+          if (kind === "blue") {
+            const dir = (["up", "down", "left", "right"] as SwipeDir[])[(Math.random() * 4) | 0];
+            node = this.swipeNode(x, topY, 34, dir, () => {
+              handled = true;
+              score();
+            }, () => {
+              handled = true;
+              slip("cut the wrong way!");
+            });
+          } else if (kind === "gold") {
+            const g = this.goldNode(x, topY, 34, () => {
+              handled = true;
+              score();
+            });
+            node = { move: (nx, ny) => g.setPosition(nx, ny), destroy: () => g.destroy() };
+          } else {
+            const g = this.redNode(x, topY, 34, () => {
+              handled = true;
+              slip("RED — never touch his fire!", ARENA_RED_STRIKES);
+            });
+            node = { move: (nx, ny) => g.setPosition(nx, ny), destroy: () => g.destroy() };
+          }
+
+          this.tweens.add({
+            targets: carrier,
+            y: floorY,
+            duration: cfg.dropMs,
+            ease: "Linear",
+            onUpdate: () => node.move(x, carrier.y),
+            onComplete: () => {
+              node.destroy();
+              if (handled || done || gen !== this.arenaGen) return;
+              // red is SUPPOSED to land; anything else landing is on you
+              if (kind !== "red") slip(kind === "blue" ? "uncut — it lands!" : "untouched — it lands!");
+            },
+          });
+        },
+      }),
+    );
+  }
+
+
   // ---- WARD III: FIREBALL TENNIS — return his fire ---------------------------
   // He serves from the far court; every ball carries a shrinking timing ring.
   // Tap (anywhere — the screen is your racket) as the ball meets the guard ring
   // to reflect it back into him. Whiffs lock the swing briefly, so mashing
-  // loses; his wind-up sometimes throws NOTHING; and the violet ball is a lie
-  // that only hurts you if you swing at it. Three returns break the last ward.
+  // loses; his wind-up sometimes throws NOTHING; and the RED ball is a lie that
+  // only hurts you if you swing at it. Three returns break the last ward.
+  // This is the stage the grammar was built from: GOLD is the ball you strike,
+  // RED is the one you must not touch.
   private startTennis(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
       this.arenaObjs.push(o);
       return o;
     };
-    const shots = ARENA_WARDS[2].deals;
+    const shots = TENNIS_SHOTS;
     const MX = PADIN + UI_W - 96; // his end of the court
 
+    this.bossHold = true; // the far court is his own ground — do not drag him back to the hero
     // Malgrim re-materialises across the lane, staff raised
     if (this.orc) {
       this.tweens.killTweensOf(this.orc);
@@ -2843,16 +3699,23 @@ class GameScene extends Phaser.Scene {
     }
 
     // the guard ring: meet the ball HERE
-    const zone = reg(this.inBox(this.add.ellipse(this.hero.x + 64, GROUND_Y - 42, 66, 66).setStrokeStyle(4, 0x8ff4ff, 0.9).setDepth(43)));
+    const zone = reg(this.inBox(this.add.ellipse(this.hero.x + 64, GROUND_Y - 42, 66, 66).setStrokeStyle(4, G_GOLD_EDGE, 0.9).setDepth(43)));
     this.tweens.add({ targets: zone, alpha: 0.45, duration: 480, yoyo: true, repeat: -1 });
+    const rally = this.arenaLabel(GRID_X + 14, GRID_Y + 12, `RALLY 1 / ${shots.length}`, "#ffd7a0", 17);
 
     // the racket: a full-court tap catcher (timing is everything)
     const catcher = reg(this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0xffffff, 0.001).setDepth(60).setInteractive()));
 
-    type Ball = { img: Phaser.GameObjects.Image; ring: Phaser.GameObjects.Ellipse; arrival: number; kind: "fire" | "violet"; alive: boolean };
+    type Ball = { img: Phaser.GameObjects.Image; ring: Phaser.GameObjects.Ellipse; arrival: number; kind: "gold" | "red"; alive: boolean };
     let balls: Ball[] = [];
     let lockoutUntil = 0;
-    let resolving = false; // between serves / while a return flies
+    let resolving = false; // true only BETWEEN volleys, so a rally can stay live
+    let goldsLeft = 0; // golds still to return in this volley
+    let token = 0; // stale launches from an abandoned volley must not join the next
+
+    const cfgNow = () => shots[Math.min(this.arenaDealIdx, shots.length - 1)];
+    const winEarly = () => cfgNow().early ?? TENNIS_EARLY_MS;
+    const winLate = () => cfgNow().late ?? TENNIS_LATE_MS;
 
     const clearBalls = () => {
       for (const b of balls) {
@@ -2864,36 +3727,62 @@ class GameScene extends Phaser.Scene {
       balls = [];
     };
 
-    const failContinue = (msg: string) => {
-      if (gen !== this.arenaGen) return;
+    const failContinue = (msg: string, times = ARENA_MISS_STRIKES) => {
+      if (gen !== this.arenaGen || resolving) return;
       resolving = true;
+      token++; // abandon anything still queued for the volley we just lost
       this.arenaWardMissed = true;
       clearBalls();
-      this.arenaStrikeHero();
+      this.arenaStrikeHero(times);
       this.notice(msg, "#ff8a6a");
       this.time.delayedCall(1000, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+        throwShot(); // the same volley again, from the top
+      });
+    };
+
+    /** The whole volley is answered: bank it and move the rally on. */
+    const volleyWon = () => {
+      if (resolving) return;
+      resolving = true;
+      token++;
+      clearBalls();
+      this.arenaDealsDone++;
+      this.arenaDealIdx++;
+      this.drainBossBar();
+      if (this.arenaDealIdx >= shots.length) {
+        this.time.delayedCall(650, () => {
+          if (gen !== this.arenaGen || this.run.over) return;
+          this.arenaStageClear(gen, "HIS LAST WARD FALLS!", "", () => this.arenaExecution(gen), 900);
+        });
+        return;
+      }
+      rally.setText(`RALLY ${this.arenaDealIdx + 1} / ${shots.length}`);
+      this.time.delayedCall(shots[this.arenaDealIdx - 1].restMs ?? 900, () => {
         if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
         throwShot();
       });
     };
 
+    /** One gold struck true: it flies back and burns him. */
     const reflected = (b: Ball) => {
-      resolving = true;
       b.alive = false;
+      goldsLeft--;
       this.tweens.killTweensOf(b.img);
       b.ring.destroy();
+      balls = balls.filter((x) => x !== b);
       this.playCombo(["hero-attack2"], "hero-idle");
       this.sfx("swing2", 0.4);
       this.sfx(this.pick(["block1", "block2", "block3"]), 0.5);
       this.tweens.add({ targets: zone, scaleX: 1.35, scaleY: 1.35, duration: 110, yoyo: true, ease: "Quad.easeOut" });
       buzz(22);
       b.img.setTint(0xffe0a0); // struck true — it flies back hot
-      clearBalls_except(b);
+      const last = goldsLeft <= 0;
       this.tweens.add({
         targets: b.img,
         x: MX - 22,
         y: GROUND_Y - 52,
-        duration: Math.max(320, shots[Math.min(this.arenaDealIdx, shots.length - 1)].castMs * 0.5),
+        duration: Math.max(300, cfgNow().castMs * 0.45),
         ease: "Quad.easeIn",
         onComplete: () => {
           b.img.destroy();
@@ -2910,45 +3799,19 @@ class GameScene extends Phaser.Scene {
           this.time.delayedCall(600, () => burst.destroy());
           this.cameras.main.shake(220, 0.007);
           this.sfx("hit3", 0.55);
-          if (this.orc && !this.orcDying) {
-            this.orc.play("boss-hurt").once("animationcomplete", () => {
-              if (this.orc && this.orcAnim === "boss" && !this.orcDying) this.orc.play("boss-idle");
-            });
-          }
-          this.arenaDealsDone++;
-          this.arenaDealIdx++;
-          this.drainBossBar();
-          if (this.arenaDealIdx >= shots.length) {
-            this.time.delayedCall(650, () => {
-              if (gen !== this.arenaGen || this.run.over) return;
-              this.crackWard(gen, false);
-            });
-          } else {
-            this.notice(this.arenaDealIdx === 1 ? "RETURNED!" : "AGAIN — FASTER!", "#8ff4ff");
-            this.time.delayedCall(1100, () => {
-              if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-              throwShot();
-            });
-          }
+          this.bossReact();
+          // mid-volley returns read as a chain, not as progress
+          if (!last) this.floatChip(MX - 40, GROUND_Y - 110, "×" + (cfgNow().balls ?? 1), { size: 20 });
+          if (last) volleyWon();
         },
       });
-    };
-    const clearBalls_except = (keep: Ball) => {
-      for (const b of balls) {
-        if (b === keep) continue;
-        this.tweens.killTweensOf(b.img);
-        this.tweens.killTweensOf(b.ring);
-        b.img.destroy();
-        b.ring.destroy();
-      }
-      balls = [keep];
     };
 
     const onTap = () => {
       if (gen !== this.arenaGen || !this.arenaActive || resolving || this.run.over) return;
       const now = this.time.now;
       if (now < lockoutUntil) return; // still recovering from the whiff
-      const inWin = balls.find((b) => b.alive && now >= b.arrival - TENNIS_EARLY_MS && now <= b.arrival + TENNIS_LATE_MS);
+      const inWin = balls.find((b) => b.alive && now >= b.arrival - winEarly() && now <= b.arrival + winLate());
       if (!inWin) {
         // a swing at nothing — his fakes and your nerves conspire
         lockoutUntil = now + TENNIS_WHIFF_LOCK_MS;
@@ -2958,36 +3821,38 @@ class GameScene extends Phaser.Scene {
           this.floatChip(this.hero.x + 30, GROUND_Y - 96, "early!", { size: 18, tint: [0xd0d4dc, 0xb9c0cc, 0x8a8f98, 0x6a707c], stroke: "#14171f" });
         return;
       }
-      if (inWin.kind === "violet") {
+      if (inWin.kind === "red") {
         // he sold you the lie — it detonates in your swing
         const burst = this.inBox(
           this.add
             .particles(inWin.img.x, inWin.img.y, "spark", {
               speed: { min: 80, max: 240 }, lifespan: { min: 200, max: 460 },
-              scale: { start: 1.2, end: 0 }, blendMode: "ADD", tint: 0xb06aff, emitting: false,
+              scale: { start: 1.2, end: 0 }, blendMode: "ADD", tint: G_RED, emitting: false,
             })
             .setDepth(47),
         );
         burst.explode(20);
         this.time.delayedCall(600, () => burst.destroy());
-        failContinue("the VIOLET was a lie!");
+        failContinue("RED was a lie — never swing at it!", ARENA_RED_STRIKES);
         return;
       }
       reflected(inWin);
     };
     catcher.on("pointerdown", onTap);
 
-    const launch = (kind: "fire" | "violet", flightMs: number, delayMs: number) => {
+    const launch = (kind: "gold" | "red", flightMs: number, delayMs: number, mine: number) => {
+      if (kind === "gold") goldsLeft++; // counted at schedule time so the volley knows its size
       this.time.delayedCall(delayMs, () => {
-        if (gen !== this.arenaGen || this.run.over || !this.arenaActive || resolving) return;
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive || mine !== token) return;
         const zx = this.hero.x + 64;
         const zy = GROUND_Y - 42;
-        const color = kind === "fire" ? 0xff7733 : 0xb06aff;
+        const color = kind === "gold" ? G_GOLD : G_RED;
         const img = reg(this.inBox(this.add.image(MX - 34, GROUND_Y - 54, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(color).setScale(1.5).setDepth(46)));
         const ring = reg(this.inBox(this.add.ellipse(img.x, img.y, 130, 130).setStrokeStyle(3, color, 0.85).setDepth(46)));
         const b: Ball = { img, ring, arrival: this.time.now + flightMs, kind, alive: true };
         balls.push(b);
-        this.sfx(kind === "fire" ? "fireball2" : "fireball3", 0.4, kind === "violet" ? 1.3 : 1);
+        this.sfx(kind === "gold" ? "fireball2" : "fireball3", 0.4, kind === "red" ? 1.3 : 1);
+        if (this.orc && !this.orcDying) this.bossSwing(); // a fresh cast per ball — the barrage is HIS effort
         this.tweens.add({ targets: ring, scaleX: 0.42, scaleY: 0.42, duration: flightMs, ease: "Linear" }); // the timing ring closes at the guard
         this.tweens.add({
           targets: img,
@@ -3009,7 +3874,7 @@ class GameScene extends Phaser.Scene {
               onComplete: () => {
                 if (!b.alive || gen !== this.arenaGen || !img.scene) return;
                 b.alive = false;
-                if (b.kind === "fire") {
+                if (b.kind === "gold") {
                   const burst = this.inBox(
                     this.add
                       .particles(img.x, img.y, "spark", {
@@ -3023,7 +3888,7 @@ class GameScene extends Phaser.Scene {
                   img.destroy();
                   failContinue("his fire finds you!");
                 } else {
-                  // the violet drifts past, revealed as nothing — well left alone
+                  // the red drifts past, revealed as nothing — well left alone
                   this.tweens.add({ targets: img, x: img.x - 90, alpha: 0, duration: 280, onComplete: () => img.destroy() });
                   this.sfx("swap", 0.25, 1.4);
                 }
@@ -3038,188 +3903,56 @@ class GameScene extends Phaser.Scene {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
       resolving = false;
       clearBalls();
-      const cfg = shots[Math.min(this.arenaDealIdx, shots.length - 1)];
+      goldsLeft = 0;
+      const mine = ++token;
+      const cfg = cfgNow();
+      const n = cfg.balls ?? 1;
       zone.setPosition(this.hero.x + 64, GROUND_Y - 42); // the guard follows the hero's ground
       const doFake = Math.random() < (cfg.fake ?? 0);
-      const doPair = !doFake && Math.random() < (cfg.pair ?? 0);
-      if (this.orc && !this.orcDying) {
-        this.orc.play("boss-attack").once("animationcomplete", () => {
-          if (this.orc && this.orcAnim === "boss" && !this.orcDying) this.orc.play("boss-idle");
-        });
-      }
+      if (cfg.call) this.notice(cfg.call, n >= 3 ? "#ff8a6a" : "#8ff4ff");
+      if (n >= 3) this.cameras.main.shake(260, 0.005); // the crescendo announces itself
+      if (this.orc && !this.orcDying) this.bossSwing();
       this.sfx("fireball1", 0.3, 0.85);
-      this.time.delayedCall(240, () => {
-        if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-        if (doFake) {
-          // nothing leaves his hand — then the REAL serve, fast and mean
-          this.time.delayedCall(460, () => {
-            if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-            if (this.orc && !this.orcDying) this.orc.play("boss-attack");
-            launch("fire", cfg.castMs * 0.85, 180);
-          });
-        } else if (doPair) {
-          launch("violet", cfg.castMs, 0);
-          launch("fire", cfg.castMs, TENNIS_PAIR_STAGGER_MS);
-        } else {
-          launch("fire", cfg.castMs, 0);
+
+      const fire = (extraDelay: number) => {
+        for (let i = 0; i < n; i++) {
+          // the first ball of a volley is always real — a volley of pure lies
+          // would just be a pause you had to sit through
+          const kind: "gold" | "red" = i > 0 && Math.random() < (cfg.redChance ?? 0) ? "red" : "gold";
+          launch(kind, cfg.castMs * (doFake ? 0.85 : 1), extraDelay + i * (cfg.stagger ?? 0), mine);
         }
+      };
+
+      this.time.delayedCall(240, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive || mine !== token) return;
+        if (doFake) {
+          // nothing leaves his hand — then the REAL volley, fast and mean
+          this.time.delayedCall(460, () => {
+            if (gen !== this.arenaGen || this.run.over || !this.arenaActive || mine !== token) return;
+            if (this.orc && !this.orcDying) this.bossSwing();
+            fire(180);
+          });
+        } else fire(0);
       });
     };
 
     throwShot();
   }
 
-  /** Found him: lunge, land the blow — a red-zone hit shatters the whole ward. */
-  private arenaHit(gen: number, settle: () => boolean, fig: Phaser.GameObjects.Sprite, castFrac: number) {
-    if (!settle()) return;
-    const crit = castFrac >= ARENA_CRIT_FRAC; // the daring strike, mid-cast
-    this.sfx("hit3", 0.55);
-    buzz(crit ? 30 : 20);
-    fig.setTintFill(0xffffff);
-    this.time.delayedCall(90, () => fig.clearTint());
-
-    // the hero lunges from the lane; the blow lands as sparks at the portal
-    this.heroLockX = true;
-    this.playCombo(["hero-attack2"], "hero-idle");
-    this.sfx("swing2", 0.35);
-    this.tweens.add({ targets: this.hero, x: this.hero.x + 26, duration: 140, yoyo: true, ease: "Quad.easeOut" });
-    const slash = this.inBox(
-      this.add
-        .particles(fig.x, fig.y - 20, "spark", {
-          speed: { min: 120, max: 320 }, lifespan: { min: 200, max: 480 },
-          scale: { start: crit ? 1.8 : 1.3, end: 0 }, blendMode: "ADD", tint: crit ? 0xfff2b0 : 0xbfefff, emitting: false,
-        })
-        .setDepth(44),
-    );
-    slash.explode(crit ? 40 : 22);
-    this.time.delayedCall(700, () => slash.destroy());
-
-    this.time.delayedCall(300, () => {
-      if (gen !== this.arenaGen) return;
-      this.heroLockX = false;
-      const ward = ARENA_WARDS[this.arenaWard];
-
-      if (crit) {
-        // struck him with the cast burning red — the ENTIRE ward gives way
-        this.arenaDealsDone += ward.deals.length - this.arenaDealIdx;
-        this.crackWard(gen, true);
-        return;
-      }
-
-      this.arenaDealsDone++;
-      this.arenaDealIdx++;
-      this.drainBossBar();
-      if (this.arenaDealIdx >= ward.deals.length) {
-        this.crackWard(gen, false);
-      } else {
-        this.cameras.main.shake(150, 0.005);
-        this.sfx("block3", 0.4, 1.2);
-        this.notice("STAGGERED — once more!", "#bfefff");
-        this.clearArenaObjs();
-        this.time.delayedCall(750, () => {
-          if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-          this.playArenaDeal(gen);
-        });
-      }
-    });
-  }
-
-  /** A ward gives out: fanfare, flawless refund, his taunt, then the next game. */
-  private crackWard(gen: number, whole: boolean) {
-    const flawless = !this.arenaWardMissed;
-    this.drainBossBar();
-    this.cameras.main.shake(whole ? 300 : 220, whole ? 0.01 : 0.007);
-    this.sfx(`combo${3 + this.arenaWard}`, 0.55); // combo3/4/5 as the wards fall
-    this.notice(
-      whole
-        ? "PERFECT — THE WARD SHATTERS WHOLE!"
-        : this.arenaWard === 0
-          ? "A WARD SHATTERS!"
-          : this.arenaWard === 1
-            ? "ANOTHER WARD BREAKS!"
-            : "HIS LAST WARD FALLS!",
-      whole ? "#ffd24a" : "#8ff4ff",
-    );
-    if (flawless) {
-      this.run.block += 1; // your poise holds — a guard charge comes back
-      this.refreshHud();
-      this.time.delayedCall(700, () => {
-        if (gen === this.arenaGen) this.floatGuard(this.hero.x + 24, GROUND_Y - 90, 1);
-      });
-    }
-    const taunt = ARENA_WARDS[this.arenaWard].taunt;
-    this.clearArenaObjs();
-
-    this.arenaWard++;
-    this.arenaDealIdx = 0;
-    this.arenaWardMissed = false;
-    const done = this.arenaWard >= ARENA_WARDS.length;
-    if (!done)
-      this.time.delayedCall(950, () => {
-        if (gen === this.arenaGen && this.arenaActive) this.notice(taunt, "#ff9d6a");
-      });
-    this.time.delayedCall(done ? 800 : 1900, () => {
-      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-      if (done) this.arenaExecution(gen);
-      else this.showWardIntro(gen);
-    });
-  }
-
-  /** A decoy, or too slow: the real Malgrim answers with fire. Guard absorbs it. */
-  private arenaFail(
-    gen: number,
-    settle: () => boolean,
-    why: "decoy" | "timeout",
-    realFig: Phaser.GameObjects.Sprite,
-    tapped: Phaser.GameObjects.Sprite,
-  ) {
-    if (!settle()) return;
-    this.arenaWardMissed = true; // the flawless refund is off the table this ward
-    if (why === "decoy") {
-      this.notice("a decoy!", "#ff8a6a");
-      const puff = this.inBox(this.add.image(tapped.x, tapped.y - 16, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff5030).setScale(1).setDepth(44));
-      this.tweens.add({ targets: puff, scale: 2.6, alpha: 0, duration: 380, onComplete: () => puff.destroy() });
-      this.sfx("fireball1", 0.35, 0.8);
-    } else {
-      this.notice("too slow — he casts!", "#ff8a6a");
-    }
-
-    // his punishment bolt streaks from wherever he truly stands
-    const bolt = this.inBox(
-      this.add.image(realFig.x, realFig.y - 20, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff7733).setScale(1.5).setDepth(46),
-    );
-    this.sfx(this.pick(["fireball2", "fireball3"]), 0.5);
-    this.tweens.add({
-      targets: bolt,
-      x: this.hero.x + 8,
-      y: GROUND_Y - 40,
-      duration: ARENA_FIREBALL_MS,
-      ease: "Sine.easeIn",
-      onComplete: () => {
-        bolt.destroy();
-        if (gen !== this.arenaGen) return;
-        this.arenaStrikeHero();
-        this.clearArenaObjs();
-        this.time.delayedCall(800, () => {
-          if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-          this.playArenaDeal(gen); // same deal, fresh shuffle
-        });
-      },
-    });
-  }
-
   /** Third ward down: he staggers back into the lane, helpless. One tap ends it. */
   private arenaExecution(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.orc) return;
+    this.bossHold = true; // he is where he fell to his knees; the finisher comes to him
     this.clearArenaObjs();
     this.notice("HE IS EXPOSED — STRIKE HIM DOWN!", "#ffd24a");
     this.sfx("summon", 0.45, 0.8);
 
-    // he re-materialises in the lane, drained and flickering
-    this.orc.setAlpha(0).setTint(0x9a94b8).play("boss-hurt");
+    // he sags back into the lane, drained and flickering
+    const bk = this.boss.key;
+    this.orc.setAlpha(this.boss.arena === "shells" ? 0 : 1).setTint(0x9a94b8).play(this.boss.hasHurt ? `${bk}-hurt` : `${bk}-idle`);
     this.tweens.add({ targets: this.orc, alpha: 1, duration: 420 });
     this.orc.once("animationcomplete", () => {
-      if (this.orc && this.orcAnim === "boss") this.orc.play("boss-idle");
+      if (this.orc && this.orcAnim === bk) this.orc.play(`${bk}-idle`);
     });
 
     const ring = this.arenaObjs[this.arenaObjs.push(
@@ -3231,6 +3964,931 @@ class GameScene extends Phaser.Scene {
       this.inBox(this.add.rectangle(this.orc.x, GROUND_Y - 40, 150, 170, 0xffffff, 0.001).setDepth(45).setInteractive({ useHandCursor: true })),
     ) - 1] as Phaser.GameObjects.Rectangle;
     zone.on("pointerdown", () => this.arenaFinisher(gen));
+  }
+
+  // ================= GORRACH'S GORING RUN (forest boss arena) =================
+  // The bull-warden of the wood never trades blows on the board. The board
+  // retracts and he takes the pit it leaves behind for three horns, each its
+  // own game: a dodge, a memory, and a shoving match.
+
+  /** Small caption anchored to a corner of the arena pit (round counters etc). */
+  private arenaLabel(x: number, y: number, text: string, colour = "#ffd7a0", size = 15) {
+    return this.aReg(
+      this.inBox(
+        this.add
+          .text(x, y, text, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${size}px`, color: colour, stroke: "#0a0b0f", strokeThickness: 4 })
+          .setDepth(50),
+      ),
+    );
+  }
+
+  private goringIntro(gen: number) {
+    const c = BOSS_STAGES.gorrach[0];
+    this.arenaStageIntro(gen, c.title, c.sub, () => this.goringCharge(gen, 0));
+  }
+
+  /** HORN I: three trampled paths, one (or two) lit, and a ton of bull down it. */
+  private goringCharge(gen: number, idx: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    const R = this.arenaRect();
+    const cfg = GORE_CHARGES[idx];
+    const laneH = R.h / GORE_LANES;
+    const laneY = (i: number) => R.y + laneH * (i + 0.5);
+    let heroLane = 1;
+    let settled = false;
+
+    // he quits the lane above — down here the charge IS him
+    this.bossHold = true;
+    if (this.orc) this.tweens.add({ targets: this.orc, alpha: 0.1, duration: 300 });
+
+    const lanes = [];
+    for (let i = 0; i < GORE_LANES; i++) {
+      const r = this.aReg(
+        this.inBox(
+          this.add
+            .rectangle(R.cx, laneY(i), R.w - 16, laneH - 14, 0x2b2013, 0.62)
+            .setStrokeStyle(3, 0x715432, 0.9)
+            .setDepth(40)
+            .setInteractive({ useHandCursor: true }),
+        ),
+      );
+      lanes.push(r);
+    }
+    const tok = this.aReg(
+      this.inBox(this.add.sprite(R.x + 96, laneY(heroLane), "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.3).setDepth(45).play("hero-idle")),
+    );
+    const leap = (i: number) => {
+      if (i === heroLane) return;
+      heroLane = i;
+      this.tweens.killTweensOf(tok);
+      this.sfx(this.pick(["step1", "step3"]), 0.35, 1.15);
+      this.tweens.add({ targets: tok, y: laneY(i), duration: 130, ease: "Quad.easeOut" });
+      this.tweens.add({ targets: tok, scaleY: 2.0, duration: 90, yoyo: true });
+    };
+    lanes.forEach((r, i) => r.on("pointerdown", () => leap(i)));
+    this.grammarLegend();
+    this.arenaLabel(R.x + 14, R.y + 12, `CHARGE ${idx + 1} / ${GORE_CHARGES.length}`);
+    this.arenaLabel(R.x + R.w - 220, R.y + 12, "tap a path to leap clear", "#9aa0ab", 14);
+
+    void (async () => {
+      await this.arenaWait(520);
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+
+      // the paw: he scrapes the ground and the lit paths bloom red
+      this.sfx("step5", 0.5, 0.7);
+      this.sfx(this.pick(["squish1", "squish2"]), 0.25, 0.6);
+      const lit = Phaser.Utils.Array.Shuffle([0, 1, 2]).slice(0, cfg.blind);
+      for (const i of lit) {
+        lanes[i].setFillStyle(G_RED, 0.42).setStrokeStyle(4, G_RED_EDGE, 1); // RED = do not be here
+        this.tweens.add({ targets: lanes[i], alpha: 0.55, duration: 180, yoyo: true, repeat: -1 });
+      }
+      // the tell bar: when it fills, he comes
+      const tw = 300;
+      this.aReg(this.inBox(this.add.rectangle(R.cx, R.y + 6, tw + 6, 14, 0x0a0b0f, 0.85).setDepth(48)));
+      const fill = this.aReg(this.inBox(this.add.rectangle(R.cx - tw / 2, R.y + 6, tw, 9, G_RED).setOrigin(0, 0.5).setScale(0, 1).setDepth(49)));
+      this.tweens.add({ targets: fill, scaleX: 1, duration: cfg.tell, ease: "Linear" });
+      await this.arenaWait(cfg.tell);
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+
+      // ...and only one of the lit paths is the true one
+      const runLane = lit[(Math.random() * lit.length) | 0];
+      for (const i of lit)
+        if (i !== runLane) {
+          this.tweens.killTweensOf(lanes[i]);
+          lanes[i].setAlpha(1).setFillStyle(0x2b2013, 0.62).setStrokeStyle(3, 0x715432, 0.9);
+        }
+      const fromX = R.x + R.w + 130;
+      const toX = R.x - 190;
+      const bull = this.aReg(
+        this.inBox(this.add.sprite(fromX, laneY(runLane) + 30, "mino-idle").setOrigin(0.5, 0.9).setScale(0.66).setFlipX(this.boss.faceLeft).setDepth(46).play("mino-walk")),
+      );
+      const dust = this.aReg(
+        this.inBox(
+          this.add
+            .particles(0, 0, "spark", {
+              speed: { min: 40, max: 160 }, angle: { min: 200, max: 340 }, lifespan: { min: 200, max: 460 },
+              scale: { start: 0.9, end: 0 }, tint: 0xb08a5a, quantity: 2, frequency: 30,
+            })
+            .setDepth(45)
+            .startFollow(bull, 30, 24),
+        ),
+      );
+      this.sfx("swing3", 0.5, 0.6);
+      this.cameras.main.shake(cfg.run, 0.004);
+      const impactMs = cfg.run * ((fromX - tok.x) / (fromX - toX));
+      this.tweens.add({ targets: bull, x: toX, duration: cfg.run, ease: "Linear", onComplete: () => dust.stop() });
+
+      await this.arenaWait(impactMs);
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive || settled) return;
+      settled = true;
+      if (heroLane === runLane) {
+        // gored — the horn goes in and the same charge comes round again
+        this.arenaWardMissed = true;
+        tok.setTintFill(0xff5a3a);
+        this.tweens.add({ targets: tok, x: tok.x - 70, angle: -70, alpha: 0.2, duration: 320, ease: "Quad.easeOut" });
+        this.sfx("hit1", 0.6);
+        this.notice("GORED!", "#ff8a6a");
+        this.arenaStrikeHero();
+        this.time.delayedCall(1100, () => this.goringCharge(gen, idx));
+      } else {
+        this.sfx("swing1", 0.35, 1.3);
+        this.floatChip(tok.x + 40, tok.y - 70, "CLEAR!", { size: 22, tint: [0xd8ffd0, 0xa9e6a9, 0x5aa85a, 0x2f6b2f] });
+        this.arenaDealsDone++;
+        this.drainBossBar();
+        // ...and his flank is open for a beat: a GOLD gore-point to punish
+        const gx = Phaser.Math.Clamp(bull.x + 90, R.x + 70, R.x + R.w - 70);
+        const punish = this.goldNode(gx, laneY(runLane), 40, () => {
+          this.playCombo(["hero-attack2"], "hero-idle");
+          this.bossReact();
+          this.floatChip(gx, laneY(runLane) - 60, "GORED HIM!", { size: 20 });
+          this.run.block += 1; // a clean punish buys back a guard charge
+          this.refreshHud();
+        });
+        this.time.delayedCall(700, () => {
+          if (!punish.scene) return; // already taken
+          this.tweens.add({ targets: punish, alpha: 0, duration: 200, onComplete: () => punish.destroy() });
+        });
+        this.time.delayedCall(1000, () => {
+          if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+          if (idx + 1 >= GORE_CHARGES.length) {
+            const c = BOSS_STAGES.gorrach[1];
+            this.arenaStageClear(gen, "HE OVERRUNS — A HORN CRACKS!", BOSS_STAGES.gorrach[0].taunt, () =>
+              this.arenaStageIntro(gen, c.title, c.sub, () => this.goringParry(gen, 0)),
+            );
+          } else this.goringCharge(gen, idx + 1);
+        });
+      }
+    })();
+  }
+
+  /**
+   * HORN II — TURN HIS AXE (a real parry: read it late, commit on the beat)
+   *
+   * It used to be "answer before a deadline", which is not a timing test at all
+   * — you could respond the instant a prompt appeared, at no cost, so the long
+   * windows never mattered and it played far too easy. Three things fix that:
+   *
+   *   1. THE PARRY HAS A BEAT. The ring closes over his wind-up and only the
+   *      last `window` ms count. Swing early and you whiff and are locked out,
+   *      which usually costs you the real window — the tennis model.
+   *   2. HE DISGUISES THE SWING. The mark is blank until `reveal` of the way
+   *      through, so you cannot pre-commit; you read colour late and act fast.
+   *   3. IT ROAMS, AND IT DOUBLES. Later rounds place the mark anywhere in the
+   *      pit and eventually throw two at once, staggered.
+   *
+   * RED is still a feint: letting it pass is the correct read and scores.
+   */
+  private goringParry(gen: number, round: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    this.grammarLegend();
+    const R = this.arenaRect();
+    const cfg = PARRY_ROUNDS[round];
+    let parried = 0;
+    let done = false;
+    let lockedUntil = 0;
+    this.bossHold = false;
+    if (this.orc) this.tweens.add({ targets: this.orc, alpha: 1, duration: 300 });
+
+    this.arenaLabel(R.x + 14, R.y + 12, `TURN HIS AXE  ${round + 1} / ${PARRY_ROUNDS.length}`, "#ffd7a0", 17);
+    const tally = this.arenaLabel(R.x + R.w - 190, R.y + 12, `0 / ${cfg.need}`, "#ffd24a", 18);
+    this.arenaLabel(R.x + 14, R.y + 40, "strike as the ring closes — not before", "#9aa0ab", 14);
+
+    const strainY = R.y + R.h * 0.3;
+    const bull = this.aReg(
+      this.inBox(
+        this.add.sprite(R.cx + 200, strainY, "mino-idle").setOrigin(0.5, 0.9).setScale(0.78).setFlipX(this.boss.faceLeft).setDepth(45).play("mino-idle"),
+      ),
+    );
+    const you = this.aReg(
+      this.inBox(this.add.sprite(R.cx - 200, strainY, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.5).setDepth(45).play("hero-idle")),
+    );
+
+    const finish = () => {
+      done = true;
+      this.arenaDealsDone++;
+      this.drainBossBar();
+      this.time.delayedCall(500, () => {
+        if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+        if (round + 1 >= PARRY_ROUNDS.length) {
+          const c = BOSS_STAGES.gorrach[2];
+          this.arenaStageClear(gen, "HIS AXE IS TURNED — TWO HORNS DOWN!", BOSS_STAGES.gorrach[1].taunt, () =>
+            this.arenaStageIntro(gen, c.title, c.sub, () => this.goringHorns(gen)),
+          );
+        } else {
+          this.notice("TURNED — HE COMES HARDER!", "#8ff4ff");
+          this.goringParry(gen, round + 1);
+        }
+      });
+    };
+
+    const good = (label: string) => {
+      if (done) return;
+      parried++;
+      tally.setText(`${parried} / ${cfg.need}`);
+      this.playCombo(["hero-attack2"], "hero-idle");
+      this.sfx(this.pick(["block1", "block2", "block3"]), 0.5);
+      buzz(22);
+      this.cameras.main.shake(150, 0.005);
+      this.bossReact();
+      this.tweens.add({ targets: bull, x: bull.x + 26, duration: 150, yoyo: true, ease: "Quad.easeOut" });
+      this.floatChip(R.cx, R.cy - 90, label, { size: 20, tint: [0xd8ffd0, 0xa9e6a9, 0x5aa85a, 0x2f6b2f] });
+      if (parried >= cfg.need) finish();
+    };
+
+    const bad = (why: string, times = ARENA_MISS_STRIKES) => {
+      if (done) return;
+      this.arenaWardMissed = true;
+      this.notice(why, "#ff8a6a");
+      this.bossSwing();
+      this.tweens.add({ targets: you, x: you.x - 20, duration: 180, yoyo: true, ease: "Quad.easeOut" });
+      this.arenaStrikeHero(times);
+      lockedUntil = this.time.now + (times > 1 ? ARENA_RED_LOCK_MS : 300);
+    };
+
+    /** One disguised swing: blank mark -> colour -> the beat -> resolution. */
+    const prompt = (delayMs: number, onResolved: () => void) => {
+      this.time.delayedCall(delayMs, () => {
+        if (done || gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+        const x = cfg.roam ? R.cx + (Math.random() * 2 - 1) * R.w * 0.26 : R.cx;
+        const y = cfg.roam ? R.cy + (Math.random() * 2 - 1) * R.h * 0.16 : R.cy + 20;
+        const kind: "blue" | "gold" | "red" = Math.random() < cfg.red ? "red" : Math.random() < 0.62 ? "blue" : "gold";
+        this.bossSwing();
+        this.sfx("swing3", 0.4, 0.75);
+
+        // the wind-up: a ring closing on the mark. It only ARMS at the end.
+        const ring = this.aReg(this.inBox(this.add.circle(x, y, 150, 0x000000, 0).setStrokeStyle(4, 0x9aa0ab, 0.85).setDepth(46)));
+        this.tweens.add({ targets: ring, scale: 0.36, duration: cfg.windup, ease: "Linear" });
+        // blank until he commits — no pre-reading the swing
+        const blank = this.aReg(this.inBox(this.add.circle(x, y, 50, 0x3a3f4b, 0.9).setStrokeStyle(4, 0x6a707c, 1).setDepth(44)));
+
+        // the only moment an answer counts: armed, not whiff-locked, not stunned
+        const armAt = this.time.now + cfg.windup - cfg.window;
+        const gate = () => this.time.now >= armAt && this.time.now >= this.swingLockUntil && this.time.now >= lockedUntil;
+        let answered = false;
+        let node: { destroy: () => void } | null = null;
+
+        // ...he shows his hand partway through
+        this.time.delayedCall(cfg.windup * cfg.reveal, () => {
+          if (answered || done || gen !== this.arenaGen) return;
+          blank.destroy();
+          if (kind === "blue") {
+            const dir = (["up", "down", "left", "right"] as SwipeDir[])[(Math.random() * 4) | 0];
+            const n = this.swipeNode(x, y, 50, dir, () => {
+              answered = true;
+              ring.destroy();
+              good("TURNED!");
+              onResolved();
+            }, () => {
+              answered = true;
+              ring.destroy();
+              bad("wrong way — the axe lands!");
+              onResolved();
+            }, gate);
+            node = n;
+          } else if (kind === "gold") {
+            const g = this.goldNode(x, y, 50, () => {
+              answered = true;
+              ring.destroy();
+              good("COUNTER!");
+              onResolved();
+            }, gate);
+            node = { destroy: () => g.destroy() };
+          } else {
+            const g = this.redNode(x, y, 50, () => {
+              answered = true;
+              ring.destroy();
+              bad("a feint — you swung at nothing!", ARENA_RED_STRIKES);
+              onResolved();
+            });
+            node = { destroy: () => g.destroy() };
+          }
+        });
+
+        // the beat: the ring flares white for the only moment that counts
+        this.time.delayedCall(cfg.windup - cfg.window, () => {
+          if (answered || done || gen !== this.arenaGen || !ring.scene) return;
+          ring.setStrokeStyle(5, 0xffffff, 1);
+          this.sfx("pickup", 0.25, 1.6);
+        });
+
+        this.time.delayedCall(cfg.windup, () => {
+          if (answered || done || gen !== this.arenaGen) return;
+          answered = true;
+          node?.destroy();
+          if (blank.scene) blank.destroy();
+          if (ring.scene) ring.destroy();
+          // letting a FEINT go by is the correct read — everything else is a hit
+          if (kind === "red") good("READ HIM!");
+          else bad(kind === "blue" ? "uncut — the axe lands!" : "too slow — he swings through!");
+          onResolved();
+        });
+      });
+    };
+
+    /** A set of prompts; when they have all resolved, he winds up again. */
+    const wave = () => {
+      if (done || gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+      let left = cfg.prompts;
+      const oneDone = () => {
+        if (--left > 0 || done) return;
+        this.time.delayedCall(cfg.rest, wave);
+      };
+      for (let i = 0; i < cfg.prompts; i++) prompt(i * (cfg.stagger ?? 0), oneDone);
+    };
+
+    this.time.delayedCall(600, wave);
+  }
+
+  /**
+   * HORN III — LOCK HORNS (tap / avoid only, and it fights back)
+   *
+   * Horns are locked and a mark sweeps the bar. Tap it on GOLD to shove him a
+   * notch; five notches break him. There is no BLUE here on purpose — this is
+   * the fight's last stage and it earns its difficulty from pressure inside two
+   * colours instead of a third verb:
+   *   - the gold band NARROWS and the sweep QUICKENS every notch
+   *   - RED stripes multiply as he tires (one, then two, then three)
+   *   - every zone DRIFTS inside its own slot, so you track rather than pre-aim
+   *   - a shove clock runs, so waiting for a clean alignment is itself a loss
+   * A whiff on bare bar only costs you a beat and the clock; touching RED costs
+   * a notch AND a strike. That split is deliberate — if a whiff hurt as much as
+   * red, red would mean nothing.
+   */
+  private goringHorns(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    this.grammarLegend();
+    const R = this.arenaRect();
+    this.bossHold = false;
+    if (this.orc) {
+      this.tweens.killTweensOf(this.orc);
+      this.orc.setAlpha(1).play("mino-idle");
+    }
+    let notch = 0;
+    let lockedUntil = 0;
+    const baseDone = this.arenaDealsDone; // horns I + II already banked
+
+    const BW = R.w * 0.74;
+    const BH = 54;
+    const bx0 = R.cx - BW / 2;
+    const by = R.cy + 20;
+    this.aReg(this.inBox(this.add.rectangle(R.cx, by, BW + 10, BH + 10, 0x120e08, 0.9).setStrokeStyle(3, 0x7d6a4a, 1).setDepth(41)));
+    const gold = this.aReg(this.inBox(this.add.rectangle(R.cx, by, 10, BH, G_GOLD, 0.9).setStrokeStyle(2, G_GOLD_EDGE, 1).setDepth(42)));
+    const reds = Array.from({ length: HORNS_MAX_REDS }, () =>
+      this.aReg(this.inBox(this.add.rectangle(R.cx, by, 10, BH, G_RED, 0.85).setStrokeStyle(2, G_RED_EDGE, 1).setDepth(42).setVisible(false))),
+    );
+    const mark = this.aReg(this.inBox(this.add.rectangle(bx0, by, 10, BH + 18, 0xffffff).setDepth(44)));
+    this.arenaLabel(R.x + 14, R.y + 12, "LOCK HORNS", "#ffd7a0", 17);
+    this.arenaLabel(R.x + 14, R.y + 40, "● tap on gold  ✖ red costs you two  — and it all keeps moving", "#9aa0ab", 14);
+
+    // the shove clock: stall and he takes the ground back
+    const CW = BW;
+    this.aReg(this.inBox(this.add.rectangle(R.cx, by - BH / 2 - 26, CW + 6, 14, 0x0a0b0f, 0.85).setDepth(43)));
+    const clock = this.aReg(this.inBox(this.add.rectangle(bx0, by - BH / 2 - 26, CW, 9, 0xffd7a0).setOrigin(0, 0.5).setDepth(44)));
+    let clockTween: Phaser.Tweens.Tween | null = null;
+
+    const pips: Phaser.GameObjects.Arc[] = [];
+    for (let i = 0; i < HORNS_NOTCHES; i++)
+      pips.push(this.aReg(this.inBox(this.add.circle(R.cx - (HORNS_NOTCHES - 1) * 20 + i * 40, by + 96, 12, 0x2a2118, 1).setStrokeStyle(3, 0x7d6a4a, 1).setDepth(43))));
+    const paintPips = () => pips.forEach((p, i) => p.setFillStyle(i < notch ? G_GOLD : 0x2a2118, 1));
+
+    const strainY = R.y + R.h * 0.32;
+    const bull = this.aReg(
+      this.inBox(this.add.sprite(R.cx + 190, strainY, "mino-idle").setOrigin(0.5, 0.9).setScale(0.72).setFlipX(this.boss.faceLeft).setDepth(45).play("mino-idle")),
+    );
+    const you = this.aReg(
+      this.inBox(this.add.sprite(R.cx - 190, strainY, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.4).setDepth(45).play("hero-idle")),
+    );
+
+    let sweep: Phaser.Tweens.Tween | null = null;
+    // every zone owns a SLOT and only drifts inside it, so they can never
+    // overlap however hard the drift is pushed
+    type Zone = { obj: Phaser.GameObjects.Rectangle; home: number; slack: number; phase: number };
+    let zones: Zone[] = [];
+    let drift = 0;
+
+    const restart = () => {
+      const step = HORNS_STEPS[Math.min(notch, HORNS_STEPS.length - 1)];
+      const gw = BW * step.gold;
+      const rw = BW * step.red;
+      const live = reds.slice(0, step.reds);
+      reds.forEach((r, i) => r.setVisible(i < step.reds));
+      gold.setSize(gw, BH);
+      live.forEach((r) => r.setSize(rw, BH));
+
+      const slotN = 1 + step.reds;
+      const seg = BW / slotN;
+      const order = Phaser.Utils.Array.Shuffle([...Array(slotN).keys()]);
+      const members: { obj: Phaser.GameObjects.Rectangle; w: number }[] = [{ obj: gold, w: gw }, ...live.map((r) => ({ obj: r, w: rw }))];
+      zones = members.map((m, k) => {
+        const slot = order[k];
+        const slack = Math.max(0, (seg - m.w) / 2 - 4);
+        const home = bx0 + slot * seg + seg / 2;
+        m.obj.x = home;
+        return { obj: m.obj, home, slack, phase: Math.random() * Math.PI * 2 };
+      });
+      drift = step.drift;
+
+      sweep?.stop();
+      mark.x = bx0;
+      sweep = this.tweens.add({ targets: mark, x: bx0 + BW, duration: step.sweep, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+
+      clockTween?.stop();
+      clock.setScale(1, 1);
+      clockTween = this.tweens.add({
+        targets: clock,
+        scaleX: 0,
+        duration: step.clock,
+        ease: "Linear",
+        onComplete: () => {
+          if (gen !== this.arenaGen || notch >= HORNS_NOTCHES) return;
+          lose("you stall — he takes the ground!");
+        },
+      });
+    };
+
+    const inZone = (z: Phaser.GameObjects.Rectangle) => z.visible && Math.abs(mark.x - z.x) <= z.width / 2;
+
+    const shove = () => {
+      notch++;
+      this.arenaDealsDone = baseDone + notch;
+      this.drainBossBar();
+      paintPips();
+      this.sfx("hit3", 0.55, 1 + notch * 0.05);
+      this.sfx(this.pick(["block1", "block2", "block3"]), 0.35);
+      buzz(22);
+      this.cameras.main.shake(160, 0.006);
+      this.playCombo(["hero-attack2"], "hero-idle");
+      this.bossReact();
+      this.tweens.add({ targets: bull, x: bull.x + 34, duration: 160, yoyo: true, ease: "Quad.easeOut" });
+      this.tweens.add({ targets: you, x: you.x + 16, duration: 160, ease: "Quad.easeOut" });
+      if (this.orc) this.tweens.add({ targets: this.orc, x: this.orc.x + 20, duration: 200, ease: "Quad.easeOut" });
+      this.floatChip(bull.x, bull.y - 90, "SHOVE!", { size: 22, tint: [0xd8ffd0, 0xa9e6a9, 0x5aa85a, 0x2f6b2f] });
+      if (notch >= HORNS_NOTCHES) {
+        sweep?.stop();
+        clockTween?.stop();
+        this.arenaStageClear(gen, "HIS LAST HORN SPLITS!", "", () => this.arenaExecution(gen), 900);
+        return;
+      }
+      restart();
+    };
+
+    const lose = (why: string, times = ARENA_MISS_STRIKES) => {
+      lockedUntil = this.time.now + (times > 1 ? ARENA_RED_LOCK_MS : 420);
+      this.arenaWardMissed = true;
+      notch = Math.max(0, notch - (times > 1 ? 2 : 1)); // red costs you two of the five
+      this.arenaDealsDone = baseDone + notch;
+      this.drainBossBar();
+      paintPips();
+      this.sfx("swing1", 0.3);
+      this.notice(why, "#ff8a6a");
+      this.tweens.add({ targets: you, x: you.x - (times > 1 ? 40 : 22), duration: 200, yoyo: true, ease: "Quad.easeOut" });
+      this.arenaStrikeHero(times);
+      restart();
+    };
+
+    restart();
+    paintPips();
+
+    // the drift: zones slide inside their slots, so the timing you learned on
+    // the last notch is never quite the timing you need on this one
+    this.aTimer(
+      this.time.addEvent({
+        delay: 16,
+        loop: true,
+        callback: () => {
+          if (gen !== this.arenaGen || this.run.over || !this.arenaActive || notch >= HORNS_NOTCHES) return;
+          if (drift <= 0) return;
+          const t = this.time.now / 1000;
+          for (const z of zones) z.obj.x = z.home + Math.sin(t * drift + z.phase) * z.slack;
+        },
+      }),
+    );
+
+    const catcher = this.aReg(this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0xffffff, 0.001).setDepth(60).setInteractive()));
+    catcher.on("pointerdown", () => {
+      if (gen !== this.arenaGen || this.run.over || !this.arenaActive || notch >= HORNS_NOTCHES) return;
+      if (this.time.now < lockedUntil) return;
+      if (reds.some(inZone)) {
+        lose("RED — he drives you back!", ARENA_RED_STRIKES);
+        return;
+      }
+      if (inZone(gold)) {
+        shove();
+        return;
+      }
+      // a whiff costs a notch and a strike; RED costs TWO notches, a double
+      // strike and a long lockout. Both hurt — red simply hurts far more, which
+      // is what keeps the colour meaning something.
+      lose("no purchase — he drives you back!");
+    });
+  }
+
+
+  // ================= THE THREE RIMES (snow boss arena) =================
+  // The Hoarfrost Warden never moves from where he plants his feet. He works on
+  // the pit instead: he seals it, he tests you with sigils, and at the last he
+  // opens his own frozen heart — for as long as the ring lets you reach it.
+
+  private rimesIntro(gen: number) {
+    const c = BOSS_STAGES.hoarfrost[0];
+    this.arenaStageIntro(gen, c.title, c.sub, () => this.rimeIce(gen));
+  }
+
+  /**
+   * RIME I — BREAK THE ICE (all three colours, at speed)
+   *
+   * He seals the pit and it crusts over. GOLD plates want a tap, BLUE plates
+   * want a cut along their grain, RED plates want nothing at all — touch one and
+   * the cold bites. The seal fills FASTER the more plates you leave standing, so
+   * you cannot simply wait out the reds.
+   */
+  private rimeIce(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    this.grammarLegend();
+    const R = this.arenaRect();
+    let cleared = 0;
+    let freeze = 0; // 0..1 — the seal closing
+    let done = false;
+    type Plate = { kind: "gold" | "blue" | "red"; obj: Phaser.GameObjects.Rectangle; x: number; y: number; taps: number; cut?: { destroy: () => void } };
+    const plates = new Set<Plate>();
+
+    this.aReg(this.inBox(this.add.rectangle(R.cx, R.cy, R.w, R.h, 0x0d2740, 0.35).setDepth(39)));
+    const label = this.arenaLabel(R.x + 14, R.y + 12, `PLATES  0 / ${RIME_PLATES_TO_CLEAR}`, "#bfe8ff", 17);
+    const MW = R.w - 60;
+    this.aReg(this.inBox(this.add.rectangle(R.cx, R.y + 44, MW + 6, 16, 0x0a0b0f, 0.85).setDepth(48)));
+    const meter = this.aReg(this.inBox(this.add.rectangle(R.cx - MW / 2, R.y + 44, MW, 11, G_BLUE).setOrigin(0, 0.5).setScale(0, 1).setDepth(49)));
+    this.arenaLabel(R.x + R.w - 150, R.y + 62, "THE SEAL", "#8ff4ff", 14);
+
+    const shatter = (pl: Plate) => {
+      const burst = this.inBox(
+        this.add
+          .particles(pl.x, pl.y, "spark", {
+            speed: { min: 90, max: 300 }, lifespan: { min: 180, max: 420 },
+            scale: { start: 1.1, end: 0 }, blendMode: "ADD", tint: 0xbfe8ff, emitting: false,
+          })
+          .setDepth(46),
+      );
+      burst.explode(16);
+      this.time.delayedCall(600, () => burst.destroy());
+      plates.delete(pl);
+      pl.cut?.destroy();
+      pl.obj.destroy();
+      this.sfx("block2", 0.4, 1.3);
+      cleared++;
+      label.setText(`PLATES  ${cleared} / ${RIME_PLATES_TO_CLEAR}`);
+      if (cleared % 4 === 0 && cleared < RIME_PLATES_TO_CLEAR) {
+        this.arenaDealsDone++;
+        this.drainBossBar();
+        this.bossReact();
+        this.notice("THE SEAL CRACKS!", "#8ff4ff");
+      }
+      if (cleared >= RIME_PLATES_TO_CLEAR) {
+        done = true;
+        this.arenaDealsDone++;
+        const c = BOSS_STAGES.hoarfrost[1];
+        this.arenaStageClear(gen, "YOU BREAK THE SEAL — A RIME FALLS!", BOSS_STAGES.hoarfrost[0].taunt, () =>
+          this.arenaStageIntro(gen, c.title, c.sub, () => this.rimeWhiteout(gen, 0)),
+        );
+      }
+    };
+
+    const spawnPlate = () => {
+      if (done || plates.size >= RIME_MAX_PLATES) return;
+      const x = R.x + 90 + Math.random() * (R.w - 180);
+      const y = R.y + 110 + Math.random() * (R.h - 220);
+      const roll = Math.random();
+      const kind: Plate["kind"] = roll < 0.55 ? "gold" : roll < 0.8 ? "blue" : "red";
+      const colour = kind === "gold" ? G_GOLD : kind === "blue" ? G_BLUE : G_RED;
+      const edge = kind === "gold" ? G_GOLD_EDGE : kind === "blue" ? G_BLUE_EDGE : G_RED_EDGE;
+      const obj = this.aReg(
+        this.inBox(
+          this.add
+            .rectangle(x, y, 88, 88, colour, 0.9)
+            .setStrokeStyle(4, edge, 1)
+            .setAngle(Math.random() * 40 - 20)
+            .setScale(0)
+            .setDepth(43)
+            .setInteractive({ useHandCursor: true }),
+        ),
+      );
+      const pl: Plate = { kind, obj, x, y, taps: RIME_PLATE_TAPS };
+      plates.add(pl);
+      if (kind === "blue") {
+        // a blue plate carries its grain: cut that way and it splits
+        const dir = (["up", "down", "left", "right"] as SwipeDir[])[(Math.random() * 4) | 0];
+        pl.cut = this.swipeNode(x, y, 40, dir, () => shatter(pl), () => {
+          this.arenaWardMissed = true;
+          this.notice("against the grain!", "#ff8a6a");
+          this.sfx("swing1", 0.3);
+        });
+      }
+      this.tweens.add({ targets: obj, scale: 1, duration: 220, ease: "Back.easeOut" });
+      this.sfx("swap", 0.22, 1.5);
+      obj.on("pointerdown", () => {
+        if (done || gen !== this.arenaGen) return;
+        if (pl.kind === "red") {
+          // ✖ — the one plate that never wanted touching
+          this.arenaWardMissed = true;
+          this.notice("RED — the cold bites!", "#ff8a6a");
+          this.sfx("hit2", 0.5);
+          plates.delete(pl);
+          obj.destroy();
+          this.arenaStrikeHero(ARENA_RED_STRIKES);
+          return;
+        }
+        if (pl.kind !== "gold") return; // blue is resolved by its cut node
+        pl.taps--;
+        this.sfx(this.pick(["hit1", "hit2"]), 0.35, 1.4 + (RIME_PLATE_TAPS - pl.taps) * 0.12);
+        this.tweens.add({ targets: obj, scaleX: 0.86, scaleY: 1.12, duration: 70, yoyo: true });
+        if (pl.taps > 0) {
+          obj.setFillStyle(pl.taps === 2 ? 0xe8b95a : 0xd9a23c, 0.9); // it crazes, then dulls
+          return;
+        }
+        shatter(pl);
+      });
+    };
+
+    for (let i = 0; i < 3; i++) spawnPlate();
+    this.aTimer(this.time.addEvent({ delay: RIME_PLATE_SPAWN_MS, loop: true, callback: spawnPlate }));
+
+    this.aTimer(
+      this.time.addEvent({
+        delay: 60,
+        loop: true,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          freeze += (60 / RIME_FREEZE_MS) * (1 + 0.5 * Math.max(0, plates.size - 1));
+          meter.scaleX = Math.min(1, freeze);
+          if (freeze < 1) return;
+          // sealed: he closes his fist, the pit re-crusts and the thaw starts over
+          freeze = 0.3;
+          this.arenaWardMissed = true;
+          this.bossSwing();
+          this.notice("THE SEAL CLOSES — the cold bites!", "#ff8a6a");
+          this.arenaStrikeHero();
+          for (const pl of plates) {
+            pl.cut?.destroy();
+            pl.obj.destroy();
+          }
+          plates.clear();
+          spawnPlate();
+          spawnPlate();
+        },
+      }),
+    );
+  }
+
+  /**
+   * RIME II — THE WHITEOUT (reaction: dodge RED, tap GOLD, hold BLUE)
+   *
+   * A blizzard takes the pit. RED icicle columns telegraph, then fall — your
+   * scout is a token you drag clear of them. GOLD warmth-motes drift through and
+   * want a tap. This is the one stage with no BLUE, and deliberately so: moving
+   * the scout IS a drag, so a cut here would fight the dodging for the same
+   * gesture. Two colours is the honest answer.
+   */
+  private rimeWhiteout(gen: number, round: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    this.grammarLegend();
+    const R = this.arenaRect();
+    const ROUNDS = [
+      { motes: 4, dropMs: 1500, tellMs: 900, cols: 1 },
+      { motes: 5, dropMs: 1250, tellMs: 750, cols: 2 },
+      { motes: 6, dropMs: 1000, tellMs: 620, cols: 2 },
+    ];
+    const cfg = ROUNDS[round];
+    let caught = 0;
+    let done = false;
+
+    this.aReg(this.inBox(this.add.rectangle(R.cx, R.cy, R.w, R.h, 0x0d2740, 0.3).setDepth(39)));
+    this.arenaLabel(R.x + 14, R.y + 12, `THE WHITEOUT  ${round + 1} / ${ROUNDS.length}`, "#bfe8ff", 17);
+    const tally = this.arenaLabel(R.x + R.w - 170, R.y + 12, `0 / ${cfg.motes}`, "#ffd24a", 18);
+
+    // your scout, dragged along the floor of the pit
+    const floorY = R.y + R.h - 74;
+    const tok = this.aReg(
+      this.inBox(this.add.sprite(R.cx, floorY, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.2).setDepth(46).play("hero-idle")),
+    );
+    this.arenaLabel(R.x + 14, R.y + 40, "drag low to run — tap the gold warmth", "#9aa0ab", 14);
+
+
+    const fail = (why: string, times = ARENA_MISS_STRIKES) => {
+      if (done) return;
+      this.arenaWardMissed = true;
+      this.notice(why, "#ff8a6a");
+      this.arenaStrikeHero(times);
+    };
+
+    // GOLD warmth drifts across; tapping one banks it
+    this.aTimer(
+      this.time.addEvent({
+        delay: 900,
+        loop: true,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          const y = R.y + 110 + Math.random() * (R.h - 260);
+          const node = this.goldNode(R.x + R.w + 40, y, 30, () => {
+            caught++;
+            tally.setText(`${caught} / ${cfg.motes}`);
+            this.sfx("pickup", 0.4, 1.2);
+            if (caught >= cfg.motes && !done) {
+              done = true;
+              this.arenaDealsDone++;
+              this.drainBossBar();
+              this.time.delayedCall(500, () => {
+                if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+                if (round + 1 >= ROUNDS.length) {
+                  const c = BOSS_STAGES.hoarfrost[2];
+                  this.arenaStageClear(gen, "YOU OUTLAST THE STORM — ANOTHER RIME FALLS!", BOSS_STAGES.hoarfrost[1].taunt, () =>
+                    this.arenaStageIntro(gen, c.title, c.sub, () => this.rimeHeart(gen)),
+                  );
+                } else {
+                  this.notice("THE STORM DEEPENS!", "#8ff4ff");
+                  this.rimeWhiteout(gen, round + 1);
+                }
+              });
+            }
+          });
+          this.tweens.add({
+            targets: node,
+            x: R.x - 40,
+            duration: 4200,
+            ease: "Linear",
+            onComplete: () => node.scene && node.destroy(), // may already be caught
+          });
+        },
+      }),
+    );
+
+    // RED columns: a telegraph, then the fall. Be elsewhere.
+    this.aTimer(
+      this.time.addEvent({
+        delay: cfg.dropMs,
+        loop: true,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          for (let c = 0; c < cfg.cols; c++) {
+            const cx = R.x + 90 + Math.random() * (R.w - 180);
+            const tell = this.aReg(
+              this.inBox(this.add.rectangle(cx, R.cy + 20, 78, R.h - 90, G_RED, 0.16).setStrokeStyle(2, G_RED_EDGE, 0.7).setDepth(41)),
+            );
+            this.tweens.add({ targets: tell, alpha: 0.5, duration: cfg.tellMs / 3, yoyo: true, repeat: 1 });
+            this.time.delayedCall(cfg.tellMs, () => {
+              if (done || gen !== this.arenaGen || !this.arenaActive) return;
+              tell.destroy();
+              const spike = this.aReg(
+                this.inBox(this.add.rectangle(cx, R.y + 60, 64, 120, G_RED, 0.95).setStrokeStyle(3, G_RED_EDGE, 1).setDepth(47)),
+              );
+              this.sfx("fireball1", 0.3, 1.5);
+              this.tweens.add({
+                targets: spike,
+                y: floorY - 20,
+                duration: 260,
+                ease: "Quad.easeIn",
+                onComplete: () => {
+                  this.cameras.main.shake(140, 0.005);
+                  this.sfx("hit1", 0.35, 1.4);
+                  if (Math.abs(tok.x - cx) < 52) fail("the ice finds you!", ARENA_RED_STRIKES);
+                  this.tweens.add({ targets: spike, alpha: 0, duration: 260, onComplete: () => spike.destroy() });
+                },
+              });
+            });
+          }
+        },
+      }),
+    );
+
+    this.aTimer(
+      this.time.addEvent({
+        delay: 16,
+        loop: true,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          // drag anywhere along the lower half of the pit to run the scout
+          const p = this.input.activePointer;
+          if (p.isDown) {
+            const l = this.toLocal(p.x, p.y);
+            if (l.y > R.y + R.h * 0.4) tok.x = Phaser.Math.Clamp(l.x, R.x + 40, R.x + R.w - 40);
+          }
+        },
+      }),
+    );
+  }
+
+
+  /** RIME III: his core turns behind a ring of shards. One gap. Four clean hits. */
+  private rimeHeart(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    const R = this.arenaRect();
+    const CX = R.cx;
+    const CY = R.cy + 10;
+    const RAD = 150;
+    const STRIKE = 180; // the blade comes in from the hero's side — always due left
+    let hits = 0;
+    let gapAngle = Math.random() * 360;
+    let dir = 1;
+    let lockedUntil = 0;
+    let done = false;
+
+    this.aReg(this.inBox(this.add.rectangle(R.cx, R.cy, R.w, R.h, 0x0d2740, 0.3).setDepth(39)));
+    this.grammarLegend();
+    this.arenaLabel(R.x + 14, R.y + 12, "THE FROZEN HEART", "#8ff4ff", 18);
+    const tally = this.arenaLabel(R.x + R.w - 150, R.y + 12, `0 / ${HEART_HITS}`, "#bfe8ff", 18);
+    // the strike line: your blade comes from here, so the gap must be HERE
+    this.aReg(this.inBox(this.add.rectangle(CX - RAD - 90, CY, 120, 5, G_GOLD, 0.5).setDepth(41)));
+    this.aReg(this.inBox(this.add.text(CX - RAD - 152, CY, "▶", { fontFamily: EMOJI_FONT, fontSize: "34px", color: "#ffd24a" }).setOrigin(0.5).setDepth(42)));
+
+    this.aReg(this.inBox(this.add.circle(CX, CY, RAD, 0x000000, 0).setStrokeStyle(2, 0x30538f, 0.7).setDepth(40)));
+    const core = this.aReg(
+      this.inBox(this.add.circle(CX, CY, 50, G_GOLD, 0.95).setStrokeStyle(4, G_GOLD_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
+    );
+    const glow = this.aReg(this.inBox(this.add.image(CX, CY, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(G_GOLD).setScale(2.4).setAlpha(0.5).setDepth(43)));
+    this.tweens.add({ targets: glow, scale: 3, alpha: 0.22, duration: 900, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+
+    const shards: Phaser.GameObjects.Rectangle[] = [];
+    for (let i = 0; i < HEART_SHARDS; i++)
+      shards.push(this.aReg(this.inBox(this.add.rectangle(CX, CY, 30, 84, G_RED, 0.9).setStrokeStyle(3, G_RED_EDGE, 1).setDepth(45))));
+
+    const gapHalf = () => lerp(HEART_GAP_FROM, HEART_GAP_TO, hits / Math.max(1, HEART_HITS - 1));
+    const spin = () => lerp(HEART_SPIN_FROM, HEART_SPIN_TO, Math.min(1, hits / 3));
+    const place = () => {
+      const g = gapHalf();
+      const span = 360 - 2 * g;
+      for (let i = 0; i < HEART_SHARDS; i++) {
+        const a = gapAngle + g + ((i + 0.5) * span) / HEART_SHARDS;
+        const rad = Phaser.Math.DegToRad(a);
+        shards[i].setPosition(CX + Math.cos(rad) * RAD, CY + Math.sin(rad) * RAD).setAngle(a + 90);
+      }
+    };
+    place();
+
+    this.aTimer(
+      this.time.addEvent({
+        delay: 16,
+        loop: true,
+        callback: () => {
+          if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          gapAngle = (gapAngle + dir * spin() * 0.016 + 360) % 360;
+          place();
+          // the core brightens as the opening swings past your blade
+          const open = Math.abs(Phaser.Math.Angle.ShortestBetween(gapAngle, STRIKE)) <= gapHalf();
+          core.setFillStyle(open ? G_GOLD : 0x46505e, 0.95); // GOLD only while it is truly tappable
+        },
+      }),
+    );
+
+    core.on("pointerdown", () => {
+      if (done || gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+      if (this.time.now < lockedUntil) {
+        // say so — a dead tap with no answer reads as a broken button
+        this.sfx("swap", 0.2, 0.6);
+        this.floatChip(CX, CY - 80, "blade still locked", { size: 15, tint: [0xd0d4dc, 0xb9c0cc, 0x8a8f98, 0x6a707c], stroke: "#14171f" });
+        return;
+      }
+      const open = Math.abs(Phaser.Math.Angle.ShortestBetween(gapAngle, STRIKE)) <= gapHalf();
+      if (!open) {
+        // a shard takes the blade — the ring bucks and reverses on you
+        lockedUntil = this.time.now + HEART_LOCK_MS;
+        dir *= -1;
+        this.arenaWardMissed = true;
+        this.sfx("block1", 0.5, 0.8);
+        this.notice("A SHARD TURNS YOUR BLADE!", "#ff8a6a");
+        this.cameras.main.shake(200, 0.007);
+        this.tweens.add({ targets: shards, alpha: 0.5, duration: 120, yoyo: true });
+        this.arenaStrikeHero(ARENA_RED_STRIKES);
+        return;
+      }
+      hits++;
+      dir *= Math.random() < 0.5 ? -1 : 1; // and it may turn anyway — never settle in
+      tally.setText(`${hits} / ${HEART_HITS}`);
+      this.playCombo(["hero-attack2"], "hero-idle");
+      this.sfx("hit3", 0.6, 0.9 + hits * 0.08);
+      buzz(26);
+      this.bossReact();
+      this.arenaDealsDone++;
+      this.drainBossBar();
+      const burst = this.inBox(
+        this.add
+          .particles(CX, CY, "spark", {
+            speed: { min: 120, max: 340 }, lifespan: { min: 200, max: 500 },
+            scale: { start: 1.4, end: 0 }, blendMode: "ADD", tint: 0xbfe8ff, emitting: false,
+          })
+          .setDepth(47),
+      );
+      burst.explode(26);
+      this.time.delayedCall(700, () => burst.destroy());
+      this.tweens.add({ targets: core, scale: 0.7, duration: 120, yoyo: true });
+      if (hits >= HEART_HITS) {
+        done = true;
+        this.arenaStageClear(gen, "HIS HEART SPLITS — THE LAST RIME FALLS!", "", () => this.arenaExecution(gen), 900);
+      }
+    });
   }
 
   /** The finishing strike: dash across the arena and end him. */
@@ -3359,7 +5017,7 @@ class GameScene extends Phaser.Scene {
   private strike(force = false, pierce = false) {
     if (!force && this.tutorial?.active) return; // the tutorial scripts its own strikes
     if (this.run.over || this.phase !== "fight" || this.orcDying || !this.orc || !this.run.enemy) return;
-    const isBoss = this.orcAnim === "boss";
+    const isBoss = this.orcAnim === this.boss.key;
 
     // pick the attack: the goblin alternates a melee swing (steps in) and a
     // thrown bomb (arcs across, landing later than a swing would)
@@ -4023,6 +5681,20 @@ class GameScene extends Phaser.Scene {
         this.time.delayedCall(220, () => this.orc?.clearTint());
         break;
       }
+      case "wardsalve":
+        if (this.run.pierceMult <= SALVE_MULT) {
+          this.notice("the salve is already on your skin", "#9aa0ab");
+          return; // not consumed
+        }
+        this.run.pierceMult = SALVE_MULT;
+        this.notice("salve worked in — a warden's blows land at half force", "#8fd0ff");
+        this.sfx("pickup", 0.45, 0.9);
+        break;
+      case "wardbell":
+        this.run.bellCharges += BELL_CHARGES;
+        this.notice(`the bell is strung — ${this.run.bellCharges} RED blows will toll harmlessly`, "#8fd0ff");
+        this.sfx("block3", 0.5, 1.4);
+        break;
       case "waystone":
         this.freezeLeft += WAYSTONE_SECS;
         this.notice("the world holds its breath", "#8fd0ff");

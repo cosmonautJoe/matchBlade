@@ -281,12 +281,84 @@ pack, CC0, 150×150, flipped to face left).
   **`BOSS_SURGE = 0.2`** pressure relief on top of the kill surge, and a
   **guaranteed chest** becomes due next (and waits if the item pack is full).
 - **Dev:** `__mb.debugBoss()` rigs the next foe as the boss.
-- **Future boss-minigame ideas** (for later biome bosses, so each boss breaks
-  the rules differently): Reflect the Fireballs (swipe projectiles back into
-  his wards) · Rune Sequence (Simon-style pattern repeat) · Shield the Caravan
-  (move a shield between fire-rain lanes) · Destroy the Ritual (hit glowing
-  stones, avoid cursed ones) · Spell Duel (read his cast colour, counter with
-  the sword/staff button before it completes).
+
+### 6b. The boss grammar — three colours, one rule
+
+Every warden speaks the same vocabulary, so what you learn in the plains still
+reads in the pass. The fights differ in theme and staging, never in language —
+the Undertale trick, where **colour IS the rule**.
+
+| | | |
+|---|---|---|
+| **GOLD ●** | **tap it** | a strike, committed at an instant |
+| **BLUE ╱** | **cut it** | swipe across it, the way its arrow points |
+| **RED ✖** | **never touch it** | a lie among the gold (touching burns), or a hazard sweeping at you (get clear) |
+
+Red covers both cases deliberately, so it never needs re-teaching: stationary
+red is a trap, moving red is an attack, and both resolve to *no contact*.
+
+**A warden's blow pierces the guard** (`pierceStrike` in run.ts). Shields are for
+the road; his power lands in full and the guard pool is never spent or consulted.
+While guard absorbed arena hits, a player who banked shields on the board could
+eat every colour mistake for free and the rules carried no stakes. A miss costs
+one blow, a RED violation costs two — plus a longer lockout and a heavier shove.
+The HUD floats a PIERCED chip whenever you still hold guard, so the untouched
+counter never reads as a bug. Dial with `ARENA_PIERCE_MULT`.
+
+**A warden's blow pierces the guard** (`pierceStrike` in run.ts). Shields are for
+the road; his power lands in full and the guard pool is never spent or consulted.
+While guard absorbed arena hits, a player who banked shields on the board could
+eat every colour mistake for free and the rules carried no stakes. A miss costs
+one blow, a RED violation costs two — plus a longer lockout and a heavier shove.
+The HUD floats a **🛡 PIERCED** chip whenever you still hold guard, so the
+untouched counter never reads as a bug. Dial with `ARENA_PIERCE_MULT`.
+
+**Gold and blue are both committed at an instant** — that is the load-bearing
+decision. An earlier pass made blue a press-and-hold, and every blue stage died
+the same death: holding is *passive* (the only skill is choosing when to stop),
+your finger parks on top of the thing you are meant to be watching, and three
+different bosses ended up running the same "hold it, wait, let go" puzzle. A
+directional cut keeps the timing commitment that makes the good stages good and
+adds a second axis — direction — to read under pressure.
+
+Shared parts in `main.ts`: `G_GOLD/G_BLUE/G_RED`, `grammarLegend()` (the key,
+drawn in every arena), `goldNode()`, `redNode()`, `swipeNode()`, and one
+`installSwipeReader()` that judges every drag against the live cut targets
+(`SWIPE_MIN` distance, `SWIPE_TOL` degrees of slop). `BOSS_STAGES` holds each
+warden's three stage cards.
+
+**No stage is a memory test, and no stage is a hold.** Everything is reaction,
+timing or nerve — the Simon-style labyrinth, the rule-recall sigils, and all
+four hold stages were cut for exactly this reason.
+
+**The reference stage is THE FROZEN HEART** (Rime III): continuous motion, a
+readable window, one precise instant, escalating without changing its rule.
+When a stage isn't working, that's the shape to move it toward.
+
+### 6c. One warden per road
+
+The boss is chosen by biome (`BOSS_DEFS` + `BOSS_FOR_BIOME`). A `BossDef` carries
+the lane dressing — sheet prefix, scale, measured foot fraction (printed by
+`scripts/gen_bosses.py`), engage gap, name-banner gradient, veil colour — plus
+`steps`, the beats its arena is worth for the boss bar. **Only the current road's
+boss sheets preload.** The entrance, named bar, exposed-then-execute finish,
+spoils, flawless +1 guard refund and hearth-revive are all shared.
+
+| | Malgrim (plains/deep) | Gorrach (forest) | Warden (snow) |
+|---|---|---|---|
+| **I** | **THE EMBER COURT** — his images flare and fade; tap the GOLD, the RED ones burn | **THE CHARGE** — the RED path is the trampling; leap clear, then tap the GOLD gore-point on his flank | **BREAK THE ICE** — GOLD plates tap (×3), BLUE plates cut along the grain, RED plates bite |
+| **II** | **THE EMBER FALL** — fire rains four channels: tap GOLD, cut BLUE along its arrow, let RED land | **TURN HIS AXE** — a parry duel: cut BLUE aside, tap GOLD to counter, and let a RED feint go by | **THE WHITEOUT** — drag your scout clear of RED icicle columns and tap the GOLD warmth |
+| **III** | **RETURN HIS FIRE** — GOLD reflects at your guard, RED is the lie that only hurts if you swing at it | **LOCK HORNS** — the sweep crosses GOLD (tap), BLUE (cut along the arrow) and RED (never); zones reshuffle every shove | **THE FROZEN HEART** — RED shards ring the GOLD core; strike only as the gap crosses your blade-line |
+
+Stage III of Malgrim's fight is the template the rest were built from — it was
+already "strike this, never that", it just wasn't speaking the language yet
+(the old violet lie is now simply RED).
+
+The WHITEOUT is the one stage with **no blue**, on purpose: moving the scout is
+itself a drag, so a cut there would fight the dodging for the same gesture.
+
+Tuning knobs: `GORE_CHARGES` / `HORNS_*`, `RIME_*`, `HEART_*`, `TENNIS_*`,
+`SWIPE_MIN` / `SWIPE_TOL`. Art baked by `scripts/gen_bosses.py`.
 
 ---
 

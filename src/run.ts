@@ -63,6 +63,9 @@ export interface RunState {
   whetstone: number; // charges: sword matches that count as full 5-match combos
   surgeMult: number; // War Horn: multiplies the per-kill pressure surge (default 1)
   resMult: number; // Merchant's Ledger: multiplies wood/ore/treasure gains (default 1)
+  // ---- the Peddler's warden-charms: boss arenas only, useless anywhere else ----
+  pierceMult: number; // Warden's Salve: scales a warden's arena blow (default 1)
+  bellCharges: number; // Warding Bell: this many RED blows land as ordinary ones
 }
 
 // --- tuning knobs (easy to expose as upgrades later, DESIGN.md §5) ---
@@ -118,6 +121,12 @@ export const BOSS_HP_MULT = 1.8;
 export const BOSS_SCROLL_MULT = 0.5;
 export const BOSS_BOUNTY = 8; // treasure showered on the kill
 export const BOSS_SURGE = 0.2; // extra pressure relief on top of ADVANCE_PER_KILL
+// A warden's arena blow ignores the shield entirely (see pierceStrike), so his
+// raw `power` is what lands. That is a LOT by the second boss — at depth 19 with
+// the standard curve it is 0.36 of the bar per miss, and double that for a RED
+// violation. This is the one dial to turn if arena mistakes prove too lethal;
+// 1 means "his full power, undiminished".
+export const ARENA_PIERCE_MULT = 1;
 // A run's stretch of road ends at the SECOND boss: fell him (and loot his
 // hoard) and the scout returns to camp victorious — runs have a finish line.
 export const RUN_COMPLETE_AT = BOSS_EVERY * 2;
@@ -217,6 +226,8 @@ export function newRun(swordLevel = 0, forgeCapLevel = Number.POSITIVE_INFINITY,
     whetstone: 0,
     surgeMult: 1,
     resMult: 1,
+    pierceMult: 1,
+    bellCharges: 0,
   };
 }
 
@@ -376,6 +387,23 @@ export function spawnNext(s: RunState): Enemy | null {
  */
 export function guardCost(killed: number): number {
   return 1 + Math.floor(killed / 8);
+}
+
+/**
+ * A boss's blow inside his own arena PIERCES the guard. Shields are for the
+ * road; a warden's wards are not turned by a wooden board, so his power lands
+ * in full every time and the guard pool is neither spent nor consulted.
+ *
+ * This is what makes an arena mistake actually cost something: while guard
+ * absorbed these, a well-stocked player could eat every mistake in a fight for
+ * free and the colour rules carried no stakes.
+ */
+export function pierceStrike(s: RunState): number {
+  if (s.over || !s.enemy) return 0;
+  const net = s.enemy.power * ARENA_PIERCE_MULT * s.pierceMult; // the Salve softens the landing
+  s.pressure += net;
+  clampPressure(s);
+  return net;
 }
 
 /**
