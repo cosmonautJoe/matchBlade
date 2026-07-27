@@ -1,13 +1,14 @@
 {
   "name": "matchblade",
-  "version": "0.0.1",
+  "version": "0.0.7",
   "description": "A match-3 dungeon runner — slide tiles to fight your way through the dungeon.",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && node scripts/deploy.mjs"
+    "deploy": "npm run build && node scripts/deploy.mjs",
+    "bump": "node scripts/bump.mjs"
   },
   "devDependencies": {
     "@breezystack/lamejs": "^1.2.7",

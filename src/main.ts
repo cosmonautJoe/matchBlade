@@ -798,6 +798,7 @@ class GameScene extends Phaser.Scene {
     this.rainy = this.meta.biome === "snow" || this.meta.biome === "dungeon" ? false : Math.random() < RAIN_CHANCE;
     this.heroLockX = false;
     this.heroKnock = 0;
+    this.settleCamera(); // a restart must never inherit a stranded zoom/shake
     this.bossHold = false;
     this.overShown = false;
     this.runCompleteShown = false;
@@ -2682,10 +2683,7 @@ class GameScene extends Phaser.Scene {
       dying.setTintFill(0xffffff);
       this.time.delayedCall(90, () => dying.clearTint());
       buzz(18);
-      const cam = this.cameras.main;
-      cam.zoomTo(1.035, 70, Phaser.Math.Easing.Quadratic.Out, true, (_c: Phaser.Cameras.Scene2D.Camera, prog: number) => {
-        if (prog === 1) cam.zoomTo(1, 160, Phaser.Math.Easing.Sine.Out, true);
-      });
+      this.punchCamera();
       this.tweens.killTweensOf(dying);
       dying.play(`${this.orcAnim}-death`);
       if (this.orcRig?.fakeDeath) {
@@ -6127,6 +6125,58 @@ class GameScene extends Phaser.Scene {
     this.strike(true, pierce, slowMotion); // pierce is honoured at CONTACT, not up front
     return true;
   }
+  /**
+   * The kill punch-in: in a hair, then straight back out.
+   *
+   * This used to chain two cam.zoomTo() calls, the second fired from the first
+   * one's progress callback. If anything interrupted that hand-off — a second
+   * kill, a scene pause, the tutorial retaking the view — the camera was left
+   * sitting at 1.035 forever, which crops the outer 3.5% of the screen and eats
+   * the corners of the HUD. Tweening zoom directly, killing any prior tween and
+   * pinning the final value, makes the return unconditional.
+   */
+  private punchCamera(to = 1.035, inMs = 70, outMs = 160) {
+    // While the tutorial has the lane framed, the shell is already mid-zoom and
+    // the punch stacks on top of it — kill the demo foe during that framing and
+    // the two transforms fight, which is exactly how the camera used to end up
+    // stranded. The tutorial owns the view for those few seconds; let it.
+    if (this.tutorialHitFocus) return;
+    const cam = this.cameras.main;
+    cam.zoomEffect.reset();
+    this.tweens.killTweensOf(cam);
+    this.tweens.add({
+      targets: cam,
+      zoom: to,
+      duration: inMs,
+      ease: "Quad.easeOut",
+      onComplete: () => {
+        this.tweens.add({
+          targets: cam,
+          zoom: 1,
+          duration: outMs,
+          ease: "Sine.easeOut",
+          onComplete: () => {
+            cam.zoom = 1; // land exactly on 1 however the tween ended
+          },
+        });
+      },
+    });
+  }
+
+  /**
+   * Put the camera back to dead centre, unzoomed. Shake perturbs scroll while it
+   * runs and the punch-in touches zoom, so anything that promises "the view is
+   * normal again" has to say so explicitly rather than assume.
+   */
+  private settleCamera() {
+    const cam = this.cameras.main;
+    this.tweens.killTweensOf(cam);
+    cam.zoomEffect.reset();
+    cam.shakeEffect.reset();
+    cam.setZoom(1);
+    cam.setScroll(0, 0);
+  }
+
   /** Pause the sword resolve until the lane is framed, then slow this one hero combo. */
   public focusTutorialSword(onComplete: () => void) {
     this.tutorialSwordSlow = true;
@@ -6150,6 +6200,10 @@ class GameScene extends Phaser.Scene {
   /** Return the responsive shell to its normal framing before the board lesson resumes. */
   public restoreTutorialView(onComplete?: () => void, immediate = false) {
     this.tutorialHitFocus = false;
+    // the shell tween below restores the CENTRE COLUMN; the camera is a separate
+    // transform, and a punch-in or shake caught mid-flight would otherwise stay
+    // applied and leave the HUD clipped at the corners
+    this.settleCamera();
     const base = { x: this.centerBaseX, y: this.centerBaseY, scale: this.centerBaseScale };
     if (immediate) {
       this.tutorialViewTween?.stop();

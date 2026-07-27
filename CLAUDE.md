@@ -14,6 +14,11 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
   `.claude/launch.json`), falls back to 5173.
 - `npm run build` — `tsc --noEmit` + Vite bundle to `dist/`. Run tsc before
   committing; there are no unit tests yet.
+- `npm run bump` — **bump the version with every batch of changes** (`bump
+  minor` / `bump major` when it's more than a patch). `package.json`'s version
+  is the single source of truth: vite's `define` feeds it to the title screen,
+  so this one number is the whole version story. It sat at 0.0.1 for 58 commits
+  because nothing prompted it — bump it as part of committing, not later.
 - `npm run deploy` — **the ONLY way the live site updates.** Builds, then
   force-pushes `dist/` to the `gh-pages` branch (`scripts/deploy.mjs`).
   Live at: **https://cosmonautjoe.github.io/matchBlade/**
