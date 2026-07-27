@@ -1,6 +1,6 @@
 {
   "name": "matchblade",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "A match-3 dungeon runner — slide tiles to fight your way through the dungeon.",
   "type": "module",
   "scripts": {

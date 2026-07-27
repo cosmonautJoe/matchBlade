@@ -44,7 +44,7 @@ export const SAPPER_RADIUS = 1; // 3x3
 // Warden-charms. Deliberately modest: a boss arena pierces your guard entirely,
 // so these take the edge off a mistake rather than buying one back.
 export const SALVE_MULT = 0.5; // a warden's blow lands at half force
-export const BELL_CHARGES = 2; // RED blows softened to ordinary ones
+export const BELL_CHARGES = 1; // RED slips forgiven outright (stacks if you buy two)
 
 const TAP = "tap to use";
 const AIM = "tap, then pick a tile";
@@ -90,7 +90,7 @@ export const ITEMS: ItemDef[] = [
   { id: "wardsalve", name: "Warden's Salve", glyph: "🩹", tier: "uncommon", target: "none", bossAid: true,
     desc: "A warden's blows land at HALF force for the rest of the run. Their wards still pierce your guard — you just keep your feet.", hint: `${TAP} · boss fights only` },
   { id: "wardbell", name: "Warding Bell", glyph: "🔔", tier: "common", target: "none", bossAid: true,
-    desc: `Rung against ruin: the next ${BELL_CHARGES} RED blows in a boss arena land as ordinary ones instead of double.`, hint: `${TAP} · boss fights only` },
+    desc: "Rung against ruin: your next RED slip in a boss arena simply doesn't count — no blow, no ground lost, your run stays clean.", hint: `${TAP} · boss fights only` },
 ];
 
 export function itemById(id: string): ItemDef | undefined {

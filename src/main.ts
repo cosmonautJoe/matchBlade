@@ -3453,13 +3453,6 @@ class GameScene extends Phaser.Scene {
    * `times` is the severity: a RED violation lands twice.
    */
   private arenaStrikeHero(times = ARENA_MISS_STRIKES) {
-    // the Warding Bell spends itself softening a RED blow to an ordinary one
-    if (times > ARENA_MISS_STRIKES && this.run.bellCharges > 0) {
-      this.run.bellCharges--;
-      times = ARENA_MISS_STRIKES;
-      this.sfx("block3", 0.55, 1.5);
-      this.notice(`the bell tolls — the blow is dulled (${this.run.bellCharges} left)`, "#8fd0ff");
-    }
     const hits = Math.max(1, times);
     let net = 0;
     for (let i = 0; i < hits; i++) net += pierceStrike(this.run);
@@ -3487,6 +3480,36 @@ class GameScene extends Phaser.Scene {
       const flash = this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, G_RED, 0.28).setDepth(70));
       this.tweens.add({ targets: flash, fillAlpha: 0, duration: 420, onComplete: () => flash.destroy() });
     }
+  }
+
+  /**
+   * A RED slip, offered to the Warding Bell first.
+   *
+   * Returns true if a bell ate it, in which case the CALLER MUST ABORT: no
+   * strike, no lost notch, no broken flawless run — the mistake simply did not
+   * happen. Softening the damage (what the bell used to do) was the wrong shape
+   * for a charm: RED is the one rule the grammar never bends, so forgiving the
+   * rule outright reads far better than quietly discounting the bill.
+   */
+  private bellForgives(): boolean {
+    if (this.run.bellCharges <= 0) return false;
+    this.run.bellCharges--;
+    this.refreshHud();
+    this.sfx("block3", 0.6, 1.55);
+    this.sfx("pickup", 0.4, 1.7);
+    this.notice(
+      this.run.bellCharges > 0
+        ? `THE BELL TOLLS — that one doesn't count (${this.run.bellCharges} left)`
+        : "THE BELL TOLLS — that one doesn't count",
+      "#ffd24a",
+    );
+    // a warding ring flares off the hero so the save is unmistakable
+    const ring = this.inBox(
+      this.add.circle(this.hero.x, GROUND_Y - 46, 34, 0x000000, 0).setStrokeStyle(5, 0xffd24a, 1).setDepth(52),
+    );
+    this.tweens.add({ targets: ring, scale: 3.4, alpha: 0, duration: 520, ease: "Quad.easeOut", onComplete: () => ring.destroy() });
+    buzz(18);
+    return true;
   }
 
   /** The boss bar is the stage meter — drain it to the current beats-done mark. */
@@ -3549,7 +3572,7 @@ class GameScene extends Phaser.Scene {
       });
     };
     const burn = () => {
-      if (done) return;
+      if (done || this.bellForgives()) return;
       this.arenaWardMissed = true;
       this.notice("a lie — it burns!", "#ff8a6a");
       this.arenaStrikeHero(ARENA_RED_STRIKES);
@@ -3715,7 +3738,7 @@ class GameScene extends Phaser.Scene {
           } else {
             const g = this.redNode(x, topY, 34, () => {
               handled = true;
-              slip("RED — never touch his fire!", ARENA_RED_STRIKES);
+              if (!this.bellForgives()) slip("RED — never touch his fire!", ARENA_RED_STRIKES);
             });
             node = { move: (nx, ny) => g.setPosition(nx, ny), destroy: () => g.destroy() };
           }
@@ -3904,6 +3927,16 @@ class GameScene extends Phaser.Scene {
         );
         burst.explode(20);
         this.time.delayedCall(600, () => burst.destroy());
+        if (this.bellForgives()) {
+          // the lie pops harmlessly and the rally carries on — the golds in
+          // this volley are still yours to return
+          inWin.alive = false;
+          this.tweens.killTweensOf(inWin.img);
+          inWin.ring.destroy();
+          inWin.img.destroy();
+          balls = balls.filter((b) => b !== inWin);
+          return;
+        }
         failContinue("RED was a lie — never swing at it!", ARENA_RED_STRIKES);
         return;
       }
@@ -4330,8 +4363,8 @@ class GameScene extends Phaser.Scene {
             const g = this.redNode(x, y, 50, () => {
               answered = true;
               ring.destroy();
-              bad("a feint — you swung at nothing!", ARENA_RED_STRIKES);
-              onResolved();
+              if (!this.bellForgives()) bad("a feint — you swung at nothing!", ARENA_RED_STRIKES);
+              onResolved(); // fires either way, or the wave never winds up again
             });
             node = { destroy: () => g.destroy() };
           }
@@ -4543,7 +4576,7 @@ class GameScene extends Phaser.Scene {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive || notch >= HORNS_NOTCHES) return;
       if (this.time.now < lockedUntil) return;
       if (reds.some(inZone)) {
-        lose("RED — he drives you back!", ARENA_RED_STRIKES);
+        if (!this.bellForgives()) lose("RED — he drives you back!", ARENA_RED_STRIKES);
         return;
       }
       if (inZone(gold)) {
@@ -4663,11 +4696,12 @@ class GameScene extends Phaser.Scene {
         if (done || gen !== this.arenaGen) return;
         if (pl.kind === "red") {
           // ✖ — the one plate that never wanted touching
+          plates.delete(pl);
+          obj.destroy();
+          if (this.bellForgives()) return;
           this.arenaWardMissed = true;
           this.notice("RED — the cold bites!", "#ff8a6a");
           this.sfx("hit2", 0.5);
-          plates.delete(pl);
-          obj.destroy();
           this.arenaStrikeHero(ARENA_RED_STRIKES);
           return;
         }
@@ -4824,7 +4858,7 @@ class GameScene extends Phaser.Scene {
                 onComplete: () => {
                   this.cameras.main.shake(140, 0.005);
                   this.sfx("hit1", 0.35, 1.4);
-                  if (Math.abs(tok.x - cx) < 52) fail("the ice finds you!", ARENA_RED_STRIKES);
+                  if (Math.abs(tok.x - cx) < 52 && !this.bellForgives()) fail("the ice finds you!", ARENA_RED_STRIKES);
                   this.tweens.add({ targets: spike, alpha: 0, duration: 260, onComplete: () => spike.destroy() });
                 },
               });
@@ -4925,6 +4959,7 @@ class GameScene extends Phaser.Scene {
       const open = Math.abs(Phaser.Math.Angle.ShortestBetween(gapAngle, STRIKE)) <= gapHalf();
       if (!open) {
         // a shard takes the blade — the ring bucks and reverses on you
+        if (this.bellForgives()) return; // the shard turns nothing — swing again
         lockedUntil = this.time.now + HEART_LOCK_MS;
         dir *= -1;
         this.arenaWardMissed = true;
@@ -5769,7 +5804,12 @@ class GameScene extends Phaser.Scene {
         break;
       case "wardbell":
         this.run.bellCharges += BELL_CHARGES;
-        this.notice(`the bell is strung — ${this.run.bellCharges} RED blows will toll harmlessly`, "#8fd0ff");
+        this.notice(
+          this.run.bellCharges > 1
+            ? `the bell is strung — your next ${this.run.bellCharges} RED slips won't count`
+            : "the bell is strung — your next RED slip won't count",
+          "#ffd24a",
+        );
         this.sfx("block3", 0.5, 1.4);
         break;
       case "waystone":
