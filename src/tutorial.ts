@@ -38,6 +38,7 @@ export interface TutorialHost extends Phaser.Scene {
   resourceRowsRect(from: number, to: number): Rect; // HUD panel — already screen px
   rigSwapMatch(type: number): { from: Coord; to: Coord };
   demoStrike(pierce: boolean, slowMotion?: boolean): boolean;
+  focusTutorialSword(onComplete: () => void): void;
   focusTutorialHit(onComplete: () => void): void;
   restoreTutorialView(onComplete?: () => void, immediate?: boolean): void;
   markTutorialSeen(): void;
@@ -124,8 +125,17 @@ export class Tutorial {
   }
 
   /** resolve() reports each cascade's cleared counts. */
-  onCascade(counts: Record<number, number>) {
-    if (this.waitType !== null && (counts[this.waitType] ?? 0) >= 3) this.matched = true;
+  onCascade(counts: Record<number, number>): Promise<void> | void {
+    if (this.waitType === null || (counts[this.waitType] ?? 0) < 3) return;
+    const firstMatch = !this.matched;
+    this.matched = true;
+    if (firstMatch && this.step === 2) {
+      // The board has explained the input; now move the player's eye to the
+      // consequence. Resolve pauses here until the camera has reached the lane,
+      // so the hero cannot finish swinging during the push-in.
+      this.clearVisuals();
+      return new Promise<void>((resolve) => this.g.focusTutorialSword(resolve));
+    }
   }
 
   /** trySwap() reports when the board has fully settled after a player move. */

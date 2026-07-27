@@ -430,6 +430,17 @@ type RunBiome = {
   groundKey: string;
   crop: [number, number, number, number];
 };
+// Each road gets its own song (xDeviruchi, CC-BY). Unlisted roads walk out to
+// the journey theme.
+//   plains — And The Journey Begins     forest  — Exploring The Unknown
+//   snow   — The Icy Cave               dungeon — Mysterious Dungeon
+const ROAD_MUSIC: Record<string, string> = {
+  plains: "music_journey",
+  forest: "music_forest",
+  snow: "music_snow",
+  dungeon: "music_dungeon",
+};
+
 const RUN_BIOMES: Record<string, RunBiome> = {
   plains: {
     parallax: [
@@ -604,6 +615,7 @@ class GameScene extends Phaser.Scene {
   private centerBaseY = 0;
   private centerBaseScale = 1;
   private tutorialHitFocus = false;
+  private tutorialSwordSlow = false;
   private tutorialViewTween: Phaser.Tweens.Tween | null = null;
   private tutorialViewTweenDone: (() => void) | null = null;
   private leftPanel!: Phaser.GameObjects.Rectangle;
@@ -763,6 +775,7 @@ class GameScene extends Phaser.Scene {
       amb_day: "amb_day.mp3", amb_rain: "amb_rain.mp3",
       // music (xDeviruchi, CC-BY): the road's song, the boss's war-drums, the deep's hush
       music_journey: "music_journey.mp3", music_boss: "music_boss.mp3", music_dungeon: "music_dungeon.mp3",
+      music_forest: "music_forest.mp3", music_snow: "music_snow.mp3",
     };
     for (const [k, f] of Object.entries(audio)) if (!this.cache.audio.exists(k)) this.load.audio(k, `sounds/${f}`);
     for (let i = 1; i <= TILE_SFX; i++)
@@ -2087,7 +2100,7 @@ class GameScene extends Phaser.Scene {
         const p = centroid(shdCells);
         this.floatGuard(p.x, p.y, outcome.guard, 100);
       }
-      this.tutorial?.onCascade(counts);
+      await this.tutorial?.onCascade(counts);
       // keys bank per MATCH, not per tile — fly only as many chips as were kept
       if (resFly[KEY]) resFly[KEY] = resFly[KEY].slice(0, outcome.gained.keys);
       this.flyResources(resFly); // the goods themselves stream off the board into the rail
@@ -2103,6 +2116,8 @@ class GameScene extends Phaser.Scene {
   private onCombat(outcome: MatchOutcome, swords: number, swordCells: { x: number; y: number }[] = [], staffCells: { x: number; y: number }[] = []) {
     if (outcome.damage <= 0 || !this.orc || this.orcDying) return;
 
+    const comboTempo = this.tutorialSwordSlow ? 1.55 : 1;
+    this.tutorialSwordSlow = false;
     this.updateEnemyBar();
 
     // Melee: the swing combo scales with the sword match (3 / 4 / 5+).
@@ -2116,8 +2131,8 @@ class GameScene extends Phaser.Scene {
           ? ["hero-attack", "hero-attack2"]
           : ["hero-attack"];
     if (hasMelee) {
-      this.playComboSfx(combo);
-      this.showHits(outcome.hits, combo, outcome.swordMod);
+      this.playComboSfx(combo, comboTempo);
+      this.showHits(outcome.hits, combo, outcome.swordMod, comboTempo);
       this.flyBlades(swordCells); // the matched tiles themselves take wing at the foe
       if (outcome.sunder) {
         // the peak blade fells it in one stroke — name the moment
@@ -2128,13 +2143,13 @@ class GameScene extends Phaser.Scene {
         });
       }
     }
-    const meleeMs = hasMelee ? this.comboMs(combo) : 0;
+    const meleeMs = hasMelee ? this.comboMs(combo, comboTempo) : 0;
     const spell = outcome.spell;
 
     if (outcome.killed) {
       // Everything plays IN PLACE (x frozen); the surge waits for the last act.
       this.heroLockX = true;
-      if (hasMelee) this.playCombo(combo);
+      if (hasMelee) this.playCombo(combo, undefined, comboTempo);
       if (spell) {
         const impactAt = this.performCast(spell, true, meleeMs, undefined, staffCells);
         this.surgeAfterKill(impactAt + 120);
@@ -2144,7 +2159,7 @@ class GameScene extends Phaser.Scene {
       }
     } else {
       if (hasMelee) {
-        this.playCombo(combo, spell ? undefined : this.heroBaseAnim()); // the cast takes over if one follows
+        this.playCombo(combo, spell ? undefined : this.heroBaseAnim(), comboTempo); // the cast takes over if one follows
         this.orc.setTint(0xff6a6a); // a red flash on the struck foe
         this.time.delayedCall(150, () => this.orc?.clearTint());
         this.orc.play(`${this.orcAnim}-hurt`).once("animationcomplete", () => {
@@ -2448,8 +2463,14 @@ class GameScene extends Phaser.Scene {
   }
 
   /** Play a sequence of one-shot anims back-to-back (Phaser chain), optional trailing loop. */
-  private playCombo(keys: string[], then?: string) {
+  private playCombo(keys: string[], then?: string, tempo = 1) {
     const tail = then ? [...keys.slice(1), then] : keys.slice(1);
+    if (tempo > 1) {
+      this.hero.anims.timeScale = 1 / tempo;
+      this.time.delayedCall(this.comboMs(keys, tempo), () => {
+        if (this.hero.active) this.hero.anims.timeScale = 1;
+      });
+    }
     this.hero.play(keys[0]);
     // Drop any leftover chain from a prior hit (Phaser keeps one in nextAnim, rest queued).
     this.hero.anims.nextAnim = null;
@@ -2457,8 +2478,8 @@ class GameScene extends Phaser.Scene {
     if (tail.length) this.hero.chain(tail);
   }
 
-  private comboMs(keys: string[]): number {
-    return keys.reduce((s, k) => s + (this.anims.get(k)?.duration ?? 300), 0);
+  private comboMs(keys: string[], tempo = 1): number {
+    return keys.reduce((s, k) => s + (this.anims.get(k)?.duration ?? 300) * tempo, 0);
   }
 
   // ---- sfx / music ----
@@ -2506,7 +2527,7 @@ class GameScene extends Phaser.Scene {
 
   /** The road's own tune: the journey theme above ground, the deep's hush below. */
   private roadMusicKey(): string {
-    return this.meta.biome === "dungeon" ? "music_dungeon" : "music_journey";
+    return ROAD_MUSIC[this.meta.biome] ?? "music_journey";
   }
 
   /** Switch the run's music bed to `key`: old fades out, new enters at level. */
@@ -2623,13 +2644,13 @@ class GameScene extends Phaser.Scene {
     this.sfx(this.pick(["step1", "step2", "step3", "step4", "step5"]), 0.28, 0.95 + Math.random() * 0.1);
   }
   /** Swings + impacts synced to the melee combo (casts handle their own audio). */
-  private playComboSfx(combo: string[]) {
+  private playComboSfx(combo: string[], tempo = 1) {
     const HITS = ["hit1", "hit2", "hit3"];
     let t = 0;
     combo.forEach((key, i) => {
       this.time.delayedCall(t, () => this.sfx(["swing1", "swing2", "swing3"][Math.min(i, 2)], 0.28));
-      this.time.delayedCall(t + 100, () => this.sfx(this.pick(HITS), 0.5));
-      t += this.anims.get(key)?.duration ?? 300;
+      this.time.delayedCall(t + 100 * tempo, () => this.sfx(this.pick(HITS), 0.5));
+      t += (this.anims.get(key)?.duration ?? 300) * tempo;
     });
   }
 
@@ -5976,7 +5997,7 @@ class GameScene extends Phaser.Scene {
       }
     await Promise.all(fades);
     const outcome = applyMatches(this.run, counts);
-    this.tutorial?.onCascade(counts);
+    await this.tutorial?.onCascade(counts);
     if (outcome.damage > 0) this.onCombat(outcome, outcome.swords); // swings and/or a cast, as the blast decided
     this.refreshHud();
     await this.collapse();
@@ -6106,10 +6127,25 @@ class GameScene extends Phaser.Scene {
     this.strike(true, pierce, slowMotion); // pierce is honoured at CONTACT, not up front
     return true;
   }
+  /** Pause the sword resolve until the lane is framed, then slow this one hero combo. */
+  public focusTutorialSword(onComplete: () => void) {
+    this.tutorialSwordSlow = true;
+    this.focusTutorialHit(() => this.time.delayedCall(180, onComplete));
+  }
   /** Frame the lane tightly for the tutorial's first enemy counterattack. */
   public focusTutorialHit(onComplete: () => void) {
+    const target = this.tutorialHitView();
+    if (
+      this.tutorialHitFocus &&
+      Math.abs(this.centerScale - target.scale) < 0.001 &&
+      Math.abs(this.centerBox.x - target.x) < 0.5 &&
+      Math.abs(this.centerBox.y - target.y) < 0.5
+    ) {
+      onComplete();
+      return;
+    }
     this.tutorialHitFocus = true;
-    this.tweenTutorialView(this.tutorialHitView(), 520, "Sine.easeInOut", onComplete);
+    this.tweenTutorialView(target, 520, "Sine.easeInOut", onComplete);
   }
   /** Return the responsive shell to its normal framing before the board lesson resumes. */
   public restoreTutorialView(onComplete?: () => void, immediate = false) {
@@ -6206,16 +6242,16 @@ class GameScene extends Phaser.Scene {
   }
 
   /** Float one damage number per swing, timed so it pops as each hit lands. */
-  private showHits(hits: number[], combo: string[], mod: DamageMod) {
+  private showHits(hits: number[], combo: string[], mod: DamageMod, tempo = 1) {
     let t = 0;
     combo.forEach((key, i) => {
       const dmg = hits[i] ?? 0;
       if (dmg > 0)
-        this.time.delayedCall(t + 100, () => {
+        this.time.delayedCall(t + 100 * tempo, () => {
           this.floatDamage(dmg, i === 0, mod);
           if (i === 0) this.teachDefense(mod); // name the rule as the first blow lands
         });
-      t += this.anims.get(key)?.duration ?? 300;
+      t += (this.anims.get(key)?.duration ?? 300) * tempo;
     });
   }
 

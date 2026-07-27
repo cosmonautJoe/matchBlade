@@ -337,8 +337,22 @@ const SNOW_LAYOUT: CampLayout = {
   ],
 };
 
-const CAMP_LAYOUTS: Record<string, CampLayout> = { plains: PLAINS_LAYOUT, forest: FOREST_LAYOUT, snow: SNOW_LAYOUT };
-/** The dungeon reuses the plains pitch until it's dressed for its own road. */
+/**
+ * The Delve borrows the plains pitch until it's dressed for its own road — but
+ * NOT the tree: a full-grown oak was standing in a torchlit corridor a hundred
+ * feet underground. Filtered rather than re-listed so the rest of the plains
+ * dressing keeps flowing through as that layout is tweaked.
+ */
+const DUNGEON_LAYOUT: CampLayout = {
+  ...PLAINS_LAYOUT,
+  props: PLAINS_LAYOUT.props.filter((p) => p.key !== "tree2"),
+};
+const CAMP_LAYOUTS: Record<string, CampLayout> = {
+  plains: PLAINS_LAYOUT,
+  forest: FOREST_LAYOUT,
+  snow: SNOW_LAYOUT,
+  dungeon: DUNGEON_LAYOUT,
+};
 function campLayout(biome: string): CampLayout {
   return CAMP_LAYOUTS[biome] ?? PLAINS_LAYOUT;
 }
@@ -1144,6 +1158,10 @@ export class CampScene extends Phaser.Scene {
   /** First arrival: the scout walks into camp and the Wayfarer lays out the deal. */
   private playIntro() {
     let walkTween: Phaser.Tweens.Tween | null = null;
+    // The normal camp idle pitch is close enough to the tarp's wide left edge
+    // that the running silhouette still reads as standing on the canvas. Give
+    // the opening shot its own clear landing mark farther downstage-left.
+    const arrivalX = this.lay.hero.x - 72;
     this.cinematicDialog({
       name: "THE WAYFARER",
       speaker: () => this.goddess,
@@ -1167,9 +1185,7 @@ export class CampScene extends Phaser.Scene {
         },
       ],
       prelude: (finish) => {
-        // Walk in from beyond the camp's edge to the authored hero pitch.
-        // The old hardcoded -47 destination was the middle of the tarp tent.
-        const arrivalX = this.lay.hero.x;
+        // Walk in from beyond the camp's edge to the cinematic landing mark.
         this.hero.setX(-860).play("hero-walk");
         walkTween = this.tweens.add({
           targets: this.hero,
@@ -1188,7 +1204,7 @@ export class CampScene extends Phaser.Scene {
         };
       },
       onEnd: (skipped) => {
-        this.hero.setX(this.lay.hero.x).play("hero-idle");
+        this.hero.setX(arrivalX).play("hero-idle");
         this.meta.campIntroSeen = true;
         saveMeta(this.meta);
         this.refreshWayfarerMark();
@@ -1211,8 +1227,9 @@ export class CampScene extends Phaser.Scene {
     Phaser.Utils.Array.Shuffle(pool);
     const aids = pool.filter((i) => i.bossAid);
     const rest = pool.filter((i) => !i.bossAid);
-    const offers = aids.length ? [aids[0], ...rest.slice(0, 2)] : rest.slice(0, 3);
-    this.shopOffers = Phaser.Utils.Array.Shuffle(offers); // ...but not always in the same seat
+    // boss aid first — the panel groups by section anyway, and this keeps the
+    // stocked order matching the order she displays them in
+    this.shopOffers = aids.length ? [aids[0], ...rest.slice(0, 2)] : rest.slice(0, 3);
   }
 
   /**
@@ -1368,7 +1385,19 @@ export class CampScene extends Phaser.Scene {
     const compact = vh < 620;
     const W = Math.min(720, vw - 40);
     const ROW_H = compact ? 80 : 100;
-    const H = compact ? Math.max(180, 120 + this.shopOffers.length * ROW_H) : 240 + this.shopOffers.length * ROW_H;
+    const regularOffers = this.shopOffers.filter((item) => !item.bossAid);
+    const bossOffers = this.shopOffers.filter((item) => item.bossAid);
+    // Boss wares lead: they are the reason she is worth visiting before a
+    // warden, and the pierce rule is invisible until it kills you. Burying them
+    // under the everyday stock buried the pitch too.
+    const sections = [
+      { title: "⚔ BOSS ITEMS", note: "boss arenas only", color: "#ffbf80", boss: true, items: bossOffers },
+      { title: "REGULAR ITEMS", note: "use anywhere", color: "#8fd0ff", boss: false, items: regularOffers },
+    ].filter((section) => section.items.length > 0);
+    const SECTION_H = compact ? 18 : 24;
+    const H = compact
+      ? Math.max(180, 110 + this.shopOffers.length * ROW_H + sections.length * SECTION_H)
+      : 220 + this.shopOffers.length * ROW_H + sections.length * SECTION_H;
     const top = vh / 2 - H / 2;
     const box = this.add.container(0, 0).setDepth(90);
     const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive();
@@ -1385,66 +1414,98 @@ export class CampScene extends Phaser.Scene {
     box.add([veil, bg, title, bank]);
 
     const left = vw / 2 - W / 2 + 26;
-    let y = top + (compact ? 70 : 96);
-    for (const item of this.shopOffers) {
-      const price = PEDDLER_PRICES[item.tier];
-      const afford = this.meta.treasure >= price;
-      const room = stocked.length < MAX_STOCKED;
-      const bx = vw / 2 + W / 2 - 88;
-      const textW = bx - 82 - left;
-      const ok = afford && room;
-      const card = this.add
-        .rectangle(vw / 2, y + (compact ? 36 : 42), W - 36, ROW_H - 8, 0x1a1e28, 0.96)
-        .setStrokeStyle(1, Number.parseInt(TIER_COLORS[item.tier].slice(1), 16), 0.45);
-      const name = this.add.text(left, y, `${item.glyph} ${item.name}`, {
-        fontFamily: EMOJI_FONT,
-        fontStyle: "bold",
-        fontSize: "16px",
-        color: "#eef2f7",
-      });
-      const tier = this.add
-        .text(bx - 82, y + 2, item.tier.toUpperCase(), {
-          fontFamily: "monospace",
-          fontSize: compact ? "12px" : "11px",
-          color: TIER_COLORS[item.tier],
-        })
-        .setOrigin(1, 0);
-      const desc = this.add.text(left, y + (compact ? 22 : 25), item.desc, {
-        fontFamily: "monospace",
-        fontSize: compact ? "14px" : "13px",
-        color: "#b9c3d1",
-        lineSpacing: compact ? 0 : 3,
-        wordWrap: { width: textW },
-      });
-      const hint = this.add.text(left, y + (compact ? 59 : 74), `▸ ${item.hint}`, {
-        fontFamily: "monospace",
-        fontStyle: "bold",
-        fontSize: compact ? "12px" : "12px",
-        color: item.bossAid ? "#ffbf80" : "#8fd0ff",
-      });
-      const rect = this.add.rectangle(bx, y + (compact ? 36 : 42), 124, 38, ok ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, ok ? 0x54c26e : 0x3a3f4b);
-      const bt = this.add
-        .text(bx, y + (compact ? 36 : 42), room ? `BUY 💎${price}` : "PACK FULL", {
+    let y = top + (compact ? 68 : 94);
+    for (const section of sections) {
+      const sectionTint = Number.parseInt(section.color.slice(1), 16);
+      const sectionTitle = this.add
+        .text(left, y, section.title, {
           fontFamily: EMOJI_FONT,
           fontStyle: "bold",
-          fontSize: "13px",
-          color: ok ? "#dff5df" : "#6a707c",
+          fontSize: compact ? "13px" : "15px",
+          color: section.color,
         })
+        .setOrigin(0, 0.5);
+      const sectionNote = this.add
+        .text(vw / 2 + W / 2 - 26, y, section.note, {
+          fontFamily: "monospace",
+          fontSize: compact ? "10px" : "11px",
+          color: section.color,
+        })
+        .setOrigin(1, 0.5)
+        .setAlpha(0.72);
+      const sectionRule = this.add
+        .rectangle(vw / 2, y + SECTION_H / 2 - 2, W - 52, 2, sectionTint, section.boss ? 0.85 : 0.4)
         .setOrigin(0.5);
-      if (ok)
-        rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-          spend(this.meta, { treasure: price });
-          this.meta.stockedItems.push(item.id);
-          saveMeta(this.meta);
-          this.shopOffers = this.shopOffers.filter((o) => o !== item);
-          this.refreshResources();
-          this.sfx("coin3", 0.55);
-          this.toast(`packed for the road: ${item.glyph} ${item.name}`);
-          this.closePanel();
-          this.peddlerTapped(); // reopen with the ware sold out
+      box.add([sectionTitle, sectionNote, sectionRule]);
+      y += SECTION_H;
+
+      for (const item of section.items) {
+        const price = PEDDLER_PRICES[item.tier];
+        const afford = this.meta.treasure >= price;
+        const room = stocked.length < MAX_STOCKED;
+        const bx = vw / 2 + W / 2 - 88;
+        const textW = bx - 82 - left;
+        const ok = afford && room;
+        // Boss wares get their own skin — warm card, a bright amber edge and a
+        // spine down the left — so they are told apart at a glance rather than
+        // by reading the heading above them.
+        const card = this.add
+          .rectangle(vw / 2, y + (compact ? 36 : 42), W - 36, ROW_H - 8, item.bossAid ? 0x2a2018 : 0x1a1e28, 0.97)
+          .setStrokeStyle(item.bossAid ? 2 : 1, item.bossAid ? 0xffbf80 : Number.parseInt(TIER_COLORS[item.tier].slice(1), 16), item.bossAid ? 0.9 : 0.45);
+        const spine = this.add
+          .rectangle(vw / 2 - (W - 36) / 2 + 3, y + (compact ? 36 : 42), 5, ROW_H - 8, item.bossAid ? 0xffbf80 : 0x3a3f4b, item.bossAid ? 1 : 0.5)
+          .setOrigin(0.5);
+        const name = this.add.text(left, y, `${item.glyph} ${item.name}`, {
+          fontFamily: EMOJI_FONT,
+          fontStyle: "bold",
+          fontSize: compact ? "16px" : "17px",
+          color: item.bossAid ? "#ffe3c4" : "#eef2f7",
         });
-      box.add([card, name, tier, desc, hint, rect, bt]);
-      y += ROW_H;
+        const tier = this.add
+          .text(bx - 82, y + 2, item.tier.toUpperCase(), {
+            fontFamily: "monospace",
+            fontStyle: "bold",
+            fontSize: compact ? "12px" : "12px",
+            color: TIER_COLORS[item.tier],
+          })
+          .setOrigin(1, 0);
+        const desc = this.add.text(left, y + (compact ? 22 : 26), item.desc, {
+          fontFamily: "monospace",
+          fontSize: compact ? "14px" : "14px",
+          color: item.bossAid ? "#e2cdb4" : "#c9d3e1", // lifted off the old #b9c3d1 — it was thin on the dark card
+          lineSpacing: compact ? 1 : 4,
+          wordWrap: { width: textW },
+        });
+        const hint = this.add.text(left, y + (compact ? 59 : 74), `▸ ${item.hint}`, {
+          fontFamily: "monospace",
+          fontStyle: "bold",
+          fontSize: compact ? "12px" : "12px",
+          color: item.bossAid ? "#ffbf80" : "#8fd0ff",
+        });
+        const rect = this.add.rectangle(bx, y + (compact ? 36 : 42), 124, 38, ok ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, ok ? 0x54c26e : 0x3a3f4b);
+        const bt = this.add
+          .text(bx, y + (compact ? 36 : 42), room ? `BUY 💎${price}` : "PACK FULL", {
+            fontFamily: EMOJI_FONT,
+            fontStyle: "bold",
+            fontSize: "13px",
+            color: ok ? "#dff5df" : "#6a707c",
+          })
+          .setOrigin(0.5);
+        if (ok)
+          rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+            spend(this.meta, { treasure: price });
+            this.meta.stockedItems.push(item.id);
+            saveMeta(this.meta);
+            this.shopOffers = this.shopOffers.filter((o) => o !== item);
+            this.refreshResources();
+            this.sfx("coin3", 0.55);
+            this.toast(`packed for the road: ${item.glyph} ${item.name}`);
+            this.closePanel();
+            this.peddlerTapped(); // reopen with the ware sold out
+          });
+        box.add([card, spine, name, tier, desc, hint, rect, bt]);
+        y += ROW_H;
+      }
     }
     if (!this.shopOffers.length) {
       box.add(this.add.text(vw / 2, y + 6, "「 Sold out. The road restocks me — come back after a run. 」", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
