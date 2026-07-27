@@ -165,7 +165,9 @@ const CREATURE_RIG: Record<string, CreatureRig> = {
   boar: { prefix: "boar", idleTex: "boar-idle", scale: 2.7, origin: 0.97, fakeDeath: true, flat: true, lunge: true, barOff: 82, hitAt: 0.7 },
   // Monster pack — 150px, full anim sets, face RIGHT natively so flip to face
   // the hero. Real death frames (no fake topple). foot y101/150 → origin 0.673.
-  goblin: { prefix: "goblin", idleTex: "goblin-idle", scale: 2.6, origin: 0.673, faceLeft: true, flat: true, barOff: 104, hitAt: 0.62 },
+  // The goblin's visible body is 36px tall versus the hero's 26px. At 2.6 it
+  // towered over him; 2.0 puts both silhouettes at roughly the same height.
+  goblin: { prefix: "goblin", idleTex: "goblin-idle", scale: 2.0, origin: 0.673, faceLeft: true, flat: true, barOff: 82, hitAt: 0.62 },
   mushroom: { prefix: "mushroom", idleTex: "mushroom-idle", scale: 2.7, origin: 0.673, faceLeft: true, flat: true, barOff: 104, hitAt: 0.6 },
   // NB: the skeleton is drawn much larger in-frame than its packmates (45x51 of
   // content vs the goblin's 33x36), so it needs a LOWER scale to stand at a
@@ -598,6 +600,12 @@ class GameScene extends Phaser.Scene {
   // fit the viewport; the side panels flank it and absorb the leftover width.
   private centerBox!: Phaser.GameObjects.Container;
   private centerScale = 1;
+  private centerBaseX = 0;
+  private centerBaseY = 0;
+  private centerBaseScale = 1;
+  private tutorialHitFocus = false;
+  private tutorialViewTween: Phaser.Tweens.Tween | null = null;
+  private tutorialViewTweenDone: (() => void) | null = null;
   private leftPanel!: Phaser.GameObjects.Rectangle;
   private rightPanel!: Phaser.GameObjects.Rectangle;
   private gearText!: Phaser.GameObjects.Text;
@@ -1132,7 +1140,20 @@ class GameScene extends Phaser.Scene {
     const shellX = Math.round(x0 + (uw - shellW) / 2);
     const cx = Math.round(shellX + leftW);
     const cy = Math.round(y0 + (uh - ch) / 2);
-    this.centerBox.setScale(s).setPosition(cx, cy);
+    this.centerBaseX = cx;
+    this.centerBaseY = cy;
+    this.centerBaseScale = s;
+    if (this.tutorialViewTween) {
+      this.tutorialViewTween.stop();
+      this.tutorialViewTween = null;
+    }
+    const view = this.tutorialHitFocus ? this.tutorialHitView() : { x: cx, y: cy, scale: s };
+    this.applyCenterView(view.x, view.y, view.scale);
+    if (this.tutorialViewTweenDone) {
+      const done = this.tutorialViewTweenDone;
+      this.tutorialViewTweenDone = null;
+      this.time.delayedCall(0, done);
+    }
     this.vignette?.setPosition(vw / 2, vh / 2).setDisplaySize(vw, vh);
     this.layoutPanels(shellX, y0, shellW, uh, cx, cw);
   }
@@ -1164,22 +1185,36 @@ class GameScene extends Phaser.Scene {
     }
     this.rotateHint.setPosition(x0 + uw / 2, y0 + 6).setVisible(uw < uh); // portrait hint; panels still show
 
-    // resources: icon + number rows — the ~76px table sits centred in the rail
-    // (fixed column offsets off centre, so growing digits don't shuffle rows)
+    // Resources use a 2×2 block on the narrow rail. Four vertical rows consumed
+    // nearly half a phone screen and forced quests down into the hint button.
     const padX = lLeft + 12;
     const lcx = lLeft + lw / 2;
-    const rowH = Math.min(44, uh * 0.09);
-    const topY = y0 + Math.max(26, uh * 0.11);
+    const rowH = Math.min(42, Math.max(32, uh * 0.09));
+    const topY = y0 + Math.max(30, uh * 0.1);
+    const colW = (lw - 16) / 2;
     for (let i = 0; i < this.resIcons.length; i++) {
-      const y = Math.round(topY + i * rowH);
-      this.resIcons[i].setPosition(Math.round(lcx - 38), y);
-      this.resVals[i].setPosition(Math.round(lcx - 3), y);
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const x = lLeft + 8 + col * colW;
+      const y = Math.round(topY + row * rowH);
+      this.resIcons[i].setPosition(Math.round(x), y);
+      this.resVals[i].setPosition(Math.round(x + 34), y);
     }
-    this.scoreText.setPosition(Math.round(lcx), Math.round(topY + this.resIcons.length * rowH + 16));
-    this.questText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 92));
-    this.buffText.setPosition(padX, Math.round(topY + this.resIcons.length * rowH + 196));
-    this.hintBtn.setPosition(padX, y0 + uh - 52);
-    this.gearText.setPosition(padX, y0 + uh - 14);
+
+    // Each section starts after the measured content above it. Quest/effect copy
+    // is width-bounded as a final guard against spilling into the board.
+    const scoreY = Math.round(topY + rowH * 2 + 8);
+    this.scoreText.setPosition(Math.round(lcx), scoreY);
+    this.questText.setWordWrapWidth(Math.max(80, lw - 24), true);
+    const questY = Math.round(scoreY + this.scoreText.height + 12);
+    this.questText.setPosition(padX, questY);
+    this.buffText.setWordWrapWidth(Math.max(80, lw - 24), true);
+    this.buffText.setPosition(padX, Math.round(questY + this.questText.height + (this.questText.text ? 12 : 0)));
+
+    // Bottom controls own their own strip; active effects above can never share
+    // the hint button's baseline.
+    this.hintBtn.setPosition(padX, y0 + uh - 12);
+    this.gearText.setPosition(lLeft + lw - 40, y0 + uh - 12);
     this.menuBtn.setPosition(x0 + uw - 10, y0 + 6);
 
     // right: item slots, vertical, centred
@@ -1229,10 +1264,10 @@ class GameScene extends Phaser.Scene {
       );
     }
     this.scoreText = this.add
-      .text(0, 0, "", { fontFamily: "monospace", fontSize: "15px", color: "#ffe08a", lineSpacing: 8, align: "center" })
+      .text(0, 0, "", { fontFamily: "monospace", fontSize: "17px", color: "#ffe08a", lineSpacing: 2, align: "center" })
       .setOrigin(0.5, 0); // centred in the rail (layoutPanels feeds it the panel centre)
     this.questText = this.add
-      .text(0, 0, "", { fontFamily: "monospace", fontSize: "12px", color: "#a9c8a9", lineSpacing: 7 })
+      .text(0, 0, "", { fontFamily: "monospace", fontSize: "14px", color: "#b9d8b9", lineSpacing: 4 })
       .setOrigin(0, 0);
     this.menuBtn = this.add
       .text(0, 0, "☰", { fontFamily: "monospace", fontStyle: "bold", fontSize: "24px", color: "#c7ccd6", stroke: "#0a0b0f", strokeThickness: 4 })
@@ -1259,7 +1294,7 @@ class GameScene extends Phaser.Scene {
 
     // live item-buff readout (charges, timers, armed keys, the road forecast)
     this.buffText = this.add
-      .text(0, 0, "", { fontFamily: EMOJI_FONT, fontSize: "13px", color: "#9fc4e8", lineSpacing: 7 })
+      .text(0, 0, "", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#afd4f8", lineSpacing: 4 })
       .setOrigin(0, 0);
 
     this.itemSlots = [];
@@ -1321,7 +1356,7 @@ class GameScene extends Phaser.Scene {
     const r = this.run.resources;
     const vals = [r.wood, r.ore, r.treasure, r.keys];
     for (let i = 0; i < this.resVals.length; i++) this.resVals[i].setText(`${vals[i]}`);
-    this.scoreText.setText(`DEPTH   ${this.run.killed}\n\nSCORE   ${this.run.score}`);
+    this.scoreText.setText(`DEPTH   ${this.run.killed}\nSCORE   ${this.run.score}`);
     if (this.run.score > this.lastScoreShown) {
       this.lastScoreShown = this.run.score;
       this.tweens.killTweensOf(this.scoreText);
@@ -1334,7 +1369,16 @@ class GameScene extends Phaser.Scene {
       const q = questById(aq.id);
       if (!q) return "";
       const p = questProgress(this.meta, aq, live);
-      return `${p.have >= p.need ? "✓" : "·"} ${q.shortLabel.padEnd(14)} ${p.have}/${p.need}`;
+      // The camp board keeps the full oath wording. The rail needs a compact
+      // label so all three progress counters remain inside its narrow column.
+      const short = q.shortLabel
+        .replace(/^slay (the )?/, "")
+        .replace(/^open /, "")
+        .replace(/^haul /, "")
+        .replace(/^hire the /, "hire ")
+        .replace(/^clear the /, "clear ")
+        .replace(/ run$/, "");
+      return `${p.have >= p.need ? "✓ " : ""}${short} ${p.have}/${p.need}`;
     });
     this.questText.setText(lines.length ? `QUESTS\n${lines.join("\n")}` : "");
   }
@@ -1710,7 +1754,7 @@ class GameScene extends Phaser.Scene {
     if (this.skeletonCharges > 0) parts.push(`🗝️×${this.skeletonCharges}`);
     if (this.panCharges > 0) parts.push(`⛏️×${this.panCharges}`);
     const lines: string[] = [];
-    for (let i = 0; i < parts.length; i += 3) lines.push(parts.slice(i, i + 3).join("  "));
+    for (let i = 0; i < parts.length; i += 4) lines.push(parts.slice(i, i + 4).join(" "));
     if (this.inkActive) lines.push(`ROAD ▸ ${this.roadAhead().join(" ")}`);
     const str = lines.join("\n");
     if (str !== this.buffStr) {
@@ -1916,7 +1960,7 @@ class GameScene extends Phaser.Scene {
     const BH = 13;
     const root = this.add.container(CXC, LANE_Y + 30).setDepth(31);
     const label = this.add
-      .text(0, -10, `☠ ${this.boss.name} · ${this.boss.wardMark}`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "13px", color: "#ffb3a0" })
+      .text(0, -10, `☠ ${this.boss.name} · ${this.boss.wardMark}`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "18px", color: "#ffb3a0" })
       .setOrigin(0.5, 1);
     const bg = this.add.rectangle(0, 0, BW, BH, 0x000000, 0.6).setStrokeStyle(2, 0x8a2d2d);
     const fill = this.add.rectangle(-BW / 2 + 2, 0, BW - 4, BH - 4, 0xe05a5a).setOrigin(0, 0.5);
@@ -3972,11 +4016,11 @@ class GameScene extends Phaser.Scene {
   // own game: a dodge, a memory, and a shoving match.
 
   /** Small caption anchored to a corner of the arena pit (round counters etc). */
-  private arenaLabel(x: number, y: number, text: string, colour = "#ffd7a0", size = 15) {
+  private arenaLabel(x: number, y: number, text: string, colour = "#ffd7a0", size = 18) {
     return this.aReg(
       this.inBox(
         this.add
-          .text(x, y, text, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${size}px`, color: colour, stroke: "#0a0b0f", strokeThickness: 4 })
+          .text(x, y, text, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${Math.max(size, 18)}px`, color: colour, stroke: "#0a0b0f", strokeThickness: 4 })
           .setDepth(50),
       ),
     );
@@ -5014,7 +5058,7 @@ class GameScene extends Phaser.Scene {
    * player back before the sword had even come down.
    * `pierce` ignores banked guard for this one hit (the tutorial's demo).
    */
-  private strike(force = false, pierce = false) {
+  private strike(force = false, pierce = false, slowMotion = false) {
     if (!force && this.tutorial?.active) return; // the tutorial scripts its own strikes
     if (this.run.over || this.phase !== "fight" || this.orcDying || !this.orc || !this.run.enemy) return;
     const isBoss = this.orcAnim === this.boss.key;
@@ -5024,7 +5068,7 @@ class GameScene extends Phaser.Scene {
     let attackKey = `${this.orcAnim}-attack`;
     let doLunge = !!this.orcRig?.lunge;
     let bomb = false;
-    if (this.orcAnim === "goblin" && Math.random() < 0.5) {
+    if (this.orcAnim === "goblin" && !slowMotion && Math.random() < 0.5) {
       attackKey = "goblin-throw";
       bomb = true;
       doLunge = false;
@@ -5034,23 +5078,28 @@ class GameScene extends Phaser.Scene {
     if (isBoss) this.sfx(this.pick(["fireball1", "fireball2", "fireball3"]), 0.55); // fire roars across the gap
     else this.sfx("slimeatk", 0.3);
 
-    this.orc.play(attackKey).once("animationcomplete", () => {
-      if (this.orc && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
+    const attackingFoe = this.orc;
+    const motionScale = slowMotion ? 1.6 : 1;
+    if (slowMotion) attackingFoe.anims.timeScale = 1 / motionScale;
+    attackingFoe.play(attackKey).once("animationcomplete", () => {
+      if (slowMotion && attackingFoe.active) attackingFoe.anims.timeScale = 1;
+      if (this.orc === attackingFoe && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
     });
 
     // when the blow actually connects
-    const animMs = this.anims.get(attackKey)?.duration ?? 300;
+    const animMs = (this.anims.get(attackKey)?.duration ?? 300) * motionScale;
     const contactMs = bomb ? this.throwGoblinBomb() : Math.round(animMs * (this.orcRig?.hitAt ?? 0.55));
 
     // a charging foe SURGES so its rush PEAKS on contact — driven through orcGap
     // so update()'s per-frame x-control doesn't fight it
     if (doLunge && !this.orcDying) {
       const rest = this.orcGap;
+      const lungeMs = 130 * motionScale;
       this.tweens.add({
         targets: this,
         orcGap: Math.max(48, rest - 54),
-        duration: 130,
-        delay: Math.max(0, contactMs - 130),
+        duration: lungeMs,
+        delay: Math.max(0, contactMs - lungeMs),
         yoyo: true,
         ease: "Quad.easeIn",
         onComplete: () => (this.orcGap = rest),
@@ -5083,9 +5132,10 @@ class GameScene extends Phaser.Scene {
       }
 
       if (net > 0) {
-        this.cameras.main.shake(isBoss ? 260 : 150, isBoss ? 0.009 : 0.006);
+        if (slowMotion) this.heroKnock = Math.max(this.heroKnock, KNOCK_MISS * 1.35);
+        this.cameras.main.shake((isBoss ? 260 : 150) * (slowMotion ? 1.35 : 1), isBoss ? 0.009 : 0.006);
         this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
-        this.time.delayedCall(isBoss ? 200 : 130, () => this.hero.clearTint());
+        this.time.delayedCall((isBoss ? 200 : 130) * (slowMotion ? 1.6 : 1), () => this.hero.clearTint());
         this.boardHitReact(isBoss); // the blow lands where the player is LOOKING: on the board
       } else if (blocked) {
         // PERFECT block: run.ts banked the riposte shove (BLOCK_PUSHBACK) — the
@@ -5445,7 +5495,7 @@ class GameScene extends Phaser.Scene {
         const desc = this.inBox(
           this.add
             .text(CX, CY - 118, pull.item.desc, {
-              fontFamily: "monospace", fontSize: "17px", color: "#efe6d4",
+              fontFamily: "monospace", fontSize: "21px", color: "#efe6d4",
               stroke: "#14100c", strokeThickness: 4, align: "center", wordWrap: { width: 480 },
             })
             .setOrigin(0.5, 0)
@@ -5455,7 +5505,7 @@ class GameScene extends Phaser.Scene {
         const how = this.inBox(
           this.add
             .text(CX, CY - 118, `· ${pull.item.hint} ·`, {
-              fontFamily: "monospace", fontStyle: "bold", fontSize: "14px", color: "#c9a86a",
+              fontFamily: "monospace", fontStyle: "bold", fontSize: "18px", color: "#d9b87a",
               stroke: "#14100c", strokeThickness: 3,
             })
             .setOrigin(0.5, 0)
@@ -5467,7 +5517,7 @@ class GameScene extends Phaser.Scene {
         // read at your own pace — the reveal holds until a tap (skip ▸ still blows through)
         const go = this.inBox(
           this.add
-            .text(CX, how.y + 34, "tap ▸", { fontFamily: "monospace", fontStyle: "bold", fontSize: "15px", color: "#9aa4b4", stroke: "#14100c", strokeThickness: 3 })
+            .text(CX, how.y + 38, "tap ▸", { fontFamily: "monospace", fontStyle: "bold", fontSize: "18px", color: "#aab4c4", stroke: "#14100c", strokeThickness: 3 })
             .setOrigin(0.5, 0)
             .setDepth(64)
             .setAlpha(0),
@@ -5870,7 +5920,7 @@ class GameScene extends Phaser.Scene {
     const txtBg = this.inBox(this.add.rectangle(CXC, GRID_Y + 26, 460, 34, 0x0e1015, 0.88).setStrokeStyle(2, 0x8a6d3a).setDepth(73));
     const txt = this.inBox(
       this.add
-        .text(CXC, GRID_Y + 26, `${label} · tap elsewhere to cancel`, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#ffe08a" })
+        .text(CXC, GRID_Y + 26, `${label} · tap elsewhere to cancel`, { fontFamily: EMOJI_FONT, fontSize: "18px", color: "#ffe08a" })
         .setOrigin(0.5)
         .setDepth(74),
     );
@@ -5970,21 +6020,21 @@ class GameScene extends Phaser.Scene {
     this.hideTip();
     this.tipFor = i;
 
-    const W_TIP = 236;
-    const PAD = 12;
+    const W_TIP = Math.min(300, this.scale.width - 24);
+    const PAD = 14;
     const name = this.add
-      .text(PAD, PAD, def.name, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "15px", color: "#ffe08a" })
+      .text(PAD, PAD, def.name, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "17px", color: "#ffe08a" })
       .setOrigin(0, 0);
     const tier = this.add
-      .text(W_TIP - PAD, PAD + 1, def.tier, { fontFamily: "monospace", fontSize: "11px", color: TIER_COLORS[def.tier] })
+      .text(W_TIP - PAD, PAD + 2, def.tier, { fontFamily: "monospace", fontSize: "13px", color: TIER_COLORS[def.tier] })
       .setOrigin(1, 0);
     const desc = this.add
-      .text(PAD, PAD + 24, def.desc, { fontFamily: EMOJI_FONT, fontSize: "13px", color: "#dfe3ea", lineSpacing: 5, wordWrap: { width: W_TIP - PAD * 2 } })
+      .text(PAD, PAD + 28, def.desc, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#e7ebf1", lineSpacing: 5, wordWrap: { width: W_TIP - PAD * 2 } })
       .setOrigin(0, 0);
     const hint = this.add
-      .text(PAD, PAD + 28 + desc.height, `▸ ${def.hint}`, { fontFamily: "monospace", fontSize: "11px", color: "#8fd0ff" })
+      .text(PAD, PAD + 34 + desc.height, `▸ ${def.hint}`, { fontFamily: "monospace", fontSize: "13px", color: "#9fe0ff" })
       .setOrigin(0, 0);
-    const hTip = PAD + 28 + desc.height + hint.height + PAD;
+    const hTip = PAD + 34 + desc.height + hint.height + PAD;
     const bg = this.add.graphics();
     bg.fillStyle(0x0e1015, 0.96);
     bg.fillRoundedRect(0, 0, W_TIP, hTip, 8);
@@ -6051,10 +6101,68 @@ class GameScene extends Phaser.Scene {
     return { x: a.x - 10, y: a.y - 22, w: 180, h: b.y - a.y + 44 };
   }
   /** Scripted strike for the tutorial beats; pierce ignores banked block (the knockback demo). */
-  public demoStrike(pierce: boolean): boolean {
+  public demoStrike(pierce: boolean, slowMotion = false): boolean {
     if (this.run.over || this.phase !== "fight" || !this.orc || this.orcDying || !this.run.enemy) return false;
-    this.strike(true, pierce); // pierce is honoured at CONTACT, not up front
+    this.strike(true, pierce, slowMotion); // pierce is honoured at CONTACT, not up front
     return true;
+  }
+  /** Frame the lane tightly for the tutorial's first enemy counterattack. */
+  public focusTutorialHit(onComplete: () => void) {
+    this.tutorialHitFocus = true;
+    this.tweenTutorialView(this.tutorialHitView(), 520, "Sine.easeInOut", onComplete);
+  }
+  /** Return the responsive shell to its normal framing before the board lesson resumes. */
+  public restoreTutorialView(onComplete?: () => void, immediate = false) {
+    this.tutorialHitFocus = false;
+    const base = { x: this.centerBaseX, y: this.centerBaseY, scale: this.centerBaseScale };
+    if (immediate) {
+      this.tutorialViewTween?.stop();
+      this.tutorialViewTween = null;
+      this.tutorialViewTweenDone = null;
+      this.applyCenterView(base.x, base.y, base.scale);
+      onComplete?.();
+      return;
+    }
+    this.tweenTutorialView(base, 420, "Sine.easeInOut", onComplete);
+  }
+  private tutorialHitView() {
+    const zoom = 1.36;
+    const laneCx = CXC;
+    const laneCy = LANE_Y + LANE_H / 2;
+    const scale = this.centerBaseScale * zoom;
+    const anchorX = this.centerBaseX + laneCx * this.centerBaseScale;
+    const anchorY = this.centerBaseY + laneCy * this.centerBaseScale;
+    return { x: anchorX - laneCx * scale, y: anchorY - laneCy * scale, scale };
+  }
+  private applyCenterView(x: number, y: number, scale: number) {
+    this.centerScale = scale;
+    this.centerBox.setPosition(x, y).setScale(scale);
+  }
+  private tweenTutorialView(
+    target: { x: number; y: number; scale: number },
+    duration: number,
+    ease: string,
+    onComplete?: () => void,
+  ) {
+    this.tutorialViewTween?.stop();
+    this.tutorialViewTweenDone = onComplete ?? null;
+    const view = { x: this.centerBox.x, y: this.centerBox.y, scale: this.centerScale };
+    this.tutorialViewTween = this.tweens.add({
+      targets: view,
+      x: target.x,
+      y: target.y,
+      scale: target.scale,
+      duration,
+      ease,
+      onUpdate: () => this.applyCenterView(view.x, view.y, view.scale),
+      onComplete: () => {
+        this.applyCenterView(target.x, target.y, target.scale);
+        this.tutorialViewTween = null;
+        const done = this.tutorialViewTweenDone;
+        this.tutorialViewTweenDone = null;
+        done?.();
+      },
+    });
   }
   public markTutorialSeen() {
     this.tutorial = null;
@@ -7488,6 +7596,9 @@ Phaser.GameObjects.GameObjectFactory.prototype.text = function (
 ) {
   const t = textFactory.apply(this, args);
   t.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+  // Phaser Text defaults to a 1× backing canvas. Real phones commonly render at
+  // 2–3× DPR, so without this the browser enlarges a low-resolution glyph atlas.
+  t.setResolution(Math.min(Math.max(window.devicePixelRatio || 1, 1), 2));
   return t;
 };
 

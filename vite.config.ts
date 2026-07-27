@@ -10,9 +10,10 @@ const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), 
 // and fall back to 5173 for a plain `npm run dev`.
 export default defineConfig(({ command }) => ({
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
-  // Production builds deploy to GitHub Pages at /<repo>/ (cosmonautjoe.github.io/matchBlade);
-  // dev stays at / so the local preview harness keeps working.
-  base: command === "build" ? "/matchBlade/" : "/",
+  // Cloudflare Pages serves this project at the site root and injects CF_PAGES
+  // during builds. Keep the /matchBlade/ base for the existing GitHub Pages
+  // deploy script, while local dev and Cloudflare both use /.
+  base: command === "build" && !process.env.CF_PAGES ? "/matchBlade/" : "/",
   server: {
     host: true, // listen on the LAN too, so a phone on the same Wi-Fi can play the dev build
     port: Number(process.env.PORT) || 5173,

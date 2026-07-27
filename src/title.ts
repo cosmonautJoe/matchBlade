@@ -200,20 +200,24 @@ export class TitleScene extends Phaser.Scene {
     this.veil.setPosition(0, 0).setSize(vw, vh);
 
     const cx = vw / 2;
-    const s = Math.min(1, vw / 760, vh / 560); // one shrink factor keeps the stack on small phones
-    this.uiScale = s;
+    const s = Math.min(1, vw / 760, vh / 560);
+    // Keep the decorative stack compact, but never shrink copy and controls into
+    // sub-12px screen text on a short landscape phone.
+    const copyScale = Math.max(s, 0.9);
+    const buttonScale = Math.max(s, 0.84);
+    this.uiScale = buttonScale;
     this.title.setScale(s).setPosition(cx, vh * 0.26);
-    this.tagline.setScale(s).setPosition(cx, vh * 0.26 + 58 * s);
+    this.tagline.setScale(copyScale).setPosition(cx, vh * 0.26 + 58 * copyScale);
     this.tiles.forEach((t, i) => {
       this.tweens.killTweensOf(t); // rebuild the bob pinned to the fresh y (also ends any fade — snap visible)
       t.setAlpha(1);
       t.setScale(0.8 * s).setPosition(cx + (i - 1) * 110 * s, vh * 0.52);
       this.tweens.add({ targets: t, y: t.y + 7, duration: 1500 + i * 180, yoyo: true, repeat: -1, ease: "Sine.easeInOut", delay: i * 260 });
     });
-    this.btnStart.setScale(s).setPosition(cx, vh * 0.7);
-    this.btnLoad.setScale(s).setPosition(cx, vh * 0.7 + 72 * s);
-    this.foot.setScale(s).setPosition(cx, vh - 10);
-    this.version.setScale(s).setPosition(vw - 10, vh - 8);
+    this.btnStart.setScale(buttonScale).setPosition(cx, vh * 0.7);
+    this.btnLoad.setScale(buttonScale).setPosition(cx, vh * 0.7 + 72 * buttonScale);
+    this.foot.setScale(Math.max(s, 1)).setPosition(cx, vh - 10);
+    this.version.setScale(copyScale).setPosition(vw - 10, vh - 8);
   }
 
   update(_t: number, delta: number) {

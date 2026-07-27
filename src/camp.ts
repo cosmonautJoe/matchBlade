@@ -413,6 +413,7 @@ export class CampScene extends Phaser.Scene {
   private mageMark: Phaser.GameObjects.GameObject[] = []; // violet "?" until he's hired
   private panelOpen = false;
   private panelBox: Phaser.GameObjects.Container | null = null;
+  private toastStack: { root: Phaser.GameObjects.Container; text: Phaser.GameObjects.Text }[] = [];
 
   // quest-giver state marker + cutscene actors
   private goddess: Phaser.GameObjects.Sprite | null = null;
@@ -510,6 +511,7 @@ export class CampScene extends Phaser.Scene {
     this.cutscene = false;
     this.peddler = null;
     this.peddlerBark = null;
+    this.toastStack = [];
     this.meta = loadMeta();
     // a 💾-saved edit wins over the baked table, so work-in-progress survives reloads
     this.lay = loadSavedLayout(this.meta.biome) ?? campLayout(this.meta.biome);
@@ -1146,9 +1148,9 @@ export class CampScene extends Phaser.Scene {
       name: "THE WAYFARER",
       speaker: () => this.goddess,
       lines: [
-        { text: "So you're the scout. The caravan can roll no further — the wilds ahead have swallowed the road." },
+        { text: "You must be the scout. We're stuck here until someone clears the road ahead." },
         {
-          text: "I hold the list of what we lack. Swear my oaths, and haul what I ask back to camp — all of it is found beyond that portal.",
+          text: "Check my list before you leave. Pick a job, head through the portal, and bring back what the camp needs.",
           cue: () => {
             if (this.departSign)
               this.tweens.add({ targets: this.departSign, scale: 1.3, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
@@ -1157,7 +1159,7 @@ export class CampScene extends Phaser.Scene {
           },
         },
         {
-          text: "And mind the tarp tent — a smith sulks inside. Past the tenth floor, an unforged blade will not carry you.",
+          text: "Wren, the blacksmith, is holed up in that tarp tent. Get her working before you push too deep — that blade won't last.",
           cue: () => {
             for (const o of this.tentMark)
               this.tweens.add({ targets: o, scale: (o as Phaser.GameObjects.Text).scale * 1.5, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
@@ -1165,11 +1167,13 @@ export class CampScene extends Phaser.Scene {
         },
       ],
       prelude: (finish) => {
-        // the walk: in from beyond the camp's edge, slow and road-weary
+        // Walk in from beyond the camp's edge to the authored hero pitch.
+        // The old hardcoded -47 destination was the middle of the tarp tent.
+        const arrivalX = this.lay.hero.x;
         this.hero.setX(-860).play("hero-walk");
         walkTween = this.tweens.add({
           targets: this.hero,
-          x: -47,
+          x: arrivalX,
           duration: 4400,
           ease: "Sine.easeOut",
           onComplete: () => {
@@ -1179,12 +1183,12 @@ export class CampScene extends Phaser.Scene {
         });
         return () => {
           walkTween?.stop();
-          this.hero.setX(-47).play("hero-idle");
+          this.hero.setX(arrivalX).play("hero-idle");
           finish();
         };
       },
       onEnd: (skipped) => {
-        this.hero.setX(-47).play("hero-idle");
+        this.hero.setX(this.lay.hero.x).play("hero-idle");
         this.meta.campIntroSeen = true;
         saveMeta(this.meta);
         this.refreshWayfarerMark();
@@ -1359,32 +1363,73 @@ export class CampScene extends Phaser.Scene {
     const vw = this.scale.width;
     const vh = this.scale.height;
     const stocked = this.meta.stockedItems;
-    const W = 600;
-    const H = 176 + this.shopOffers.length * 46 + 64;
+    // Short landscape phones get a compact stack: every effect stays visible,
+    // but the panel no longer extends beyond the top and bottom of the screen.
+    const compact = vh < 620;
+    const W = Math.min(720, vw - 40);
+    const ROW_H = compact ? 80 : 100;
+    const H = compact ? Math.max(180, 120 + this.shopOffers.length * ROW_H) : 240 + this.shopOffers.length * ROW_H;
+    const top = vh / 2 - H / 2;
     const box = this.add.container(0, 0).setDepth(90);
     const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive();
     const bg = this.add.rectangle(vw / 2, vh / 2, W, H, 0x14171f).setStrokeStyle(3, 0x2a2d38);
     const title = this.add
-      .text(vw / 2, vh / 2 - H / 2 + 32, "💰 THE PEDDLER", { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
+      .text(vw / 2, top + (compact ? 23 : 32), "💰 THE PEDDLER", { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
       .setOrigin(0.5);
+    const bankLabel = compact
+      ? `your gems: 💎 ${this.meta.treasure}  ·  pack ${stocked.length}/${MAX_STOCKED}`
+      : `your gems: 💎 ${this.meta.treasure}`;
     const bank = this.add
-      .text(vw / 2, vh / 2 - H / 2 + 60, `your gems: 💎 ${this.meta.treasure}`, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#bfe6ff" })
+      .text(vw / 2, top + (compact ? 48 : 60), bankLabel, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#bfe6ff" })
       .setOrigin(0.5);
     box.add([veil, bg, title, bank]);
 
     const left = vw / 2 - W / 2 + 26;
-    let y = vh / 2 - H / 2 + 96;
+    let y = top + (compact ? 70 : 96);
     for (const item of this.shopOffers) {
       const price = PEDDLER_PRICES[item.tier];
       const afford = this.meta.treasure >= price;
       const room = stocked.length < MAX_STOCKED;
-      box.add(this.add.text(left, y, `${item.glyph} ${item.name}`, { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#dfe3ea" }));
-      box.add(this.add.text(left + 250, y + 2, item.tier, { fontFamily: "monospace", fontSize: "12px", color: TIER_COLORS[item.tier] }));
       const bx = vw / 2 + W / 2 - 88;
+      const textW = bx - 82 - left;
       const ok = afford && room;
-      const rect = this.add.rectangle(bx, y + 10, 124, 32, ok ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, ok ? 0x54c26e : 0x3a3f4b);
+      const card = this.add
+        .rectangle(vw / 2, y + (compact ? 36 : 42), W - 36, ROW_H - 8, 0x1a1e28, 0.96)
+        .setStrokeStyle(1, Number.parseInt(TIER_COLORS[item.tier].slice(1), 16), 0.45);
+      const name = this.add.text(left, y, `${item.glyph} ${item.name}`, {
+        fontFamily: EMOJI_FONT,
+        fontStyle: "bold",
+        fontSize: "16px",
+        color: "#eef2f7",
+      });
+      const tier = this.add
+        .text(bx - 82, y + 2, item.tier.toUpperCase(), {
+          fontFamily: "monospace",
+          fontSize: compact ? "12px" : "11px",
+          color: TIER_COLORS[item.tier],
+        })
+        .setOrigin(1, 0);
+      const desc = this.add.text(left, y + (compact ? 22 : 25), item.desc, {
+        fontFamily: "monospace",
+        fontSize: compact ? "14px" : "13px",
+        color: "#b9c3d1",
+        lineSpacing: compact ? 0 : 3,
+        wordWrap: { width: textW },
+      });
+      const hint = this.add.text(left, y + (compact ? 59 : 74), `▸ ${item.hint}`, {
+        fontFamily: "monospace",
+        fontStyle: "bold",
+        fontSize: compact ? "12px" : "12px",
+        color: item.bossAid ? "#ffbf80" : "#8fd0ff",
+      });
+      const rect = this.add.rectangle(bx, y + (compact ? 36 : 42), 124, 38, ok ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, ok ? 0x54c26e : 0x3a3f4b);
       const bt = this.add
-        .text(bx, y + 10, `BUY 💎${price}`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "13px", color: ok ? "#dff5df" : "#6a707c" })
+        .text(bx, y + (compact ? 36 : 42), room ? `BUY 💎${price}` : "PACK FULL", {
+          fontFamily: EMOJI_FONT,
+          fontStyle: "bold",
+          fontSize: "13px",
+          color: ok ? "#dff5df" : "#6a707c",
+        })
         .setOrigin(0.5);
       if (ok)
         rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
@@ -1398,8 +1443,8 @@ export class CampScene extends Phaser.Scene {
           this.closePanel();
           this.peddlerTapped(); // reopen with the ware sold out
         });
-      box.add([rect, bt]);
-      y += 46;
+      box.add([card, name, tier, desc, hint, rect, bt]);
+      y += ROW_H;
     }
     if (!this.shopOffers.length) {
       box.add(this.add.text(vw / 2, y + 6, "「 Sold out. The road restocks me — come back after a run. 」", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
@@ -1409,10 +1454,11 @@ export class CampScene extends Phaser.Scene {
     const packLine = stocked.length
       ? `packed for next run (${stocked.length}/${MAX_STOCKED}):  ${stocked.map((id) => ITEMS.find((i) => i.id === id)?.glyph ?? "?").join(" ")}`
       : `packed for next run:  — none —  (max ${MAX_STOCKED})`;
-    box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, packLine, { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#a9e6a9" }).setOrigin(0.5));
+    if (!compact)
+      box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, packLine, { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#a9e6a9" }).setOrigin(0.5));
 
     // footer: reroll the wares / leave
-    const cby = vh / 2 + H / 2 - 36;
+    const cby = vh / 2 + H / 2 - (compact ? 24 : 36);
     const canReroll = this.meta.treasure >= PEDDLER_REROLL && this.shopOffers.length > 0;
     const rrect = this.add.rectangle(vw / 2 - 90, cby, 160, 36, canReroll ? 0x3a3a5e : 0x2a2d38).setStrokeStyle(2, canReroll ? 0x7a7ad0 : 0x3a3f4b);
     const rt = this.add
@@ -1446,15 +1492,43 @@ export class CampScene extends Phaser.Scene {
 
   private toast(msg: string) {
     const vw = this.scale.width;
-    const t = this.add
-      .text(vw / 2, this.scale.height * 0.28, msg, {
+    // Modal actions launch lower, into the panel's open middle, so a rapid
+    // three-toast stack can rise without crossing the panel title.
+    const baseY = this.scale.height * (this.panelOpen ? 0.62 : 0.34);
+    this.toastStack = this.toastStack.filter(({ root }) => root.active);
+
+    // The container owns vertical motion while the child owns its fade. Keeping
+    // those animations separate lets rapid messages push older ones upward
+    // without cancelling their individual lifetimes.
+    const text = this.add
+      .text(0, 0, msg, {
         fontFamily: "monospace", fontStyle: "bold", fontSize: "17px", color: "#fff2b0", stroke: "#2a0c06", strokeThickness: 5,
+        backgroundColor: "#14171f", padding: { x: 8, y: 3 },
       })
       .setOrigin(0.5)
-      .setDepth(95)
       .setAlpha(0);
-    this.tweens.add({ targets: t, alpha: 1, y: t.y - 8, duration: 220 });
-    this.tweens.add({ targets: t, alpha: 0, duration: 400, delay: 1400, onComplete: () => t.destroy() });
+    const root = this.add.container(vw / 2, baseY + 14, [text]).setDepth(95);
+    this.toastStack.push({ root, text });
+
+    const gap = Math.max(32, text.height + 8);
+    this.toastStack.forEach(({ root: toastRoot }, i) => {
+      const rowsAboveNewest = this.toastStack.length - 1 - i;
+      this.tweens.add({ targets: toastRoot, y: baseY - rowsAboveNewest * gap, duration: 200, ease: "Quad.easeOut" });
+    });
+    this.tweens.add({ targets: text, alpha: 1, duration: 180 });
+    this.time.delayedCall(1400, () => {
+      if (!root.active) return;
+      this.tweens.add({ targets: root, y: root.y - 16, duration: 400, ease: "Quad.easeIn" });
+      this.tweens.add({
+        targets: text,
+        alpha: 0,
+        duration: 400,
+        onComplete: () => {
+          this.toastStack = this.toastStack.filter((entry) => entry.root !== root);
+          root.destroy();
+        },
+      });
+    });
   }
 
   // ===== meta: resources / blacksmith / forge / quests =====
@@ -1761,14 +1835,14 @@ export class CampScene extends Phaser.Scene {
 
     const left = vw / 2 - W / 2 + 26;
     let y = vh / 2 - H / 2 + 72;
-    const line = (txt: string, color = "#dfe3ea", size = "15px") => {
+    const line = (txt: string, color = "#dfe3ea", size = "17px") => {
       const t = this.add.text(left, y, txt, { fontFamily: EMOJI_FONT, fontSize: size, color });
       box.add(t);
       return t;
     };
 
     if (active.length) {
-      line(`— sworn (${active.length}/${MAX_ACTIVE}) —`, "#8a8f98", "13px");
+      line(`— sworn (${active.length}/${MAX_ACTIVE}) —`, "#a0a7b2", "15px");
       y += 26;
       for (const aq of active) {
         const q = questById(aq.id)!;
@@ -1779,14 +1853,14 @@ export class CampScene extends Phaser.Scene {
       }
     }
     if (offers.length) {
-      line(`— the Wayfarer offers —`, "#8a8f98", "13px");
+      line(`— the Wayfarer offers —`, "#a0a7b2", "15px");
       y += 26;
       for (const q of offers) {
         line(`${q.label}   +${q.reward}💎`);
         // ACCEPT button on the row
         const bx = vw / 2 + W / 2 - 78;
         const rect = this.add.rectangle(bx, y + 10, 104, 30, 0x2e5e34).setStrokeStyle(2, 0x54c26e).setInteractive({ useHandCursor: true });
-        const bt = this.add.text(bx, y + 10, "ACCEPT", { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#dff5df" }).setOrigin(0.5);
+        const bt = this.add.text(bx, y + 10, "ACCEPT", { fontFamily: "monospace", fontStyle: "bold", fontSize: "15px", color: "#dff5df" }).setOrigin(0.5);
         rect.on("pointerdown", () => {
           if (acceptQuest(this.meta, q.id)) {
             this.sfx("pickup", 0.55);
@@ -1809,7 +1883,7 @@ export class CampScene extends Phaser.Scene {
       const foot = cleared
         ? "「 Every oath is kept. The road onward lies open. 」"
         : "「 Keep every oath on my list, and I will open the road. 」";
-      box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, foot, { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
+      box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, foot, { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#ffe08a" }).setOrigin(0.5));
     }
 
     // bottom button: travel onward once the road is open, otherwise just close
@@ -1819,7 +1893,7 @@ export class CampScene extends Phaser.Scene {
       const next = nextBiome(this.meta)!;
       const label = `▸ take the road to the ${next === "forest" ? "High Forest" : next} ▸`;
       const crect = this.add.rectangle(cbx, cby, 300, 40, 0x2e5e34).setStrokeStyle(2, 0x54c26e).setInteractive({ useHandCursor: true });
-      const ct = this.add.text(cbx, cby, label, { fontFamily: "monospace", fontStyle: "bold", fontSize: "14px", color: "#dff5df" }).setOrigin(0.5);
+      const ct = this.add.text(cbx, cby, label, { fontFamily: "monospace", fontStyle: "bold", fontSize: "16px", color: "#dff5df" }).setOrigin(0.5);
       crect.on("pointerdown", () => this.travelOnward());
       box.add([crect, ct]);
     } else {

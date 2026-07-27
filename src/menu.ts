@@ -98,7 +98,7 @@ export class MenuScene extends Phaser.Scene {
     const edge = !enabled ? 0x3a3f4b : opts.danger ? 0xc26e54 : 0x54c26e;
     const rect = this.add.rectangle(x, y, w, h, base).setStrokeStyle(2, edge);
     const txt = this.add
-      .text(x, y, label, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: opts.small ? "14px" : "16px", color: enabled ? "#eef5ee" : "#6a707c" })
+      .text(x, y, label, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: opts.small ? "15px" : "17px", color: enabled ? "#eef5ee" : "#6a707c" })
       .setOrigin(0.5);
     if (enabled)
       rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
@@ -124,12 +124,13 @@ export class MenuScene extends Phaser.Scene {
   private showMain() {
     this.view = "main";
     const inRun = this.from === "game"; // retreat only means something mid-run
-    const H = inRun ? 472 : 414;
+    const compact = this.scale.height < 520;
+    const H = compact ? this.scale.height - 12 : inRun ? 472 : 414;
     const { box, x, y, w } = this.freshRoot(H);
     this.title(box, x, y, "— PAUSED —");
     const bw = w - 80;
-    let by = y + 92;
-    const step = 58;
+    let by = y + (compact ? 68 : 92);
+    const step = compact ? 46 : 58;
     this.button(box, x, by, bw, "resume", () => this.resume());
     if (inRun)
       this.button(box, x, (by += step), bw, "return to camp", () =>
@@ -158,7 +159,7 @@ export class MenuScene extends Phaser.Scene {
     this.button(box, x, (by += step), bw, "options", () => this.showOptions());
     box.add(
       this.add
-        .text(x, y + H - 22, "esc closes · progress auto-saves as you play", { fontFamily: "monospace", fontSize: "11px", color: "#6a707c" })
+        .text(x, y + H - 22, "esc closes · progress auto-saves as you play", { fontFamily: "monospace", fontSize: "13px", color: "#8a93a3" })
         .setOrigin(0.5),
     );
   }
@@ -190,12 +191,12 @@ export class MenuScene extends Phaser.Scene {
     const tw = 190; // track width
     const tx = cx + w / 2 - 34 - tw; // track left
     box.add(this.add.text(left, yy - 9, label, { fontFamily: "monospace", fontSize: "15px", color: "#dfe3ea" }));
-    if (note) box.add(this.add.text(left, yy + 9, note, { fontFamily: "monospace", fontSize: "10px", color: "#6a707c" }));
+    if (note) box.add(this.add.text(left, yy + 9, note, { fontFamily: "monospace", fontSize: "12px", color: "#8a93a3" }));
     const track = this.add.rectangle(tx + tw / 2, yy, tw, 8, 0x0a0c11).setStrokeStyle(2, 0x2a2d38);
     const fill = this.add.rectangle(tx, yy, Math.max(1, tw * value), 6, 0xffd94a).setOrigin(0, 0.5);
     const knob = this.add.circle(tx + tw * value, yy, 10, 0xffe08a).setStrokeStyle(2, 0x5a3a08);
     const pct = this.add
-      .text(tx + tw + 12, yy, `${Math.round(value * 100)}`, { fontFamily: "monospace", fontSize: "13px", color: "#bfe6ff" })
+      .text(tx + tw + 12, yy, `${Math.round(value * 100)}`, { fontFamily: "monospace", fontSize: "14px", color: "#bfe6ff" })
       .setOrigin(0, 0.5);
     box.add([track, fill, knob, pct]);
 
@@ -222,7 +223,7 @@ export class MenuScene extends Phaser.Scene {
     box.add(
       this.add
         .text(x, y + 56, mode === "save" ? "snapshot your journey into a slot" : "return to a snapshot (current progress is replaced)", {
-          fontFamily: "monospace", fontSize: "12px", color: "#9aa0ab",
+          fontFamily: "monospace", fontSize: "14px", color: "#aeb5c0",
         })
         .setOrigin(0.5),
     );
@@ -265,7 +266,7 @@ export class MenuScene extends Phaser.Scene {
     const enabled = !!cb;
     const rect = this.add.rectangle(x, y, w, 56, enabled ? 0x1c2029 : 0x14171f).setStrokeStyle(2, enabled ? 0x3a4152 : 0x2a2d38);
     const txt = this.add
-      .text(x - w / 2 + 14, y, label, { fontFamily: EMOJI_FONT, fontSize: "13px", color: enabled ? "#dfe3ea" : "#5a6068", lineSpacing: 4 })
+      .text(x - w / 2 + 14, y, label, { fontFamily: EMOJI_FONT, fontSize: "15px", color: enabled ? "#dfe3ea" : "#69717c", lineSpacing: 4 })
       .setOrigin(0, 0.5);
     if (enabled)
       rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {

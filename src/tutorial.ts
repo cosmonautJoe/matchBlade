@@ -37,7 +37,9 @@ export interface TutorialHost extends Phaser.Scene {
   cellRectD(r: number, c: number): Rect; // design-local
   resourceRowsRect(from: number, to: number): Rect; // HUD panel — already screen px
   rigSwapMatch(type: number): { from: Coord; to: Coord };
-  demoStrike(pierce: boolean): boolean;
+  demoStrike(pierce: boolean, slowMotion?: boolean): boolean;
+  focusTutorialHit(onComplete: () => void): void;
+  restoreTutorialView(onComplete?: () => void, immediate?: boolean): void;
   markTutorialSeen(): void;
 }
 
@@ -162,6 +164,12 @@ export class Tutorial {
     if (this.done || !this.armed) return;
     this.armed = false;
     if (this.step >= STEPS - 1) this.finish();
+    else if (this.step === 3) {
+      // Let the lane breathe back out before the shield lesson needs the full board.
+      this.g.restoreTutorialView(() => {
+        if (!this.done && this.step === 3) this.setStep(4);
+      });
+    }
     else this.setStep(this.step + 1);
   };
 
@@ -179,30 +187,41 @@ export class Tutorial {
       this.waitType = n === 2 ? SWORD : SHIELD;
       this.rig = this.g.rigSwapMatch(this.waitType);
     }
-    this.render();
     if (n === 3) {
-      // let the card land, then the foe demonstrates: one scripted strike, guard ignored
-      this.g.time.delayedCall(800, () =>
-        this.tryDemo(true, 8, () => {
-          if (this.done || this.step !== 3) return;
-          this.phase = 1;
-          this.render();
-          this.armTap(500);
-        }),
-      );
-    } else if (this.waitType === null) {
-      this.armTap();
+      // Push in on the lane before the card and demonstration appear. The foe's
+      // melee is slowed only for this beat so contact and lost ground read clearly.
+      this.clearVisuals();
+      this.g.focusTutorialHit(() => {
+        if (this.done || this.step !== 3) return;
+        this.render();
+        this.g.time.delayedCall(650, () =>
+          this.tryDemo(
+            true,
+            8,
+            () => {
+              if (this.done || this.step !== 3) return;
+              this.phase = 1;
+              this.render();
+              this.armTap(500);
+            },
+            true,
+          ),
+        );
+      });
+    } else {
+      this.render();
+      if (this.waitType === null) this.armTap();
     }
   }
 
   /** Fire a scripted strike once a live foe is engaged, retrying between fights. */
-  private tryDemo(pierce: boolean, retries: number, then: () => void) {
+  private tryDemo(pierce: boolean, retries: number, then: () => void, slowMotion = false) {
     if (this.done) return;
-    if (this.g.demoStrike(pierce)) {
-      this.g.time.delayedCall(900, then); // let the shove / clang read
+    if (this.g.demoStrike(pierce, slowMotion)) {
+      this.g.time.delayedCall(slowMotion ? 1250 : 900, then); // let the shove / clang read
       return;
     }
-    if (retries > 0) this.g.time.delayedCall(450, () => this.tryDemo(pierce, retries - 1, then));
+    if (retries > 0) this.g.time.delayedCall(450, () => this.tryDemo(pierce, retries - 1, then, slowMotion));
     else then(); // no foe showed up — don't strand the player, the words carry it
   }
 
@@ -223,6 +242,7 @@ export class Tutorial {
     const objs = this.objs;
     this.objs = [];
     for (const o of objs) this.g.tweens.add({ targets: o, alpha: 0, duration: 240, onComplete: () => o.destroy() });
+    this.g.restoreTutorialView();
     this.g.markTutorialSeen();
   }
 
@@ -232,6 +252,7 @@ export class Tutorial {
     this.done = true;
     this.g.input.off("pointerdown", this.onTap);
     this.g.scale.off("resize", this.onResize, this);
+    this.g.restoreTutorialView(undefined, true);
     for (const o of this.objs) o.destroy();
     this.objs = [];
   }
