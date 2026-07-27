@@ -228,6 +228,14 @@ const ARENA_RED_STRIKES = 2;
 const ARENA_RED_LOCK_MS = 650; // and you are left open afterwards
 const EARLY_SWING_LOCK_MS = 240; // shorter than any parry window on purpose: an early
 // swing should cost you the beat, not forfeit the parry outright
+// The kill punch-in. It fires on EVERY kill, which at one kill every few
+// seconds is a lot of full-screen movement — so an ordinary kill gets barely a
+// nudge and the punctuation is saved for a warden. (It used to be 1.035 for
+// everything, but a bug stranded the camera and quietly suppressed most of
+// them; fixing that made the real frequency visible for the first time.)
+// Set PUNCH_KILL to 1 to switch ordinary kills off entirely.
+const PUNCH_KILL = 1.015;
+const PUNCH_BOSS = 1.05;
 const TRAIL_LIFE_MS = 210; // how long a segment of the blade streak lingers
 /** A drag must cover this much design-space before it counts as a cut. */
 const SWIPE_MIN = 52;
@@ -2683,7 +2691,7 @@ class GameScene extends Phaser.Scene {
       dying.setTintFill(0xffffff);
       this.time.delayedCall(90, () => dying.clearTint());
       buzz(18);
-      this.punchCamera();
+      this.punchCamera(wasBoss ? PUNCH_BOSS : PUNCH_KILL, wasBoss ? 90 : 60, wasBoss ? 240 : 140);
       this.tweens.killTweensOf(dying);
       dying.play(`${this.orcAnim}-death`);
       if (this.orcRig?.fakeDeath) {
@@ -6135,12 +6143,12 @@ class GameScene extends Phaser.Scene {
    * the corners of the HUD. Tweening zoom directly, killing any prior tween and
    * pinning the final value, makes the return unconditional.
    */
-  private punchCamera(to = 1.035, inMs = 70, outMs = 160) {
+  private punchCamera(to = PUNCH_KILL, inMs = 60, outMs = 140) {
     // While the tutorial has the lane framed, the shell is already mid-zoom and
     // the punch stacks on top of it — kill the demo foe during that framing and
     // the two transforms fight, which is exactly how the camera used to end up
     // stranded. The tutorial owns the view for those few seconds; let it.
-    if (this.tutorialHitFocus) return;
+    if (this.tutorialHitFocus || to <= 1) return;
     const cam = this.cameras.main;
     cam.zoomEffect.reset();
     this.tweens.killTweensOf(cam);
