@@ -1,0 +1,11 @@
+{
+  "name": "matchBlade",
+  "short_name": "matchBlade",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0a0b0f",
+  "theme_color": "#0a0b0f"
+}
