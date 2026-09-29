@@ -85,12 +85,12 @@ export const ITEMS: ItemDef[] = [
   { id: "ledger", name: "Merchant's Ledger", glyph: "📒", tier: "uncommon", target: "none",
     desc: `Cook the books: for ${LEDGER_SECS}s wood, ore and gem matches pay double.`, hint: TAP },
   { id: "ink", name: "Cartographer's Ink", glyph: "🗺️", tier: "common", target: "none",
-    desc: "Chart the road: see what the next three encounters hold, for the rest of the run.", hint: TAP },
+    desc: "See what the next three encounters hold, for the rest of the run.", hint: TAP },
   // ---- warden-charms (the Peddler's speciality; dead weight outside a boss) ----
   { id: "wardsalve", name: "Warden's Salve", glyph: "🩹", tier: "uncommon", target: "none", bossAid: true,
-    desc: "A warden's blows land at HALF force for the rest of the run. Their wards still pierce your guard — you just keep your feet.", hint: `${TAP} · boss fights only` },
+    desc: "A warden's blows land at half force for the rest of the run. Their wards still go through your guard — you just keep your feet.", hint: `${TAP} · boss fights only` },
   { id: "wardbell", name: "Warding Bell", glyph: "🔔", tier: "common", target: "none", bossAid: true,
-    desc: "Rung against ruin: your next RED slip in a boss arena simply doesn't count — no blow, no ground lost, your run stays clean.", hint: `${TAP} · boss fights only` },
+    desc: "Your next red mistake in a boss fight doesn't count. No blow, no ground lost.", hint: `${TAP} · boss fights only` },
 ];
 
 export function itemById(id: string): ItemDef | undefined {

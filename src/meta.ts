@@ -225,12 +225,12 @@ export interface Quest {
 }
 
 export const PLAINS_QUESTS: Quest[] = [
-  { id: "slay25", label: "Slay 25 slimes", shortLabel: "slay slimes", reward: 10, kind: "delta", stat: "slain", target: 25 },
+  { id: "slay25", label: "Kill 25 slimes", shortLabel: "kill slimes", reward: 10, kind: "delta", stat: "slain", target: 25 },
   { id: "chests5", label: "Crack open 5 treasure chests", shortLabel: "open chests", reward: 10, kind: "delta", stat: "chestsOpened", target: 5 },
   { id: "wood60", label: "Haul 60 wood back to camp", shortLabel: "haul wood", reward: 10, kind: "delta", stat: "totalWood", target: 60 },
-  { id: "hire", label: "Coax the blacksmith from her tent", shortLabel: "hire the smith", reward: 15, kind: "state", target: 1 },
+  { id: "hire", label: "Get the blacksmith working", shortLabel: "hire the smith", reward: 15, kind: "state", target: 1 },
   { id: "depth10", label: "Reach depth 10 in a single run", shortLabel: "depth 10 run", reward: 15, kind: "run-depth", target: 10 },
-  { id: "slay60", label: "Slay 60 more slimes", shortLabel: "slay slimes II", reward: 15, kind: "delta", stat: "slain", target: 60 },
+  { id: "slay60", label: "Kill 60 more slimes", shortLabel: "kill slimes II", reward: 15, kind: "delta", stat: "slain", target: 60 },
   { id: "ore80", label: "Haul 80 ore back to camp", shortLabel: "haul ore", reward: 15, kind: "delta", stat: "totalOre", target: 80 },
   { id: "forge2", label: "Forge the blade to its plains peak", shortLabel: "peak blade", reward: 20, kind: "delta", stat: "swordLevel", target: 3 },
   { id: "chests12", label: "Crack open 12 more chests", shortLabel: "open chests II", reward: 15, kind: "delta", stat: "chestsOpened", target: 12 },
@@ -239,34 +239,34 @@ export const PLAINS_QUESTS: Quest[] = [
 
 // The forest asks more of a seasoned scout — bigger hauls, deeper runs, a sharper blade.
 export const FOREST_QUESTS: Quest[] = [
-  { id: "f_slay50", label: "Slay 50 forest beasts", shortLabel: "slay beasts", reward: 20, kind: "delta", stat: "slain", target: 50 },
+  { id: "f_slay50", label: "Kill 50 forest beasts", shortLabel: "kill beasts", reward: 20, kind: "delta", stat: "slain", target: 50 },
   { id: "f_chests10", label: "Crack open 10 treasure chests", shortLabel: "open chests", reward: 20, kind: "delta", stat: "chestsOpened", target: 10 },
   { id: "f_wood120", label: "Haul 120 wood back to camp", shortLabel: "haul wood", reward: 20, kind: "delta", stat: "totalWood", target: 120 },
   { id: "f_ore120", label: "Haul 120 ore back to camp", shortLabel: "haul ore", reward: 25, kind: "delta", stat: "totalOre", target: 120 },
   { id: "f_forge3", label: "Forge the blade to its forest peak", shortLabel: "forest peak", reward: 30, kind: "delta", stat: "swordLevel", target: 6 },
   // Runs end victorious at depth 20 (the second boss) — quests fit the road.
   { id: "f_depth22", label: "Reach depth 18 in a single run", shortLabel: "depth 18 run", reward: 30, kind: "run-depth", target: 18 },
-  { id: "f_depth30", label: "Clear the road to the second boss", shortLabel: "clear the road", reward: 45, kind: "run-depth", target: 20 },
+  { id: "f_depth30", label: "Reach the second boss", shortLabel: "second boss", reward: 45, kind: "run-depth", target: 20 },
 ];
 
 // The pass strips the caravan back to survival: bigger hauls, the full road, a blade at its true peak.
 export const SNOW_QUESTS: Quest[] = [
-  { id: "s_slay80", label: "Slay 80 creatures of the pass", shortLabel: "slay the pass", reward: 30, kind: "delta", stat: "slain", target: 80 },
+  { id: "s_slay80", label: "Kill 80 things in the pass", shortLabel: "kill in the pass", reward: 30, kind: "delta", stat: "slain", target: 80 },
   { id: "s_chests15", label: "Crack open 15 treasure chests", shortLabel: "open chests", reward: 30, kind: "delta", stat: "chestsOpened", target: 15 },
   { id: "s_wood180", label: "Haul 180 wood back to camp", shortLabel: "haul wood", reward: 35, kind: "delta", stat: "totalWood", target: 180 },
   { id: "s_ore180", label: "Haul 180 ore back to camp", shortLabel: "haul ore", reward: 35, kind: "delta", stat: "totalOre", target: 180 },
   { id: "s_forge9", label: "Forge the blade to its glacial peak", shortLabel: "glacial peak", reward: 45, kind: "delta", stat: "swordLevel", target: 9 },
-  { id: "s_depth20", label: "Clear the frozen road to the second boss", shortLabel: "clear the pass", reward: 60, kind: "run-depth", target: 20 },
+  { id: "s_depth20", label: "Reach the second boss", shortLabel: "clear the pass", reward: 60, kind: "run-depth", target: 20 },
 ];
 
 // The delve is the journey's end (for now): the dark asks for everything.
 export const DUNGEON_QUESTS: Quest[] = [
-  { id: "d_slay120", label: "Slay 120 horrors of the deep", shortLabel: "slay the deep", reward: 40, kind: "delta", stat: "slain", target: 120 },
+  { id: "d_slay120", label: "Kill 120 things down in the delve", shortLabel: "kill in the delve", reward: 40, kind: "delta", stat: "slain", target: 120 },
   { id: "d_chests20", label: "Crack open 20 treasure chests", shortLabel: "open chests", reward: 40, kind: "delta", stat: "chestsOpened", target: 20 },
-  { id: "d_wood240", label: "Haul 240 wood back to the delve-camp", shortLabel: "haul wood", reward: 45, kind: "delta", stat: "totalWood", target: 240 },
-  { id: "d_ore240", label: "Haul 240 ore back to the delve-camp", shortLabel: "haul ore", reward: 45, kind: "delta", stat: "totalOre", target: 240 },
+  { id: "d_wood240", label: "Haul 240 wood back to camp", shortLabel: "haul wood", reward: 45, kind: "delta", stat: "totalWood", target: 240 },
+  { id: "d_ore240", label: "Haul 240 ore back to camp", shortLabel: "haul ore", reward: 45, kind: "delta", stat: "totalOre", target: 240 },
   { id: "d_forge12", label: "Forge the blade to its final peak", shortLabel: "final peak", reward: 60, kind: "delta", stat: "swordLevel", target: 12 },
-  { id: "d_depth20", label: "Clear the dark road to the second boss", shortLabel: "clear the deep", reward: 80, kind: "run-depth", target: 20 },
+  { id: "d_depth20", label: "Reach the second boss", shortLabel: "clear the deep", reward: 80, kind: "run-depth", target: 20 },
 ];
 
 // Ordered march of the caravan. Each biome has a quest pool that gates the next.

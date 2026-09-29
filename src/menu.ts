@@ -146,7 +146,7 @@ export class MenuScene extends Phaser.Scene {
         ),
       );
     this.button(box, x, (by += step), bw, "new game", () => this.confirmStep(
-      "Start over? The caravan's road, oaths, and bank all reset.\n(Save slots are kept.)",
+      "Start over? Progress, quests and banked resources all reset.\n(Save slots are kept.)",
       "start anew",
       () => {
         saveMeta(defaultMeta());

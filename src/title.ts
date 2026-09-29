@@ -82,7 +82,7 @@ export class TitleScene extends Phaser.Scene {
     this.title.setShadow(0, 6, "rgba(0,0,0,0.8)", 10, true, true);
 
     this.tagline = this.add
-      .text(0, 0, "match tiles · fight the dark · clear the road", { fontFamily: "monospace", fontSize: "17px", color: "#aeb9c8", stroke: "#0a0b0f", strokeThickness: 4 })
+      .text(0, 0, "match tiles · fight the dark · clear the way", { fontFamily: "monospace", fontSize: "17px", color: "#aeb9c8", stroke: "#0a0b0f", strokeThickness: 4 })
       .setOrigin(0.5)
       .setDepth(20);
 

@@ -53,7 +53,7 @@ const DIM = 0x05060a;
 const COPY: { title: string; body: string }[] = [
   {
     title: "THE ROAD AHEAD",
-    body: "You scout ahead of the caravan, clearing the road. A foe blocks the way — fights are won down on the board.",
+    body: "You go on ahead to clear the way for the camp. Something's blocking it — fights are won down on the board.",
   },
   {
     title: "THE BOARD",
@@ -69,19 +69,19 @@ const COPY: { title: string; body: string }[] = [
   },
   {
     title: "SHIELDS GUARD",
-    body: "Match 🛡️ shields to raise your guard — a guarded scout gives no ground. Try it.",
+    body: "Match 🛡️ shields to raise your guard — guarded, you give no ground. Try it.",
   },
   {
     title: "KEYS OPEN CHESTS",
-    body: "Treasure chests roll in as you clear the road. Match 🔑 keys to bank them — a banked key pops the next chest wide open.",
+    body: "Chests roll in as you go. Match 🔑 keys to bank them — a banked key pops the next chest wide open.",
   },
   {
     title: "GATHER FOR THE CARAVAN",
-    body: "🪵 wood, 🪨 ore and 💎 gems ride home when the run ends. Spend them at camp to grow the caravan — and more uses are on the way.",
+    body: "🪵 wood, 🪨 ore and 💎 gems come home with you. Spend them at camp to grow it — more uses coming.",
   },
   {
     title: "GO, SCOUT",
-    body: "That's the basics. Clear the road — the caravan follows.",
+    body: "That's the basics. Clear the way and the camp follows.",
   },
 ];
 // step 4's second beat, after the scripted strike clangs off the guard

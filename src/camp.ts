@@ -68,12 +68,12 @@ const PEDDLER_REROLL = 5; // 💎 to spin fresh wares
 // says out loud: a warden's blow goes straight through your guard, and she is
 // the only place to buy anything that helps.
 const PEDDLER_BARKS = [
-  "Met a warden yet? Their blows go straight through a shield. Mine's the only stall that helps with that.",
-  "Warden's Salve, scout — takes half the sting out of every blow one of them lands.",
-  "A Warding Bell, maybe? Rings the worst hit right off you. Cheap, for what it saves.",
-  "Charms for boss-work, over here. Shields won't save you from a warden. My goods might.",
-  "Gems for gear! And a word of advice — don't walk into a boss without something of mine in your pack.",
-  "You'll meet something big down that road. Come see me first.",
+  "Bosses go straight through a shield. I stock the only thing that helps.",
+  "Salve for warden blows. Halves what they take off you.",
+  "Warding bell. One bad mistake, undone. Cheap enough.",
+  "Shields won't save you from a warden. My stock might.",
+  "Gems for gear. Don't meet a boss empty-handed.",
+  "Something big up ahead. Come see me first.",
 ];
 const MAX_STOCKED = 3; // items you can pack for one run
 
@@ -1166,9 +1166,9 @@ export class CampScene extends Phaser.Scene {
       name: "THE WAYFARER",
       speaker: () => this.goddess,
       lines: [
-        { text: "You must be the scout. We're stuck here until someone clears the road ahead." },
+        { text: "You made it. Good — we're stuck here until someone clears what's ahead." },
         {
-          text: "Check my list before you leave. Pick a job, head through the portal, and bring back what the camp needs.",
+          text: "Take a job off my list before you go. Through the portal, then bring back what we need.",
           cue: () => {
             if (this.departSign)
               this.tweens.add({ targets: this.departSign, scale: 1.3, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
@@ -1177,7 +1177,7 @@ export class CampScene extends Phaser.Scene {
           },
         },
         {
-          text: "Wren, the blacksmith, is holed up in that tarp tent. Get her working before you push too deep — that blade won't last.",
+          text: "Wren's a blacksmith. She's in that tent. Get her working before you go deep — your blade won't hold.",
           cue: () => {
             for (const o of this.tentMark)
               this.tweens.add({ targets: o, scale: (o as Phaser.GameObjects.Text).scale * 1.5, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
@@ -1208,7 +1208,7 @@ export class CampScene extends Phaser.Scene {
         this.meta.campIntroSeen = true;
         saveMeta(this.meta);
         this.refreshWayfarerMark();
-        if (skipped) this.toast("the Wayfarer waits by the portal");
+        if (skipped) this.toast("the Wayfarer's by the portal");
       },
     });
   }
@@ -1333,9 +1333,9 @@ export class CampScene extends Phaser.Scene {
       name: "THE PEDDLER",
       speaker: () => this.peddler,
       lines: [
-        { text: "Hold there, scout. Is that the glitter of diamonds I hear in your pockets? Sweetest sound on any road." },
+        { text: "You've got diamonds on you. I can always tell." },
         {
-          text: "They call me the Peddler. Gems for gear — have a look at my wares, and your next run leaves camp already armed.",
+          text: "I'm the Peddler. Gems for gear — have a look before you head out, and you won't leave empty-handed.",
           cue: () => {
             if (this.peddler)
               this.tweens.add({ targets: this.peddler, scale: PEDDLER_SCALE * 1.1, duration: 260, yoyo: true, repeat: 1, ease: "Sine.easeInOut" });
@@ -1366,7 +1366,7 @@ export class CampScene extends Phaser.Scene {
         this.meta.peddlerArrived = true;
         saveMeta(this.meta);
         this.refreshWayfarerMark();
-        this.toast("the Peddler has set up shop 💰");
+        this.toast("the Peddler's set up shop 💰");
       },
     });
   }
@@ -1499,7 +1499,7 @@ export class CampScene extends Phaser.Scene {
             this.shopOffers = this.shopOffers.filter((o) => o !== item);
             this.refreshResources();
             this.sfx("coin3", 0.55);
-            this.toast(`packed for the road: ${item.glyph} ${item.name}`);
+            this.toast(`packed: ${item.glyph} ${item.name}`);
             this.closePanel();
             this.peddlerTapped(); // reopen with the ware sold out
           });
@@ -1508,7 +1508,7 @@ export class CampScene extends Phaser.Scene {
       }
     }
     if (!this.shopOffers.length) {
-      box.add(this.add.text(vw / 2, y + 6, "「 Sold out. The road restocks me — come back after a run. 」", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
+      box.add(this.add.text(vw / 2, y + 6, "「 Sold out. I restock after a run. 」", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
       y += 34;
     }
 
@@ -1663,14 +1663,14 @@ export class CampScene extends Phaser.Scene {
   private tentTapped() {
     if (this.editMode || this.panelOpen || this.cutscene) return;
     if (this.meta.blacksmithHired) {
-      this.toast("the tent is empty — Wren works the forge now");
+      this.toast("tent's empty — Wren's at the forge now");
       return;
     }
     const afford = canAfford(this.meta, BLACKSMITH_COST);
     this.panel(
-      "A VOICE FROM THE TENT",
+      "SOMEONE IN THE TENT",
       [
-        `"Hmph. The road took my tools and my nerve."`,
+        `"Hmph. Lost my tools out there. Most of my nerve too."`,
         `"Bring me 🪵 ${BLACKSMITH_COST.wood} and 🪨 ${BLACKSMITH_COST.ore} and I'll light that furnace."`,
         ``,
         `your bank:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}`,
@@ -1707,10 +1707,10 @@ export class CampScene extends Phaser.Scene {
       onComplete: () => {
         smith.play("smith-idle");
         this.lightFurnace(true); // she keeps her word — the furnace roars to life
-        this.toast("Wren the blacksmith joins the caravan! ⚒");
+        this.toast("Wren joins the camp ⚒");
         this.refreshWayfarerMark(); // a "hire" oath may now be ready to turn in
         if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-          this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
+          this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
       },
     });
   }
@@ -1724,11 +1724,11 @@ export class CampScene extends Phaser.Scene {
     if (!this.meta.wizardHired) {
       const afford = canAfford(this.meta, WIZARD_COST);
       this.panel(
-        "A SCHOLAR OF THE OLD ROAD",
+        "A SCHOLAR, PASSING THROUGH",
         [
-          `"Your blade is well kept. Your CASTING is a rumour."`,
-          `"Reagents and a focus-stone, and I'll teach the staff"`,
-          `" what the forge taught the sword."`,
+          `"Your blade's well kept. Your casting is not."`,
+          `"Cover the materials and I'll teach you the staff."`,
+          `"Same as the forge taught you the sword."`,
           ``,
           `your bank:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`,
         ],
@@ -1748,10 +1748,10 @@ export class CampScene extends Phaser.Scene {
           `the staff is at its ${this.meta.biome} peak (level ${lvl})`,
           `every cast carries +${lvl * SPELL_BONUS_PER_LEVEL} damage`,
           ``,
-          `"the leylines here are spent. walk a stranger"`,
-          ` road and I'll read it for you."`,
+          `"Nothing more I can teach you here."`,
+          `"Take me somewhere new and we'll see."`,
         ],
-        [{ label: "close the book" }],
+        [{ label: "later" }],
       );
       return;
     }
@@ -1784,10 +1784,10 @@ export class CampScene extends Phaser.Scene {
     const flare = this.add.image(this.mage?.x ?? 258, -40, "camp-glow").setBlendMode(Phaser.BlendModes.ADD).setTint(0x9a6bff).setScale(1.2).setAlpha(0.9).setDepth(9);
     this.propBox.add(flare);
     this.tweens.add({ targets: flare, scale: 3.4, alpha: 0, duration: 700, onComplete: () => flare.destroy() });
-    this.toast("Aldwin the Mage joins the caravan! 🪄");
+    this.toast("Aldwin joins the camp 🪄");
     this.refreshWayfarerMark();
     if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
+      this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
   }
 
   private studyUpgrade(cost: number) {
@@ -1797,17 +1797,17 @@ export class CampScene extends Phaser.Scene {
     this.refreshResources();
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.staffLevel >= studyCap(this.meta.biome);
-    this.toast(atPeak ? `the staff sings at its peak — +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} per cast 🪄` : `the lore deepens — staff level ${this.meta.staffLevel} 🪄`);
+    this.toast(atPeak ? `staff at its peak — +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} per cast 🪄` : `staff improved — level ${this.meta.staffLevel} 🪄`);
     this.refreshWayfarerMark();
     if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
+      this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
   }
 
   /** Wren's forge: permanent sword levels, capped per zone — the cap SUNDERS. */
   private furnaceTapped() {
     if (this.editMode || this.panelOpen || this.cutscene) return;
     if (!this.meta.blacksmithHired) {
-      this.toast("the furnace is cold… someone in that tent might know its trade");
+      this.toast("furnace is cold — someone in that tent knows how to work it");
       return;
     }
     const lvl = this.meta.swordLevel;
@@ -1822,7 +1822,7 @@ export class CampScene extends Phaser.Scene {
           `"my anvil's done all it can here. a harder`,
           ` land will ask for a harder edge."`,
         ],
-        [{ label: "rest the hammer" }],
+        [{ label: "later" }],
       );
       return;
     }
@@ -1854,10 +1854,10 @@ export class CampScene extends Phaser.Scene {
     this.refreshResources();
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.swordLevel >= forgeCap(this.meta.biome);
-    this.toast(atPeak ? "the edge is PERFECT — one stroke fells any common foe ⚔" : `the edge sings — blade level ${this.meta.swordLevel} ⚔`);
+    this.toast(atPeak ? "edge is perfect — one stroke drops any common foe ⚔" : `blade sharpened — level ${this.meta.swordLevel} ⚔`);
     this.refreshWayfarerMark(); // a forge oath may now be ready to turn in
     if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("an oath is fulfilled — the Wayfarer has your payment"));
+      this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
   }
 
   /** The Wayfarer's quest board: accepted quests with progress + new offers to accept. */
@@ -1937,13 +1937,13 @@ export class CampScene extends Phaser.Scene {
     const cleared = allQuestsDone(this.meta);
     const canTravel = roadOpen(this.meta); // pool cleared AND a next biome exists
     if (!active.length && !offers.length) {
-      line(cleared ? "「 Every oath is kept. The road onward lies open. 」" : "「 Rest. The road will ask more of you soon. 」", "#ffe08a");
+      line(cleared ? "「 Every quest done. The way onward is open. 」" : "「 Nothing new for now. Come back after a run. 」", "#ffe08a");
       y += 34;
     } else {
       y += 6;
       const foot = cleared
-        ? "「 Every oath is kept. The road onward lies open. 」"
-        : "「 Keep every oath on my list, and I will open the road. 」";
+        ? "「 Every quest done. The way onward is open. 」"
+        : "「 Finish every quest on my list and I'll open the way onward. 」";
       box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, foot, { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#ffe08a" }).setOrigin(0.5));
     }
 
@@ -1978,7 +1978,7 @@ export class CampScene extends Phaser.Scene {
       return;
     }
     this.sfx("pickup", 0.6);
-    this.toast("the caravan breaks camp…");
+    this.toast("packing up…");
     this.cameras.main.fadeOut(900, 6, 8, 12);
     this.cameras.main.once("camerafadeoutcomplete", () => this.scene.restart());
   }

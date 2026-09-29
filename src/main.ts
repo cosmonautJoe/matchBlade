@@ -248,18 +248,18 @@ const SWIPE_ANGLE: Record<SwipeDir, number> = { right: 0, down: 90, left: 180, u
 type StageCard = { title: string; sub: string; taunt: string };
 const BOSS_STAGES: Record<string, StageCard[]> = {
   malgrim: [
-    { title: "WARD I — THE EMBER COURT", sub: "● tap the GOLD images — ✖ the RED ones burn", taunt: "“Amusing, scout. Again!”" },
-    { title: "WARD II — THE EMBER FALL", sub: "● tap GOLD — ╱ cut BLUE the way it points — ✖ let RED fall", taunt: "“Your hands are too slow!”" },
+    { title: "WARD I — THE EMBER COURT", sub: "● tap the GOLD images — ✖ leave the RED ones", taunt: "“Amusing. Again!”" },
+    { title: "WARD II — THE EMBER FALL", sub: "● tap GOLD — ╱ cut BLUE the way it points — ✖ let RED fall", taunt: "“Too slow.”" },
     { title: "WARD III — RETURN HIS FIRE", sub: "● tap GOLD at your guard — ✖ never swing at RED", taunt: "“BURN WITH ME!”" },
   ],
   gorrach: [
-    { title: "HORN I — THE CHARGE", sub: "✖ the RED path is the trampling — ● tap the GOLD as he passes", taunt: "“Stand still, little scout.”" },
-    { title: "HORN II — TURN HIS AXE", sub: "╱ cut BLUE aside — ● tap GOLD to counter — ✖ RED is a feint", taunt: "“You will not turn me!”" },
-    { title: "HORN III — LOCK HORNS", sub: "● tap on GOLD — ✖ never on RED — and everything drifts", taunt: "" },
+    { title: "HORN I — THE CHARGE", sub: "✖ stay off the RED path — ● tap the GOLD as he passes", taunt: "“Stand still.”" },
+    { title: "HORN II — TURN HIS AXE", sub: "╱ cut BLUE aside — ● tap GOLD to counter — ✖ RED is a feint", taunt: "“You won't turn me.”" },
+    { title: "HORN III — LOCK HORNS", sub: "● tap on GOLD — ✖ never on RED — it all keeps moving", taunt: "" },
   ],
   hoarfrost: [
-    { title: "RIME I — BREAK THE ICE", sub: "● tap GOLD plates — ╱ cut BLUE ones — ✖ RED bites", taunt: "“Cold outlasts steel, warmling.”" },
-    { title: "RIME II — THE WHITEOUT", sub: "✖ drag clear of the RED fall — ● tap the GOLD warmth", taunt: "“Then reach into the cold yourself.”" },
+    { title: "RIME I — BREAK THE ICE", sub: "● tap GOLD plates — ╱ cut BLUE ones — ✖ leave RED alone", taunt: "“Cold outlasts steel.”" },
+    { title: "RIME II — THE WHITEOUT", sub: "✖ drag clear of the RED — ● tap the GOLD warmth", taunt: "“Then reach in yourself.”" },
     { title: "RIME III — THE FROZEN HEART", sub: "✖ RED shards — ● tap the GOLD core through the gap", taunt: "" },
   ],
 };
@@ -282,7 +282,7 @@ type TennisShot = {
 };
 const TENNIS_SHOTS: TennisShot[] = [
   { castMs: 1350, restMs: 1000, call: "RETURN IT!" },
-  { castMs: 1150, fake: 0.4, restMs: 900, call: "AGAIN — FASTER!" },
+  { castMs: 1150, fake: 0.4, restMs: 900, call: "again, faster" },
   { castMs: 1000, balls: 2, redChance: 0.5, stagger: 320, restMs: 820, call: "TWO AT ONCE!" },
   { castMs: 880, balls: 3, redChance: 0.4, stagger: 265, fake: 0.3, early: 125, late: 100, restMs: 720, call: "HE OPENS UP — THREE!" },
   { castMs: 760, balls: 4, redChance: 0.35, stagger: 205, early: 110, late: 88, restMs: 600, call: "“BURN WITH ME!”" },
@@ -2770,7 +2770,7 @@ class GameScene extends Phaser.Scene {
     const h = this.scale.height;
     const veil = this.add.rectangle(w / 2, h / 2, w, h, 0x05060a, 0.62).setAlpha(0).setDepth(80);
     const title = this.add
-      .text(w / 2, h / 2 - 56, "THE ROAD IS CLEARED", { fontFamily: "monospace", fontStyle: "bold", fontSize: "34px", color: "#ffe08a" })
+      .text(w / 2, h / 2 - 56, "THE WAY IS CLEAR", { fontFamily: "monospace", fontStyle: "bold", fontSize: "34px", color: "#ffe08a" })
       .setOrigin(0.5)
       .setDepth(81)
       .setAlpha(0);
@@ -3499,8 +3499,8 @@ class GameScene extends Phaser.Scene {
     this.sfx("pickup", 0.4, 1.7);
     this.notice(
       this.run.bellCharges > 0
-        ? `THE BELL TOLLS — that one doesn't count (${this.run.bellCharges} left)`
-        : "THE BELL TOLLS — that one doesn't count",
+        ? `the bell — that one doesn't count (${this.run.bellCharges} left)`
+        : "the bell — that one doesn't count",
       "#ffd24a",
     );
     // a warding ring flares off the hero so the save is unmistakable
@@ -3562,11 +3562,11 @@ class GameScene extends Phaser.Scene {
         if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
         if (wave + 1 >= WAVES.length) {
           const c = BOSS_STAGES.malgrim[1];
-          this.arenaStageClear(gen, "THE COURT SCATTERS — A WARD SHATTERS!", BOSS_STAGES.malgrim[0].taunt, () =>
+          this.arenaStageClear(gen, "A WARD BREAKS", BOSS_STAGES.malgrim[0].taunt, () =>
             this.arenaStageIntro(gen, c.title, c.sub, () => this.emberFall(gen, 0)),
           );
         } else {
-          this.notice("AGAIN — FASTER!", "#ffd24a");
+          this.notice("again, faster", "#ffd24a");
           this.emberCourt(gen, wave + 1);
         }
       });
@@ -3574,7 +3574,7 @@ class GameScene extends Phaser.Scene {
     const burn = () => {
       if (done || this.bellForgives()) return;
       this.arenaWardMissed = true;
-      this.notice("a lie — it burns!", "#ff8a6a");
+      this.notice("that one was a lie", "#ff8a6a");
       this.arenaStrikeHero(ARENA_RED_STRIKES);
     };
 
@@ -3635,7 +3635,7 @@ class GameScene extends Phaser.Scene {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
           done = true;
           this.arenaWardMissed = true;
-          this.notice("too slow — his court closes!", "#ff8a6a");
+          this.notice("too slow", "#ff8a6a");
           this.arenaStrikeHero();
           this.time.delayedCall(900, () => {
             if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
@@ -3690,11 +3690,11 @@ class GameScene extends Phaser.Scene {
         if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
         if (round + 1 >= ROUNDS.length) {
           const c = BOSS_STAGES.malgrim[2];
-          this.arenaStageClear(gen, "HIS FIRE FALLS SHORT — ANOTHER WARD BREAKS!", BOSS_STAGES.malgrim[1].taunt, () =>
+          this.arenaStageClear(gen, "TWO DOWN", BOSS_STAGES.malgrim[1].taunt, () =>
             this.arenaStageIntro(gen, c.title, c.sub, () => this.startTennis(gen)),
           );
         } else {
-          this.notice("FASTER!", "#ffd24a");
+          this.notice("again, faster", "#ffd24a");
           this.emberFall(gen, round + 1);
         }
       });
@@ -3727,7 +3727,7 @@ class GameScene extends Phaser.Scene {
               score();
             }, () => {
               handled = true;
-              slip("cut the wrong way!");
+              slip("wrong way");
             });
           } else if (kind === "gold") {
             const g = this.goldNode(x, topY, 34, () => {
@@ -3738,7 +3738,7 @@ class GameScene extends Phaser.Scene {
           } else {
             const g = this.redNode(x, topY, 34, () => {
               handled = true;
-              if (!this.bellForgives()) slip("RED — never touch his fire!", ARENA_RED_STRIKES);
+              if (!this.bellForgives()) slip("never the red ones", ARENA_RED_STRIKES);
             });
             node = { move: (nx, ny) => g.setPosition(nx, ny), destroy: () => g.destroy() };
           }
@@ -3753,7 +3753,7 @@ class GameScene extends Phaser.Scene {
               node.destroy();
               if (handled || done || gen !== this.arenaGen) return;
               // red is SUPPOSED to land; anything else landing is on you
-              if (kind !== "red") slip(kind === "blue" ? "uncut — it lands!" : "untouched — it lands!");
+              if (kind !== "red") slip(kind === "blue" ? "uncut — it lands" : "missed — it lands");
             },
           });
         },
@@ -3847,7 +3847,7 @@ class GameScene extends Phaser.Scene {
       if (this.arenaDealIdx >= shots.length) {
         this.time.delayedCall(650, () => {
           if (gen !== this.arenaGen || this.run.over) return;
-          this.arenaStageClear(gen, "HIS LAST WARD FALLS!", "", () => this.arenaExecution(gen), 900);
+          this.arenaStageClear(gen, "HIS LAST WARD FALLS", "", () => this.arenaExecution(gen), 900);
         });
         return;
       }
@@ -3937,7 +3937,7 @@ class GameScene extends Phaser.Scene {
           balls = balls.filter((b) => b !== inWin);
           return;
         }
-        failContinue("RED was a lie — never swing at it!", ARENA_RED_STRIKES);
+        failContinue("never swing at red", ARENA_RED_STRIKES);
         return;
       }
       reflected(inWin);
@@ -3990,7 +3990,7 @@ class GameScene extends Phaser.Scene {
                   burst.explode(18);
                   this.time.delayedCall(600, () => burst.destroy());
                   img.destroy();
-                  failContinue("his fire finds you!");
+                  failContinue("his fire finds you");
                 } else {
                   // the red drifts past, revealed as nothing — well left alone
                   this.tweens.add({ targets: img, x: img.x - 90, alpha: 0, duration: 280, onComplete: () => img.destroy() });
@@ -4048,7 +4048,7 @@ class GameScene extends Phaser.Scene {
     if (gen !== this.arenaGen || this.run.over || !this.orc) return;
     this.bossHold = true; // he is where he fell to his knees; the finisher comes to him
     this.clearArenaObjs();
-    this.notice("HE IS EXPOSED — STRIKE HIM DOWN!", "#ffd24a");
+    this.notice("HE IS EXPOSED — STRIKE", "#ffd24a");
     this.sfx("summon", 0.45, 0.8);
 
     // he sags back into the lane, drained and flickering
@@ -4192,7 +4192,7 @@ class GameScene extends Phaser.Scene {
         tok.setTintFill(0xff5a3a);
         this.tweens.add({ targets: tok, x: tok.x - 70, angle: -70, alpha: 0.2, duration: 320, ease: "Quad.easeOut" });
         this.sfx("hit1", 0.6);
-        this.notice("GORED!", "#ff8a6a");
+        this.notice("gored", "#ff8a6a");
         this.arenaStrikeHero();
         this.time.delayedCall(1100, () => this.goringCharge(gen, idx));
       } else {
@@ -4205,7 +4205,7 @@ class GameScene extends Phaser.Scene {
         const punish = this.goldNode(gx, laneY(runLane), 40, () => {
           this.playCombo(["hero-attack2"], "hero-idle");
           this.bossReact();
-          this.floatChip(gx, laneY(runLane) - 60, "GORED HIM!", { size: 20 });
+          this.floatChip(gx, laneY(runLane) - 60, "STRUCK!", { size: 20 });
           this.run.block += 1; // a clean punish buys back a guard charge
           this.refreshHud();
         });
@@ -4217,7 +4217,7 @@ class GameScene extends Phaser.Scene {
           if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
           if (idx + 1 >= GORE_CHARGES.length) {
             const c = BOSS_STAGES.gorrach[1];
-            this.arenaStageClear(gen, "HE OVERRUNS — A HORN CRACKS!", BOSS_STAGES.gorrach[0].taunt, () =>
+            this.arenaStageClear(gen, "A HORN CRACKS", BOSS_STAGES.gorrach[0].taunt, () =>
               this.arenaStageIntro(gen, c.title, c.sub, () => this.goringParry(gen, 0)),
             );
           } else this.goringCharge(gen, idx + 1);
@@ -4277,11 +4277,11 @@ class GameScene extends Phaser.Scene {
         if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
         if (round + 1 >= PARRY_ROUNDS.length) {
           const c = BOSS_STAGES.gorrach[2];
-          this.arenaStageClear(gen, "HIS AXE IS TURNED — TWO HORNS DOWN!", BOSS_STAGES.gorrach[1].taunt, () =>
+          this.arenaStageClear(gen, "TWO HORNS DOWN", BOSS_STAGES.gorrach[1].taunt, () =>
             this.arenaStageIntro(gen, c.title, c.sub, () => this.goringHorns(gen)),
           );
         } else {
-          this.notice("TURNED — HE COMES HARDER!", "#8ff4ff");
+          this.notice("again, faster", "#8ff4ff");
           this.goringParry(gen, round + 1);
         }
       });
@@ -4347,7 +4347,7 @@ class GameScene extends Phaser.Scene {
             }, () => {
               answered = true;
               ring.destroy();
-              bad("wrong way — the axe lands!");
+              bad("wrong way — it lands");
               onResolved();
             }, gate);
             node = n;
@@ -4363,7 +4363,7 @@ class GameScene extends Phaser.Scene {
             const g = this.redNode(x, y, 50, () => {
               answered = true;
               ring.destroy();
-              if (!this.bellForgives()) bad("a feint — you swung at nothing!", ARENA_RED_STRIKES);
+              if (!this.bellForgives()) bad("a feint — you swung at nothing", ARENA_RED_STRIKES);
               onResolved(); // fires either way, or the wave never winds up again
             });
             node = { destroy: () => g.destroy() };
@@ -4385,7 +4385,7 @@ class GameScene extends Phaser.Scene {
           if (ring.scene) ring.destroy();
           // letting a FEINT go by is the correct read — everything else is a hit
           if (kind === "red") good("READ HIM!");
-          else bad(kind === "blue" ? "uncut — the axe lands!" : "too slow — he swings through!");
+          else bad(kind === "blue" ? "uncut — it lands" : "too slow");
           onResolved();
         });
       });
@@ -4508,7 +4508,7 @@ class GameScene extends Phaser.Scene {
         ease: "Linear",
         onComplete: () => {
           if (gen !== this.arenaGen || notch >= HORNS_NOTCHES) return;
-          lose("you stall — he takes the ground!");
+          lose("too slow — he takes ground");
         },
       });
     };
@@ -4533,7 +4533,7 @@ class GameScene extends Phaser.Scene {
       if (notch >= HORNS_NOTCHES) {
         sweep?.stop();
         clockTween?.stop();
-        this.arenaStageClear(gen, "HIS LAST HORN SPLITS!", "", () => this.arenaExecution(gen), 900);
+        this.arenaStageClear(gen, "HIS LAST HORN SPLITS", "", () => this.arenaExecution(gen), 900);
         return;
       }
       restart();
@@ -4576,7 +4576,7 @@ class GameScene extends Phaser.Scene {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive || notch >= HORNS_NOTCHES) return;
       if (this.time.now < lockedUntil) return;
       if (reds.some(inZone)) {
-        if (!this.bellForgives()) lose("RED — he drives you back!", ARENA_RED_STRIKES);
+        if (!this.bellForgives()) lose("not on red", ARENA_RED_STRIKES);
         return;
       }
       if (inZone(gold)) {
@@ -4586,7 +4586,7 @@ class GameScene extends Phaser.Scene {
       // a whiff costs a notch and a strike; RED costs TWO notches, a double
       // strike and a long lockout. Both hurt — red simply hurts far more, which
       // is what keeps the colour meaning something.
-      lose("no purchase — he drives you back!");
+      lose("no purchase");
     });
   }
 
@@ -4648,13 +4648,13 @@ class GameScene extends Phaser.Scene {
         this.arenaDealsDone++;
         this.drainBossBar();
         this.bossReact();
-        this.notice("THE SEAL CRACKS!", "#8ff4ff");
+        this.notice("the seal cracks", "#8ff4ff");
       }
       if (cleared >= RIME_PLATES_TO_CLEAR) {
         done = true;
         this.arenaDealsDone++;
         const c = BOSS_STAGES.hoarfrost[1];
-        this.arenaStageClear(gen, "YOU BREAK THE SEAL — A RIME FALLS!", BOSS_STAGES.hoarfrost[0].taunt, () =>
+        this.arenaStageClear(gen, "THE SEAL BREAKS", BOSS_STAGES.hoarfrost[0].taunt, () =>
           this.arenaStageIntro(gen, c.title, c.sub, () => this.rimeWhiteout(gen, 0)),
         );
       }
@@ -4686,7 +4686,7 @@ class GameScene extends Phaser.Scene {
         const dir = (["up", "down", "left", "right"] as SwipeDir[])[(Math.random() * 4) | 0];
         pl.cut = this.swipeNode(x, y, 40, dir, () => shatter(pl), () => {
           this.arenaWardMissed = true;
-          this.notice("against the grain!", "#ff8a6a");
+          this.notice("wrong way", "#ff8a6a");
           this.sfx("swing1", 0.3);
         });
       }
@@ -4700,7 +4700,7 @@ class GameScene extends Phaser.Scene {
           obj.destroy();
           if (this.bellForgives()) return;
           this.arenaWardMissed = true;
-          this.notice("RED — the cold bites!", "#ff8a6a");
+          this.notice("not the red ones", "#ff8a6a");
           this.sfx("hit2", 0.5);
           this.arenaStrikeHero(ARENA_RED_STRIKES);
           return;
@@ -4733,7 +4733,7 @@ class GameScene extends Phaser.Scene {
           freeze = 0.3;
           this.arenaWardMissed = true;
           this.bossSwing();
-          this.notice("THE SEAL CLOSES — the cold bites!", "#ff8a6a");
+          this.notice("the seal closes", "#ff8a6a");
           this.arenaStrikeHero();
           for (const pl of plates) {
             pl.cut?.destroy();
@@ -4809,11 +4809,11 @@ class GameScene extends Phaser.Scene {
                 if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
                 if (round + 1 >= ROUNDS.length) {
                   const c = BOSS_STAGES.hoarfrost[2];
-                  this.arenaStageClear(gen, "YOU OUTLAST THE STORM — ANOTHER RIME FALLS!", BOSS_STAGES.hoarfrost[1].taunt, () =>
+                  this.arenaStageClear(gen, "THE STORM PASSES", BOSS_STAGES.hoarfrost[1].taunt, () =>
                     this.arenaStageIntro(gen, c.title, c.sub, () => this.rimeHeart(gen)),
                   );
                 } else {
-                  this.notice("THE STORM DEEPENS!", "#8ff4ff");
+                  this.notice("the storm deepens", "#8ff4ff");
                   this.rimeWhiteout(gen, round + 1);
                 }
               });
@@ -4858,7 +4858,7 @@ class GameScene extends Phaser.Scene {
                 onComplete: () => {
                   this.cameras.main.shake(140, 0.005);
                   this.sfx("hit1", 0.35, 1.4);
-                  if (Math.abs(tok.x - cx) < 52 && !this.bellForgives()) fail("the ice finds you!", ARENA_RED_STRIKES);
+                  if (Math.abs(tok.x - cx) < 52 && !this.bellForgives()) fail("the ice finds you", ARENA_RED_STRIKES);
                   this.tweens.add({ targets: spike, alpha: 0, duration: 260, onComplete: () => spike.destroy() });
                 },
               });
@@ -4964,7 +4964,7 @@ class GameScene extends Phaser.Scene {
         dir *= -1;
         this.arenaWardMissed = true;
         this.sfx("block1", 0.5, 0.8);
-        this.notice("A SHARD TURNS YOUR BLADE!", "#ff8a6a");
+        this.notice("a shard turns your blade", "#ff8a6a");
         this.cameras.main.shake(200, 0.007);
         this.tweens.add({ targets: shards, alpha: 0.5, duration: 120, yoyo: true });
         this.arenaStrikeHero(ARENA_RED_STRIKES);
@@ -4992,7 +4992,7 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: core, scale: 0.7, duration: 120, yoyo: true });
       if (hits >= HEART_HITS) {
         done = true;
-        this.arenaStageClear(gen, "HIS HEART SPLITS — THE LAST RIME FALLS!", "", () => this.arenaExecution(gen), 900);
+        this.arenaStageClear(gen, "HIS HEART SPLITS", "", () => this.arenaExecution(gen), 900);
       }
     });
   }
@@ -5795,19 +5795,19 @@ class GameScene extends Phaser.Scene {
       }
       case "wardsalve":
         if (this.run.pierceMult <= SALVE_MULT) {
-          this.notice("the salve is already on your skin", "#9aa0ab");
+          this.notice("already salved", "#9aa0ab");
           return; // not consumed
         }
         this.run.pierceMult = SALVE_MULT;
-        this.notice("salve worked in — a warden's blows land at half force", "#8fd0ff");
+        this.notice("salve on — warden blows land at half force", "#8fd0ff");
         this.sfx("pickup", 0.45, 0.9);
         break;
       case "wardbell":
         this.run.bellCharges += BELL_CHARGES;
         this.notice(
           this.run.bellCharges > 1
-            ? `the bell is strung — your next ${this.run.bellCharges} RED slips won't count`
-            : "the bell is strung — your next RED slip won't count",
+            ? `bell strung — your next ${this.run.bellCharges} red mistakes won't count`
+            : "bell strung — your next red mistake won't count",
           "#ffd24a",
         );
         this.sfx("block3", 0.5, 1.4);
@@ -5864,11 +5864,11 @@ class GameScene extends Phaser.Scene {
         break;
       case "ink":
         if (this.inkActive) {
-          this.notice("the road is already charted", "#9aa0ab");
+          this.notice("already charted", "#9aa0ab");
           return; // not consumed
         }
         this.inkActive = true;
-        this.notice("the road ahead reveals itself", "#8fd0ff");
+        this.notice("the way ahead is charted", "#8fd0ff");
         this.sfx("pickup", 0.5, 1.1);
         break;
     }
