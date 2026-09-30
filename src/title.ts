@@ -22,6 +22,9 @@ export class TitleScene extends Phaser.Scene {
   private ground!: Phaser.GameObjects.TileSprite;
   private veil!: Phaser.GameObjects.Rectangle;
   private title!: Phaser.GameObjects.Text;
+  private card!: Phaser.GameObjects.Graphics;
+  private eyebrow!: Phaser.GameObjects.Text;
+  private saveInfo!: Phaser.GameObjects.Text;
   private tagline!: Phaser.GameObjects.Text;
   private tiles: Phaser.GameObjects.Image[] = [];
   private btnStart!: Phaser.GameObjects.Container;
@@ -72,17 +75,20 @@ export class TitleScene extends Phaser.Scene {
     }
     this.ground = this.add.tileSprite(0, 0, 8, 8, groundKey).setOrigin(0, 0);
     // dusk veil: the world recedes so the name carries the screen
-    this.veil = this.add.rectangle(0, 0, 8, 8, 0x070910, 0.42).setOrigin(0, 0).setDepth(10);
+    this.veil = this.add.rectangle(0, 0, 8, 8, 0x070e18, 0.66).setOrigin(0, 0).setDepth(10);
+    this.card = this.add.graphics().setDepth(11);
+    this.eyebrow = this.add.text(0, 0, "PUZZLE COMBAT · ONE MORE RUN", {
+      fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: "13px", fontStyle: "bold", color: "#82efcd", letterSpacing: 3,
+    }).setOrigin(0.5).setDepth(20);
 
     this.title = this.add
-      .text(0, 0, "matchBlade", { fontFamily: "monospace", fontStyle: "bold", fontSize: "64px", color: "#ffffff", stroke: "#1a0a04", strokeThickness: 10 })
+      .text(0, 0, "matchBlade", { fontFamily: '"Segoe UI", system-ui, sans-serif', fontStyle: "bold", fontSize: "76px", color: "#f1f6ff" })
       .setOrigin(0.5)
       .setDepth(20);
-    this.title.setTint(0xfff6c8, 0xffe08a, 0xf2a93b, 0xc9761f); // the game's gold
-    this.title.setShadow(0, 6, "rgba(0,0,0,0.8)", 10, true, true);
+    this.title.setShadow(0, 4, "rgba(0,0,0,0.3)", 12, true, true);
 
     this.tagline = this.add
-      .text(0, 0, "match tiles · fight the dark · clear the way", { fontFamily: "monospace", fontSize: "17px", color: "#aeb9c8", stroke: "#0a0b0f", strokeThickness: 4 })
+      .text(0, 0, "Match tiles. Beat enemies. Upgrade your next run.", { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: "17px", color: "#b7c7d8" })
       .setOrigin(0.5)
       .setDepth(20);
 
@@ -96,10 +102,14 @@ export class TitleScene extends Phaser.Scene {
     // LOAD GAME only lights up once a snapshot exists to load
     let hasSave = false;
     for (let n = 1; n <= SAVE_SLOTS; n++) if (readSlot(n)) hasSave = true;
-    this.btnStart = this.buildButton("START GAME", true, () => this.setOut());
+    const returning = meta.campIntroSeen || meta.slain > 0;
+    this.btnStart = this.buildButton(returning ? "CONTINUE  →" : "LET'S PLAY  →", true, () => this.setOut());
     this.btnLoad = this.buildButton("LOAD GAME", false, hasSave ? () => this.openLoad() : null);
+    this.saveInfo = this.add.text(0, 0, returning ? `BEST DEPTH  ${meta.bestDepth}     ·     SWORD LEVEL  ${meta.swordLevel}` : "SWAP TO ATTACK   ·   MATCH TO DEFEND", {
+      fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: "12px", fontStyle: "bold", color: "#91a7bc", letterSpacing: 1,
+    }).setOrigin(0.5).setDepth(20);
     this.foot = this.add
-      .text(0, 0, "an early build — your camp saves itself", { fontFamily: "monospace", fontSize: "12px", color: "#5d6675", stroke: "#0a0b0f", strokeThickness: 3 })
+      .text(0, 0, "Progress saves automatically. Pick up where you left off.", { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: "12px", color: "#91a7bc" })
       .setOrigin(0.5, 1)
       .setDepth(20);
     // build version, bottom-right — fed from package.json by vite's define
@@ -121,6 +131,7 @@ export class TitleScene extends Phaser.Scene {
 
     this.scale.off("resize", this.layout, this);
     this.scale.on("resize", this.layout, this);
+    this.input.keyboard?.on("keydown-ENTER", () => { if (!this.scene.isActive("menu")) this.setOut(); });
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", this.layout, this));
 
     // "A Great Journey" under the title — straight in at its level, no fade.
@@ -142,17 +153,17 @@ export class TitleScene extends Phaser.Scene {
   /** A menu button: gold + breathing glow for the primary, quiet steel otherwise. */
   private buildButton(text: string, primary: boolean, cb: (() => void) | null): Phaser.GameObjects.Container {
     const enabled = !!cb;
-    const w = 250;
-    const h = primary ? 60 : 50;
-    const edge = !enabled ? 0x3a3f4b : primary ? 0xf2a93b : 0x4a5a74;
-    const ink = !enabled ? "#5d6675" : primary ? "#ffe08a" : "#cfd8e8";
-    const bg = this.add.rectangle(0, 0, w, h, primary ? 0x14110a : 0x10131a, 0.88).setStrokeStyle(primary ? 3 : 2, edge, 0.95);
+    const w = 330;
+    const h = primary ? 58 : 48;
+    const edge = !enabled ? 0x2a3746 : primary ? 0x82efcd : 0x4a5a74;
+    const ink = !enabled ? "#69798a" : primary ? "#0a2426" : "#cfd8e8";
+    const bg = this.add.rectangle(0, 0, w, h, primary ? 0x82efcd : 0x15212f, 1).setStrokeStyle(1, edge);
     const label = this.add
-      .text(0, 0, text, { fontFamily: "monospace", fontStyle: "bold", fontSize: primary ? "24px" : "19px", color: ink, stroke: "#0a0b0f", strokeThickness: 5 })
+      .text(0, 0, text, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontStyle: "bold", fontSize: "18px", color: ink, letterSpacing: 1 })
       .setOrigin(0.5);
     const parts: Phaser.GameObjects.GameObject[] = [bg, label];
     if (primary && enabled) {
-      const glow = this.add.rectangle(0, 0, w + 10, h + 10, 0xffe08a, 0.06).setBlendMode(Phaser.BlendModes.ADD);
+      const glow = this.add.rectangle(0, 0, w + 10, h + 10, 0x82efcd, 0.06).setBlendMode(Phaser.BlendModes.ADD);
       parts.unshift(glow);
       this.tweens.add({ targets: glow, alpha: 0.16, duration: 1100, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     }
@@ -200,24 +211,51 @@ export class TitleScene extends Phaser.Scene {
     this.veil.setPosition(0, 0).setSize(vw, vh);
 
     const cx = vw / 2;
-    const s = Math.min(1, vw / 760, vh / 560);
-    // Keep the decorative stack compact, but never shrink copy and controls into
-    // sub-12px screen text on a short landscape phone.
-    const copyScale = Math.max(s, 0.9);
-    const buttonScale = Math.max(s, 0.84);
+    if (vh < 520 && vw >= 600) {
+      const left = vw * 0.28, right = vw * 0.73;
+      this.uiScale = Math.min(1, (vw * 0.43 - 20) / 330);
+      this.card.clear().fillStyle(0x0c1724, 0.96).fillRoundedRect(16, 12, vw - 32, vh - 24, 18);
+      this.card.lineStyle(1, 0x3d5966).strokeRoundedRect(16, 12, vw - 32, vh - 24, 18);
+      this.eyebrow.setText("PUZZLE COMBAT").setScale(1).setFontSize(15).setPosition(left, vh * 0.2);
+      this.title.setScale(1).setFontSize(44).setPosition(left, vh * 0.34);
+      this.tagline.setScale(1).setFontSize(17).setWordWrapWidth(vw * 0.4).setAlign("center").setPosition(left, vh * 0.5);
+      this.tiles.forEach((t, i) => {
+        this.tweens.killTweensOf(t);
+        t.setAlpha(1).setScale(0.65).setPosition(left + (i - 1) * 72, vh * 0.74);
+      });
+      this.saveInfo.setScale(1).setFontSize(15).setWordWrapWidth(vw * 0.39).setAlign("center").setPosition(right, vh * 0.25);
+      this.btnStart.setScale(this.uiScale).setPosition(right, vh * 0.46);
+      this.btnLoad.setScale(this.uiScale).setPosition(right, vh * 0.46 + 66);
+      this.foot.setText("Progress saves automatically.").setScale(1).setFontSize(15).setPosition(right, vh - 40);
+      this.version.setScale(1).setPosition(vw - 26, vh - 17);
+      return;
+    }
+    this.title.setFontSize(76);
+    this.eyebrow.setText("PUZZLE COMBAT · ONE MORE RUN").setFontSize(13);
+    this.tagline.setWordWrapWidth(0);
+    this.saveInfo.setFontSize(12).setWordWrapWidth(0);
+    this.foot.setFontSize(12);
+    const s = Math.min(1.3, (vw - 32) / 600, (vh - 24) / 540);
+    const cy = vh / 2;
+    const copyScale = s;
+    const buttonScale = s;
     this.uiScale = buttonScale;
-    this.title.setScale(s).setPosition(cx, vh * 0.26);
-    this.tagline.setScale(copyScale).setPosition(cx, vh * 0.26 + 58 * copyScale);
+    this.card.clear().fillStyle(0x0c1724, 0.94).fillRoundedRect(cx - 300 * s, cy - 270 * s, 600 * s, 540 * s, 22 * s);
+    this.card.lineStyle(1, 0x3d5966, 0.8).strokeRoundedRect(cx - 300 * s, cy - 270 * s, 600 * s, 540 * s, 22 * s);
+    this.eyebrow.setScale(s).setPosition(cx, cy - 218 * s);
+    this.title.setScale(s).setPosition(cx, cy - 157 * s);
+    this.tagline.setScale(copyScale).setPosition(cx, cy - 94 * s);
+    this.saveInfo.setScale(s).setPosition(cx, cy + 56 * s);
     this.tiles.forEach((t, i) => {
       this.tweens.killTweensOf(t); // rebuild the bob pinned to the fresh y (also ends any fade — snap visible)
       t.setAlpha(1);
-      t.setScale(0.8 * s).setPosition(cx + (i - 1) * 110 * s, vh * 0.52);
+      t.setScale(0.95 * s).setPosition(cx + (i - 1) * 105 * s, cy - 14 * s);
       this.tweens.add({ targets: t, y: t.y + 7, duration: 1500 + i * 180, yoyo: true, repeat: -1, ease: "Sine.easeInOut", delay: i * 260 });
     });
-    this.btnStart.setScale(buttonScale).setPosition(cx, vh * 0.7);
-    this.btnLoad.setScale(buttonScale).setPosition(cx, vh * 0.7 + 72 * buttonScale);
-    this.foot.setScale(Math.max(s, 1)).setPosition(cx, vh - 10);
-    this.version.setScale(copyScale).setPosition(vw - 10, vh - 8);
+    this.btnStart.setScale(buttonScale).setPosition(cx, cy + 117 * s);
+    this.btnLoad.setScale(buttonScale).setPosition(cx, cy + 179 * s);
+    this.foot.setScale(s).setPosition(cx, cy + 239 * s);
+    this.version.setScale(Math.min(1, copyScale)).setPosition(vw - 14, vh - 10);
   }
 
   update(_t: number, delta: number) {

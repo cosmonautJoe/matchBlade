@@ -3,7 +3,7 @@
  *
  * A step-driven overlay on the LIVE run scene: everything dims except a
  * spotlight hole, a card explains one idea, and two beats are hands-on —
- * match swords to strike the foe, then match shields and watch a scripted
+ * match swords to attack the enemy, then match shields and watch a scripted
  * counter-strike bounce off the guard. While the tutorial is up the scene
  * holds the run harmless (no enemy strikes, no scroll pressure) and the
  * board unlocks only for the hands-on steps, so nothing can kill the player
@@ -52,42 +52,42 @@ const DIM = 0x05060a;
 
 const COPY: { title: string; body: string }[] = [
   {
-    title: "THE ROAD AHEAD",
-    body: "You go on ahead to clear the way for the camp. Something's blocking it — fights are won down on the board.",
+    title: "HOW TO PLAY",
+    body: "Use the board to fight enemies, collect resources and keep moving. Everything you collect goes back to camp when the run ends.",
   },
   {
     title: "THE BOARD",
-    body: "Drag a tile onto a neighbour to swap them. Line up 3 or more of a kind to clear them.",
+    body: "Drag to swap, or tap two neighbouring tiles. Match 3 or more of the same type to activate them.",
   },
   {
     title: "SWORDS STRIKE",
-    body: "Matching ⚔️ swords cuts the foe ahead — 🪄 staves wound too. Try it: make the highlighted swap.",
+    body: "Match ⚔️ swords for melee damage or 🪄 staves for spell damage. Make the highlighted swap to attack.",
   },
   {
-    title: "HOLD THE LINE",
-    body: "Foes hit back. Every strike you take shoves you toward the skull ☠ — reach it and the run ends.",
+    title: "WATCH YOUR POSITION",
+    body: "Time and enemy hits push you toward the skull ☠. Defeating an enemy moves you forward. Reach the skull and the run ends.",
   },
   {
     title: "SHIELDS GUARD",
-    body: "Match 🛡️ shields to raise your guard — guarded, you give no ground. Try it.",
+    body: "Match 🛡️ shields to gain guard charges. They block regular enemy hits. Make the highlighted match.",
   },
   {
     title: "KEYS OPEN CHESTS",
-    body: "Chests roll in as you go. Match 🔑 keys to bank them — a banked key pops the next chest wide open.",
+    body: "Match 🔑 keys to save them for chests. A chest costs one key and gives resources and items. Keys reset after each run.",
   },
   {
-    title: "GATHER FOR THE CARAVAN",
-    body: "🪵 wood, 🪨 ore and 💎 gems come home with you. Spend them at camp to grow it — more uses coming.",
+    title: "UPGRADE AT CAMP",
+    body: "Keep all collected 🪵 wood, 🪨 ore and 💎 gems, even if you lose. Spend them at camp on permanent upgrades and items.",
   },
   {
-    title: "GO, SCOUT",
-    body: "That's the basics. Clear the way and the camp follows.",
+    title: "YOU'RE READY",
+    body: "You have the basics. Make smart matches, watch the enemy, and keep moving. Try a run!",
   },
 ];
 // step 4's second beat, after the scripted strike clangs off the guard
 const BLOCKED_COPY = {
   title: "BLOCKED!",
-  body: "Your guard soaked the hit — no ground lost. Guard wears off as it blocks, so keep it topped up.",
+  body: "Blocked! Guard charges took the hit for you. Match more shields to refill them.",
 };
 
 export class Tutorial {
@@ -297,7 +297,7 @@ export class Tutorial {
         this.dim(hole);
         this.banner(
           this.step === 2
-            ? "⚔️ Match 3 swords to strike the foe — make the highlighted swap"
+            ? "⚔️ Match 3 swords to attack the enemy — make the highlighted swap"
             : "🛡️ Match 3 shields to raise your guard — make the highlighted swap",
         );
         this.pointAtRig();

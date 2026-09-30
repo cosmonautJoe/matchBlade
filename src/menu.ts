@@ -135,7 +135,7 @@ export class MenuScene extends Phaser.Scene {
     if (inRun)
       this.button(box, x, (by += step), bw, "return to camp", () =>
         this.confirmStep(
-          "Retreat to camp? The run ends here —\nyour haul banks as if you'd fallen.",
+          "End this run and return to camp?\nYou keep all collected resources.",
           "retreat",
           () => {
             const g = this.scene.get("game") as unknown as { bankAndRetreat?: () => void };
@@ -147,7 +147,7 @@ export class MenuScene extends Phaser.Scene {
       );
     this.button(box, x, (by += step), bw, "new game", () => this.confirmStep(
       "Start over? Progress, quests and banked resources all reset.\n(Save slots are kept.)",
-      "start anew",
+      "start new game",
       () => {
         saveMeta(defaultMeta());
         this.restartToCamp();
@@ -222,7 +222,7 @@ export class MenuScene extends Phaser.Scene {
     this.title(box, x, y, mode === "save" ? "SAVE GAME" : "LOAD GAME");
     box.add(
       this.add
-        .text(x, y + 56, mode === "save" ? "snapshot your journey into a slot" : "return to a snapshot (current progress is replaced)", {
+        .text(x, y + 56, mode === "save" ? "save your camp progress to a slot" : "return to a snapshot (current progress is replaced)", {
           fontFamily: "monospace", fontSize: "14px", color: "#aeb5c0",
         })
         .setOrigin(0.5),
@@ -232,7 +232,7 @@ export class MenuScene extends Phaser.Scene {
     for (let n = 1; n <= SAVE_SLOTS; n++) {
       const slot = readSlot(n);
       const label = slot
-        ? `${n} ▸ ${(slot.meta.biome || "plains").toUpperCase()} · depth ${slot.meta.bestDepth} · 💎${slot.meta.treasure}\n     ${slot.meta.questsRewarded.length} oaths kept · ${new Date(slot.savedAt).toLocaleString()}`
+        ? `${n} ▸ ${(slot.meta.biome || "plains").toUpperCase()} · depth ${slot.meta.bestDepth} · 💎${slot.meta.treasure}\n     ${slot.meta.questsRewarded.length} quests completed · ${new Date(slot.savedAt).toLocaleString()}`
         : `${n} ▸ — empty —`;
       const canUse = mode === "save" || !!slot;
       this.slotRow(box, x, sy, w - 60, label, !canUse ? null : () => {
@@ -246,7 +246,7 @@ export class MenuScene extends Phaser.Scene {
           else doSave();
         } else {
           this.confirmStep(
-            `Load slot ${n}? Your current road is abandoned\nfor the snapshot's.`,
+            `Load slot ${n}? This replaces your current progress\nwith the selected save.`,
             "load it",
             () => {
               if (loadFromSlot(n)) this.restartToCamp();

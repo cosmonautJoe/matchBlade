@@ -299,7 +299,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay per-match — they're tension)
   // Keys pay per MATCH, not per tile: a 3-match banks one, a 5-match two,
   // two separate 3-matches in one wave two. (round(n/3): 3,4->1  5,6->2)
-  const perMatch = (tiles: number) => Math.round(tiles / 3);
+  const perMatch = (tiles: number) => tiles >= 3 ? Math.round(tiles / 3) : 0;
   const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: perMatch(n(KEY)) };
 
   // Shields reward the BIGGER match: 3 tiles -> 1 charge, then +1 per extra
@@ -316,7 +316,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
 
   // ---- steel: Wren's Whetstone can turn any sword match into a full combo ----
   let swords = n(SWORD);
-  if (swords >= 3 && s.whetstone > 0) {
+  if (swords >= 3 && s.whetstone > 0 && s.enemy && s.enemy.kind !== "boss" && !s.sunderEdge) {
     s.whetstone--;
     swords = Math.max(swords, 5);
   }

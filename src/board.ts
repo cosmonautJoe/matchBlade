@@ -11,8 +11,9 @@
  * animated version lives in the game layer. This module stays pure logic.
  */
 
-export const W = 10; // columns
-export const H = 5; // rows  (landscape dungeon-runner board is 10 wide x 5 tall)
+// Keep one board topology across rotation: every tile and cascade survives a resize.
+export const W = 7;
+export const H = 7;
 
 // Tile types: sword, staff, shield, key, treasure, wood, ore, potion (see DESIGN.md)
 export const TYPES = 8;

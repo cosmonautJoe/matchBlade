@@ -51,47 +51,73 @@ const AIM = "tap, then pick a tile";
 
 export const ITEMS: ItemDef[] = [
   // ---- combat ----
-  { id: "whetstone", name: "Wren's Whetstone", glyph: "🗡️", tier: "common", target: "none",
-    desc: "Your next 3 sword matches strike as full combos — 5-match power from any match.", hint: TAP },
-  { id: "stormcall", name: "Stormcall Scroll", glyph: "📜", tier: "rare", target: "none",
-    desc: `Unleash a bolt of storm magic: ${STORMCALL_DMG} damage to the foe before you.`, hint: TAP },
-  { id: "warhorn", name: "War Horn", glyph: "📯", tier: "common", target: "none",
-    desc: `Sound the charge: for ${WARHORN_SECS}s every kill's surge carries you twice as far.`, hint: TAP },
-  { id: "cinderflask", name: "Cinder Flask", glyph: "🔥", tier: "uncommon", target: "none", bossOnly: true,
-    desc: `Malgrim's own fire, corked: the foe before you burns for ${BURN_DPS}/sec for ${BURN_SECS}s.`, hint: `${TAP} · boss trophy` },
+  { id: "whetstone", name: "Sharpening Stone", glyph: "🗡️", tier: "common", target: "none",
+    desc: `Your next ${WHETSTONE_CHARGES} sword matches attack with at least 5 tiles of power. Lasts until used.`, hint: TAP },
+  { id: "stormcall", name: "Lightning Scroll", glyph: "📜", tier: "rare", target: "none",
+    desc: `${STORMCALL_DMG} base spell damage, plus staff upgrades. Enemy resistance applies. Cannot damage bosses.`, hint: "tap during a regular fight" },
+  { id: "warhorn", name: "Rally Horn", glyph: "📯", tier: "common", target: "none",
+    desc: `For ${WARHORN_SECS}s of regular combat, kills push you back toward safety twice as far.`, hint: TAP },
+  { id: "cinderflask", name: "Fire Bomb", glyph: "🔥", tier: "uncommon", target: "none", bossOnly: true,
+    desc: `Burn the current enemy for ${BURN_DPS} damage/sec for ${BURN_SECS}s. Ends when it dies. Cannot damage bosses.`, hint: "tap during a regular fight" },
   // ---- survival ----
-  { id: "waystone", name: "Waystone", glyph: "🗿", tier: "uncommon", target: "none",
-    desc: `The world holds its breath: scroll pressure freezes for ${WAYSTONE_SECS}s.`, hint: TAP },
-  { id: "bulwark", name: "Bulwark Brew", glyph: "🧪", tier: "common", target: "none",
-    desc: "Drink deep: instantly raise your guard by six charges.", hint: TAP },
-  { id: "hearth", name: "Hearth Charm", glyph: "❤️", tier: "rare", target: "none",
-    desc: "Keeps itself. When death takes you it burns instead — once — and drags you back from the skull.", hint: "acts on its own" },
-  { id: "spurs", name: "Scout's Spurs", glyph: "🥾", tier: "common", target: "none",
-    desc: "Dig in: the current foe's strikes come far slower until it falls.", hint: TAP },
+  { id: "waystone", name: "Time Stop", glyph: "⏳", tier: "uncommon", target: "none",
+    desc: `Pause the steady push toward the skull for ${WAYSTONE_SECS}s. Enemy attacks still hit.`, hint: TAP },
+  { id: "bulwark", name: "Shield Potion", glyph: "🧪", tier: "common", target: "none",
+    desc: `Add ${BULWARK_BLOCK} guard charges. Stronger enemies use more charges per hit. Boss attacks bypass guard.`, hint: TAP },
+  { id: "hearth", name: "Revive", glyph: "❤️", tier: "rare", target: "none",
+    desc: "Automatically save this run once when you would die, moving you halfway back from the skull. Works against bosses too.", hint: "automatic · keep in your inventory" },
+  { id: "spurs", name: "Slow Trap", glyph: "🕸️", tier: "common", target: "none",
+    desc: "The current regular enemy attacks more slowly until defeated. Does not affect its attack already in progress.", hint: "tap during a regular fight" },
   // ---- board ----
-  { id: "sapper", name: "Sapper's Charge", glyph: "💣", tier: "uncommon", target: "cell",
-    desc: "Detonate a 3×3 blast. Every tile destroyed counts as matched — swords swing, keys bank, all of it.", hint: AIM },
-  { id: "prism", name: "Chromatic Prism", glyph: "🔮", tier: "rare", target: "type",
-    desc: "Pick a tile: every tile of its kind on the board transmutes into swords.", hint: AIM },
-  { id: "dice", name: "Vagrant's Dice", glyph: "🎲", tier: "common", target: "none",
-    desc: "Toss the board: every tile rerolls into a fresh spread.", hint: TAP },
-  { id: "lodestone", name: "Lodestone", glyph: "🧲", tier: "uncommon", target: "none",
-    desc: "Wrench every wood and ore tile off the board, straight into your pack.", hint: TAP },
+  { id: "sapper", name: "Tile Bomb", glyph: "💣", tier: "uncommon", target: "cell",
+    desc: "Clear a 3×3 area. Wood, ore and gems are collected; combat tiles and keys use normal match thresholds. Potions are collected too.", hint: AIM },
+  { id: "prism", name: "Sword Converter", glyph: "🔮", tier: "rare", target: "type",
+    desc: "Choose a tile type to turn all its tiles into swords. Any resulting matches activate immediately.", hint: AIM },
+  { id: "dice", name: "Shuffle", glyph: "🎲", tier: "common", target: "none",
+    desc: "Replace the board with new tiles and at least one valid move. Replaced tiles give no rewards.", hint: TAP },
+  { id: "lodestone", name: "Resource Magnet", glyph: "🧲", tier: "uncommon", target: "none",
+    desc: "Collect all wood and ore tiles, then refill the gaps. Kept if there is nothing to collect.", hint: TAP },
   // ---- economy ----
-  { id: "skeleton", name: "Skeleton Key", glyph: "🗝️", tier: "uncommon", target: "none",
-    desc: "The next chest springs open free — no key spent.", hint: TAP },
-  { id: "pan", name: "Prospector's Pan", glyph: "⛏️", tier: "uncommon", target: "none",
-    desc: `Work the sluice: the next chest yields ${PAN_EXTRA_PULLS} extra pulls.`, hint: TAP },
-  { id: "ledger", name: "Merchant's Ledger", glyph: "📒", tier: "uncommon", target: "none",
-    desc: `Cook the books: for ${LEDGER_SECS}s wood, ore and gem matches pay double.`, hint: TAP },
-  { id: "ink", name: "Cartographer's Ink", glyph: "🗺️", tier: "common", target: "none",
-    desc: "See what the next three encounters hold, for the rest of the run.", hint: TAP },
+  { id: "skeleton", name: "Spare Key", glyph: "🗝️", tier: "uncommon", target: "none",
+    desc: "Open the next chest without spending a key. Extra uses each cover another chest.", hint: TAP },
+  { id: "pan", name: "Bonus Loot", glyph: "🎁", tier: "uncommon", target: "none",
+    desc: `The next chest gives ${PAN_EXTRA_PULLS} extra rewards. Extra uses each apply to another chest.`, hint: TAP },
+  { id: "ledger", name: "Double Resources", glyph: "📒", tier: "uncommon", target: "none",
+    desc: `Double wood, ore and gems collected from the board for ${LEDGER_SECS}s of regular combat. Does not double chest loot or keys.`, hint: TAP },
+  { id: "ink", name: "Scout Map", glyph: "🗺️", tier: "common", target: "none",
+    desc: "Show the next three encounter types: enemies, chests or bosses. Lasts for this run.", hint: TAP },
   // ---- warden-charms (the Peddler's speciality; dead weight outside a boss) ----
-  { id: "wardsalve", name: "Warden's Salve", glyph: "🩹", tier: "uncommon", target: "none", bossAid: true,
-    desc: "A warden's blows land at half force for the rest of the run. Their wards still go through your guard — you just keep your feet.", hint: `${TAP} · boss fights only` },
-  { id: "wardbell", name: "Warding Bell", glyph: "🔔", tier: "common", target: "none", bossAid: true,
-    desc: "Your next red mistake in a boss fight doesn't count. No blow, no ground lost.", hint: `${TAP} · boss fights only` },
+  { id: "wardsalve", name: "Boss Armor", glyph: "🩹", tier: "uncommon", target: "none", bossAid: true,
+    desc: "Boss hits move you half as far toward the skull for this run. Does not stack or affect regular enemies.", hint: "tap before or during a boss" },
+  { id: "wardbell", name: "Safety Bell", glyph: "🔔", tier: "common", target: "none", bossAid: true,
+    desc: "Cancel your next red-hazard mistake during a boss fight. Extra uses add one saved mistake each.", hint: "tap before or during a boss" },
 ];
+
+export interface ItemUseContext {
+  arena: boolean;
+  boss: boolean;
+  hasEnemy: boolean;
+  boardBusy: boolean;
+  hasMaterials: boolean;
+  burning: boolean;
+  sunder: boolean;
+}
+
+/** Validate before spending a slot: an unusable item stays in the inventory. */
+export function itemUseReason(def: ItemDef, ctx: ItemUseContext): string | null {
+  if (ctx.arena && !def.bossAid && def.id !== "hearth") return "Use this between boss fights.";
+  if (["stormcall", "cinderflask", "spurs"].includes(def.id)) {
+    if (ctx.boss) return "This item only works on regular enemies.";
+    if (!ctx.hasEnemy) return "Wait for an enemy to engage.";
+    if (ctx.boardBusy) return "Wait for the board to settle.";
+  }
+  if ((def.target !== "none" || ["dice", "lodestone"].includes(def.id)) && ctx.boardBusy)
+    return "Wait for the board to settle.";
+  if (def.id === "lodestone" && !ctx.hasMaterials) return "No wood or ore to collect. Item kept.";
+  if (def.id === "cinderflask" && ctx.burning) return "This enemy is already burning. Item kept.";
+  if (def.id === "whetstone" && ctx.sunder) return "Your sword already defeats regular enemies in one match. Item kept.";
+  return null;
+}
 
 export function itemById(id: string): ItemDef | undefined {
   return ITEMS.find((i) => i.id === id);

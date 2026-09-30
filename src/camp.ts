@@ -15,6 +15,8 @@
  */
 
 import Phaser from "phaser";
+import { openCampPanel, type PanelCard } from "./camp-ui";
+import { createVillageHub } from "./village-hub";
 import {
   type MetaState,
   loadMeta,
@@ -40,14 +42,13 @@ import {
   nextBiome,
   MAX_ACTIVE,
 } from "./meta";
-import { ITEMS, type ItemDef, type ItemTier, TIER_COLORS } from "./items";
+import { ITEMS, type ItemDef, type ItemTier } from "./items";
 import { SWORD_BONUS_PER_LEVEL, SPELL_BONUS_PER_LEVEL } from "./run";
 import { sfxV, ambV, musicV, setSoundLevel } from "./audio";
 
 const DH = 480; // design height for the prop layer (smaller = more zoomed in)
 const DW = 940; // full design width of the camp spread (smaller = more zoomed in; clamps vw/DW)
 const CONTENT_CX = 30; // horizontal centre of the visible window — keeps the DEPART portal (design x≈445) fully in frame at the tighter zoom
-const GROUND_FRAC = 0.8; // ground line as a fraction of viewport height
 const PARALLAX_SRC_H = 216; // vnitti layer source height
 // Text-FIRST stack: real fonts draw digits/letters, emoji fall back per-glyph to the
 // system emoji font. Leading with an emoji font (as before) made iOS Safari render bare
@@ -68,12 +69,12 @@ const PEDDLER_REROLL = 5; // 💎 to spin fresh wares
 // says out loud: a warden's blow goes straight through your guard, and she is
 // the only place to buy anything that helps.
 const PEDDLER_BARKS = [
-  "Bosses go straight through a shield. I stock the only thing that helps.",
-  "Salve for warden blows. Halves what they take off you.",
-  "Warding bell. One bad mistake, undone. Cheap enough.",
-  "Shields won't save you from a warden. My stock might.",
-  "Gems for gear. Don't meet a boss empty-handed.",
-  "Something big up ahead. Come see me first.",
+  "Boss attacks ignore shields. Boss Armor reduces their damage.",
+  "Boss Armor halves the ground you lose from boss hits.",
+  "A Safety Bell cancels one red-hazard mistake.",
+  "You can use boss items before or during the fight.",
+  "Spend gems on items for your next run.",
+  "You can pack up to three items before a run.",
 ];
 const MAX_STOCKED = 3; // items you can pack for one run
 
@@ -440,6 +441,11 @@ export class CampScene extends Phaser.Scene {
   // the Peddler: armored road-merchant selling run items for diamonds
   private peddler: Phaser.GameObjects.Sprite | null = null;
   private shopOffers: ItemDef[] = []; // this visit's three wares
+  private closeNativePanel: (() => void) | null = null;
+  private campDock: HTMLElement | null = null;
+  private villageHub: ReturnType<typeof createVillageHub> | null = null;
+  private campPan: HTMLElement | null = null;
+  private campFocus = -130;
   private peddlerBark: Phaser.GameObjects.Container | null = null;
 
   // dev layout editor: drag props around, then copy the layout as JSON
@@ -508,6 +514,7 @@ export class CampScene extends Phaser.Scene {
 
   create() {
     this.departing = false;
+    this.campFocus = -130;
     this.parallax = [];
     this.clouds = [];
     this.editable = [];
@@ -606,7 +613,7 @@ export class CampScene extends Phaser.Scene {
     // NB: quest rewards are no longer auto-paid on arrival — the Wayfarer holds
     // them (her gold "?" invites the visit) and pays when you see her.
 
-    if (import.meta.env.DEV) {
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has("debug")) {
       this.buildEditor();
       // the 👁 toggle restarts the scene — re-open the editor on the far side
       if (resumeEdit) {
@@ -616,10 +623,18 @@ export class CampScene extends Phaser.Scene {
       }
     }
 
+    this.buildCampDock();
     this.layout();
     this.scale.off("resize", this.layout, this);
     this.scale.on("resize", this.layout, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.villageHub?.destroy();
+      this.villageHub = null;
+      this.campDock?.remove();
+      this.campDock = null;
+      this.campPan?.remove();
+      this.campPan = null;
+      this.closeNativePanel?.();
       this.scale.off("resize", this.layout, this);
       this.fireSnd?.stop();
       this.fireSnd = null;
@@ -1163,12 +1178,12 @@ export class CampScene extends Phaser.Scene {
     // the opening shot its own clear landing mark farther downstage-left.
     const arrivalX = this.lay.hero.x - 72;
     this.cinematicDialog({
-      name: "THE WAYFARER",
+      name: "QUEST GUIDE",
       speaker: () => this.goddess,
       lines: [
-        { text: "You made it. Good — we're stuck here until someone clears what's ahead." },
+        { text: "Welcome! This is your camp. You can upgrade your equipment here between runs." },
         {
-          text: "Take a job off my list before you go. Through the portal, then bring back what we need.",
+          text: "Pick a quest before you start. Use the portal to play a run and collect resources.",
           cue: () => {
             if (this.departSign)
               this.tweens.add({ targets: this.departSign, scale: 1.3, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
@@ -1177,7 +1192,7 @@ export class CampScene extends Phaser.Scene {
           },
         },
         {
-          text: "Wren's a blacksmith. She's in that tent. Get her working before you go deep — your blade won't hold.",
+          text: "Wren is in the tent. Hire her to unlock permanent sword upgrades.",
           cue: () => {
             for (const o of this.tentMark)
               this.tweens.add({ targets: o, scale: (o as Phaser.GameObjects.Text).scale * 1.5, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
@@ -1208,7 +1223,7 @@ export class CampScene extends Phaser.Scene {
         this.meta.campIntroSeen = true;
         saveMeta(this.meta);
         this.refreshWayfarerMark();
-        if (skipped) this.toast("the Wayfarer's by the portal");
+        if (skipped) this.toast("Talk to the guide by the portal for quests.");
       },
     });
   }
@@ -1330,12 +1345,12 @@ export class CampScene extends Phaser.Scene {
       this.buildPeddlerGoods(true);
     };
     this.cinematicDialog({
-      name: "THE PEDDLER",
+      name: "ITEM SHOP",
       speaker: () => this.peddler,
       lines: [
-        { text: "You've got diamonds on you. I can always tell." },
+        { text: "You've collected some gems. You can spend them here." },
         {
-          text: "I'm the Peddler. Gems for gear — have a look before you head out, and you won't leave empty-handed.",
+          text: "I sell items for your next run. Check their effects and choose up to three to bring with you.",
           cue: () => {
             if (this.peddler)
               this.tweens.add({ targets: this.peddler, scale: PEDDLER_SCALE * 1.1, duration: 260, yoyo: true, repeat: 1, ease: "Sine.easeInOut" });
@@ -1366,7 +1381,7 @@ export class CampScene extends Phaser.Scene {
         this.meta.peddlerArrived = true;
         saveMeta(this.meta);
         this.refreshWayfarerMark();
-        this.toast("the Peddler's set up shop 💰");
+        this.toast("Item shop unlocked.");
       },
     });
   }
@@ -1376,170 +1391,55 @@ export class CampScene extends Phaser.Scene {
     if (this.editMode || this.panelOpen || this.cutscene) return;
     this.closePanel();
     this.panelOpen = true;
-
-    const vw = this.scale.width;
-    const vh = this.scale.height;
     const stocked = this.meta.stockedItems;
-    // Short landscape phones get a compact stack: every effect stays visible,
-    // but the panel no longer extends beyond the top and bottom of the screen.
-    const compact = vh < 620;
-    const W = Math.min(720, vw - 40);
-    const ROW_H = compact ? 80 : 100;
-    const regularOffers = this.shopOffers.filter((item) => !item.bossAid);
-    const bossOffers = this.shopOffers.filter((item) => item.bossAid);
-    // Boss wares lead: they are the reason she is worth visiting before a
-    // warden, and the pierce rule is invisible until it kills you. Burying them
-    // under the everyday stock buried the pitch too.
-    const sections = [
-      { title: "⚔ BOSS ITEMS", note: "boss arenas only", color: "#ffbf80", boss: true, items: bossOffers },
-      { title: "REGULAR ITEMS", note: "use anywhere", color: "#8fd0ff", boss: false, items: regularOffers },
-    ].filter((section) => section.items.length > 0);
-    const SECTION_H = compact ? 18 : 24;
-    const H = compact
-      ? Math.max(180, 110 + this.shopOffers.length * ROW_H + sections.length * SECTION_H)
-      : 220 + this.shopOffers.length * ROW_H + sections.length * SECTION_H;
-    const top = vh / 2 - H / 2;
-    const box = this.add.container(0, 0).setDepth(90);
-    const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive();
-    const bg = this.add.rectangle(vw / 2, vh / 2, W, H, 0x14171f).setStrokeStyle(3, 0x2a2d38);
-    const title = this.add
-      .text(vw / 2, top + (compact ? 23 : 32), "💰 THE PEDDLER", { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
-      .setOrigin(0.5);
-    const bankLabel = compact
-      ? `your gems: 💎 ${this.meta.treasure}  ·  pack ${stocked.length}/${MAX_STOCKED}`
-      : `your gems: 💎 ${this.meta.treasure}`;
-    const bank = this.add
-      .text(vw / 2, top + (compact ? 48 : 60), bankLabel, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#bfe6ff" })
-      .setOrigin(0.5);
-    box.add([veil, bg, title, bank]);
-
-    const left = vw / 2 - W / 2 + 26;
-    let y = top + (compact ? 68 : 94);
-    for (const section of sections) {
-      const sectionTint = Number.parseInt(section.color.slice(1), 16);
-      const sectionTitle = this.add
-        .text(left, y, section.title, {
-          fontFamily: EMOJI_FONT,
-          fontStyle: "bold",
-          fontSize: compact ? "13px" : "15px",
-          color: section.color,
-        })
-        .setOrigin(0, 0.5);
-      const sectionNote = this.add
-        .text(vw / 2 + W / 2 - 26, y, section.note, {
-          fontFamily: "monospace",
-          fontSize: compact ? "10px" : "11px",
-          color: section.color,
-        })
-        .setOrigin(1, 0.5)
-        .setAlpha(0.72);
-      const sectionRule = this.add
-        .rectangle(vw / 2, y + SECTION_H / 2 - 2, W - 52, 2, sectionTint, section.boss ? 0.85 : 0.4)
-        .setOrigin(0.5);
-      box.add([sectionTitle, sectionNote, sectionRule]);
-      y += SECTION_H;
-
-      for (const item of section.items) {
+    const refresh = () => { this.closePanel(); this.peddlerTapped(); };
+    const cards: PanelCard[] = [...this.shopOffers]
+      .sort((a, b) => Number(!!b.bossAid) - Number(!!a.bossAid))
+      .map((item) => {
         const price = PEDDLER_PRICES[item.tier];
-        const afford = this.meta.treasure >= price;
         const room = stocked.length < MAX_STOCKED;
-        const bx = vw / 2 + W / 2 - 88;
-        const textW = bx - 82 - left;
-        const ok = afford && room;
-        // Boss wares get their own skin — warm card, a bright amber edge and a
-        // spine down the left — so they are told apart at a glance rather than
-        // by reading the heading above them.
-        const card = this.add
-          .rectangle(vw / 2, y + (compact ? 36 : 42), W - 36, ROW_H - 8, item.bossAid ? 0x2a2018 : 0x1a1e28, 0.97)
-          .setStrokeStyle(item.bossAid ? 2 : 1, item.bossAid ? 0xffbf80 : Number.parseInt(TIER_COLORS[item.tier].slice(1), 16), item.bossAid ? 0.9 : 0.45);
-        const spine = this.add
-          .rectangle(vw / 2 - (W - 36) / 2 + 3, y + (compact ? 36 : 42), 5, ROW_H - 8, item.bossAid ? 0xffbf80 : 0x3a3f4b, item.bossAid ? 1 : 0.5)
-          .setOrigin(0.5);
-        const name = this.add.text(left, y, `${item.glyph} ${item.name}`, {
-          fontFamily: EMOJI_FONT,
-          fontStyle: "bold",
-          fontSize: compact ? "16px" : "17px",
-          color: item.bossAid ? "#ffe3c4" : "#eef2f7",
-        });
-        const tier = this.add
-          .text(bx - 82, y + 2, item.tier.toUpperCase(), {
-            fontFamily: "monospace",
-            fontStyle: "bold",
-            fontSize: compact ? "12px" : "12px",
-            color: TIER_COLORS[item.tier],
-          })
-          .setOrigin(1, 0);
-        const desc = this.add.text(left, y + (compact ? 22 : 26), item.desc, {
-          fontFamily: "monospace",
-          fontSize: compact ? "14px" : "14px",
-          color: item.bossAid ? "#e2cdb4" : "#c9d3e1", // lifted off the old #b9c3d1 — it was thin on the dark card
-          lineSpacing: compact ? 1 : 4,
-          wordWrap: { width: textW },
-        });
-        const hint = this.add.text(left, y + (compact ? 59 : 74), `▸ ${item.hint}`, {
-          fontFamily: "monospace",
-          fontStyle: "bold",
-          fontSize: compact ? "12px" : "12px",
-          color: item.bossAid ? "#ffbf80" : "#8fd0ff",
-        });
-        const rect = this.add.rectangle(bx, y + (compact ? 36 : 42), 124, 38, ok ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, ok ? 0x54c26e : 0x3a3f4b);
-        const bt = this.add
-          .text(bx, y + (compact ? 36 : 42), room ? `BUY 💎${price}` : "PACK FULL", {
-            fontFamily: EMOJI_FONT,
-            fontStyle: "bold",
-            fontSize: "13px",
-            color: ok ? "#dff5df" : "#6a707c",
-          })
-          .setOrigin(0.5);
-        if (ok)
-          rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-            spend(this.meta, { treasure: price });
-            this.meta.stockedItems.push(item.id);
-            saveMeta(this.meta);
-            this.shopOffers = this.shopOffers.filter((o) => o !== item);
-            this.refreshResources();
-            this.sfx("coin3", 0.55);
-            this.toast(`packed: ${item.glyph} ${item.name}`);
-            this.closePanel();
-            this.peddlerTapped(); // reopen with the ware sold out
-          });
-        box.add([card, spine, name, tier, desc, hint, rect, bt]);
-        y += ROW_H;
-      }
-    }
-    if (!this.shopOffers.length) {
-      box.add(this.add.text(vw / 2, y + 6, "「 Sold out. I restock after a run. 」", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#ffe08a" }).setOrigin(0.5));
-      y += 34;
-    }
-
-    const packLine = stocked.length
-      ? `packed for next run (${stocked.length}/${MAX_STOCKED}):  ${stocked.map((id) => ITEMS.find((i) => i.id === id)?.glyph ?? "?").join(" ")}`
-      : `packed for next run:  — none —  (max ${MAX_STOCKED})`;
-    if (!compact)
-      box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, packLine, { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#a9e6a9" }).setOrigin(0.5));
-
-    // footer: reroll the wares / leave
-    const cby = vh / 2 + H / 2 - (compact ? 24 : 36);
-    const canReroll = this.meta.treasure >= PEDDLER_REROLL && this.shopOffers.length > 0;
-    const rrect = this.add.rectangle(vw / 2 - 90, cby, 160, 36, canReroll ? 0x3a3a5e : 0x2a2d38).setStrokeStyle(2, canReroll ? 0x7a7ad0 : 0x3a3f4b);
-    const rt = this.add
-      .text(vw / 2 - 90, cby, `reroll 💎${PEDDLER_REROLL}`, { fontFamily: EMOJI_FONT, fontSize: "14px", color: canReroll ? "#d0d0ff" : "#6a707c" })
-      .setOrigin(0.5);
-    if (canReroll)
-      rrect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-        spend(this.meta, { treasure: PEDDLER_REROLL });
-        this.rollShopOffers();
-        this.refreshResources();
-        this.sfx("pickup", 0.5);
-        this.closePanel();
-        this.peddlerTapped();
+        const afford = this.meta.treasure >= price;
+        return {
+          title: item.name, icon: item.glyph,
+          tag: `${item.bossAid ? "Boss item" : "Run item"} · ${item.tier}`,
+          lines: [item.desc, item.hint],
+          action: {
+            label: !room ? "Pack full" : afford ? `Buy · 💎 ${price}` : `Need 💎 ${price}`,
+            enabled: room && afford,
+            run: () => {
+              if (this.meta.stockedItems.length >= MAX_STOCKED || !canAfford(this.meta, { treasure: price })) return;
+              spend(this.meta, { treasure: price });
+              this.meta.stockedItems.push(item.id);
+              this.shopOffers = this.shopOffers.filter((offer) => offer !== item);
+              saveMeta(this.meta);
+              this.refreshResources();
+              this.sfx("coin3", 0.55);
+              refresh();
+            },
+          },
+        };
       });
-    const crect = this.add.rectangle(vw / 2 + 90, cby, 140, 36, 0x2a2d38).setStrokeStyle(2, 0x3a3f4b).setInteractive({ useHandCursor: true });
-    const ct = this.add.text(vw / 2 + 90, cby, "good day", { fontFamily: "monospace", fontSize: "14px", color: "#dfe3ea" }).setOrigin(0.5);
-    crect.on("pointerdown", () => this.closePanel());
-    box.add([rrect, rt, crect, ct]);
-
-    this.panelBox = box;
+    if (!cards.length) cards.push({ title: "Sold out", icon: "🎒", lines: ["New stock arrives after your next run."] });
+    const pack = stocked.map((id) => ITEMS.find((item) => item.id === id)?.name ?? id).join(", ");
+    this.closeNativePanel = openCampPanel(this, {
+      title: "Item shop", kind: "shop",
+      subtitle: `💎 ${this.meta.treasure} gems · ${stocked.length}/${MAX_STOCKED} packed`,
+      cards, footer: pack ? `Next run: ${pack}` : "Pack up to three items for your next run.",
+      actions: [{
+        label: `Refresh stock · 💎 ${PEDDLER_REROLL}`, secondary: true,
+        enabled: this.meta.treasure >= PEDDLER_REROLL && this.shopOffers.length > 0,
+        run: () => {
+          if (!canAfford(this.meta, { treasure: PEDDLER_REROLL })) return;
+          spend(this.meta, { treasure: PEDDLER_REROLL });
+          this.rollShopOffers();
+          saveMeta(this.meta);
+          this.refreshResources();
+          this.sfx("pickup", 0.5);
+          refresh();
+        },
+      }],
+      onClose: () => this.closePanel(),
+    });
   }
 
   /** Dev: relive the Peddler's arrival (console: __mbCamp.debugPeddler()). */
@@ -1601,58 +1501,50 @@ export class CampScene extends Phaser.Scene {
   /** Pause the camp under the system menu (Esc / ☰). Held while a panel/cutscene runs. */
   private openMenu() {
     if (this.scene.isActive("menu") || this.editMode || this.panelOpen || this.cutscene || this.departing) return;
+    if (this.villageHub) {
+      this.villageHub.root.style.visibility = "hidden";
+      this.events.once(Phaser.Scenes.Events.RESUME, () => { if (this.villageHub) this.villageHub.root.style.visibility = ""; });
+    }
     this.scene.launch("menu", { from: "camp" });
     this.scene.pause();
   }
 
   private refreshResources() {
     this.resText.setText(`🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`);
+    this.villageHub?.refresh();
+    const sword = this.campDock?.querySelector('[data-service="Sword upgrades"]');
+    const magic = this.campDock?.querySelector('[data-service="Magic upgrades"]');
+    if (sword) sword.textContent = `Sword level ${this.meta.swordLevel} · Permanent damage`;
+    if (magic) magic.textContent = `Staff level ${this.meta.staffLevel} · Permanent damage`;
   }
 
   /** Simple modal panel: dim veil + title + lines + buttons. One at a time. */
   private panel(title: string, lines: string[], buttons: { label: string; enabled?: boolean; cb?: () => void }[]) {
     this.closePanel();
     this.panelOpen = true;
-    const vw = this.scale.width;
-    const vh = this.scale.height;
-    const box = this.add.container(0, 0).setDepth(90);
-    const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive(); // swallow taps
-    const H = 150 + lines.length * 26 + 54;
-    const W = 470;
-    const bg = this.add.rectangle(vw / 2, vh / 2, W, H, 0x14171f).setStrokeStyle(3, 0x2a2d38);
-    const titleT = this.add
-      .text(vw / 2, vh / 2 - H / 2 + 34, title, { fontFamily: "monospace", fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
-      .setOrigin(0.5);
-    box.add([veil, bg, titleT]);
-    lines.forEach((ln, i) => {
-      box.add(
-        this.add
-          .text(vw / 2, vh / 2 - H / 2 + 74 + i * 26, ln, { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#dfe3ea" })
-          .setOrigin(0.5),
-      );
+    const costs: string[] = [];
+    for (const [glyph, name, have] of [["🪵", "wood", this.meta.wood], ["🪨", "ore", this.meta.ore], ["💎", "gems", this.meta.treasure]] as const) {
+      const match = buttons[0]?.label.match(new RegExp(`${glyph}\\s*(\\d+)`));
+      if (match) costs.push(`${glyph} ${have} / ${match[1]} ${name}`);
+    }
+    const cards: PanelCard[] = [{ title: "", lines: lines.filter((line) => !!line && (!costs.length || !line.startsWith("Resources:"))) }];
+    if (costs.length) cards.push({ title: "Materials", tag: "You have / needed", lines: costs });
+    this.closeNativePanel = openCampPanel(this, {
+      title, kind: "upgrade",
+      subtitle: "Permanent camp upgrades",
+      cards,
+      actions: buttons.map((b) => ({
+        label: b.cb ? b.label : "Back to camp", enabled: b.enabled,
+        secondary: !b.cb,
+        run: () => { this.closePanel(); b.cb?.(); },
+      })),
+      onClose: () => this.closePanel(),
     });
-    // buttons along the bottom
-    const bw = Math.min(190, (W - 40) / buttons.length - 10);
-    const totalW = buttons.length * bw + (buttons.length - 1) * 12;
-    buttons.forEach((b, i) => {
-      const bx = vw / 2 - totalW / 2 + bw / 2 + i * (bw + 12);
-      const by = vh / 2 + H / 2 - 38;
-      const enabled = b.enabled !== false;
-      const rect = this.add.rectangle(bx, by, bw, 40, enabled ? 0x2e5e34 : 0x2a2d38).setStrokeStyle(2, enabled ? 0x54c26e : 0x3a3f4b);
-      const txt = this.add
-        .text(bx, by, b.label, { fontFamily: EMOJI_FONT, fontSize: "15px", color: enabled ? "#dff5df" : "#6a707c" })
-        .setOrigin(0.5);
-      if (enabled)
-        rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-          this.closePanel();
-          b.cb?.();
-        });
-      box.add([rect, txt]);
-    });
-    this.panelBox = box;
   }
 
   private closePanel() {
+    this.closeNativePanel?.();
+    this.closeNativePanel = null;
     this.panelBox?.destroy();
     this.panelBox = null;
     this.panelOpen = false;
@@ -1663,17 +1555,17 @@ export class CampScene extends Phaser.Scene {
   private tentTapped() {
     if (this.editMode || this.panelOpen || this.cutscene) return;
     if (this.meta.blacksmithHired) {
-      this.toast("tent's empty — Wren's at the forge now");
+      this.toast("Wren is at the forge.");
       return;
     }
     const afford = canAfford(this.meta, BLACKSMITH_COST);
     this.panel(
-      "SOMEONE IN THE TENT",
+      "WREN · SWORD UPGRADES",
       [
-        `"Hmph. Lost my tools out there. Most of my nerve too."`,
-        `"Bring me 🪵 ${BLACKSMITH_COST.wood} and 🪨 ${BLACKSMITH_COST.ore} and I'll light that furnace."`,
+        `I can upgrade your sword. I just need materials to set up.`,
+        `Bring 🪵 ${BLACKSMITH_COST.wood} and 🪨 ${BLACKSMITH_COST.ore} to unlock the forge.`,
         ``,
-        `your bank:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}`,
+        `Resources:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}`,
       ],
       [
         { label: `HIRE  🪵${BLACKSMITH_COST.wood} 🪨${BLACKSMITH_COST.ore}`, enabled: afford, cb: () => this.hireSmith() },
@@ -1710,7 +1602,7 @@ export class CampScene extends Phaser.Scene {
         this.toast("Wren joins the camp ⚒");
         this.refreshWayfarerMark(); // a "hire" oath may now be ready to turn in
         if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-          this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
+          this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
       },
     });
   }
@@ -1724,17 +1616,17 @@ export class CampScene extends Phaser.Scene {
     if (!this.meta.wizardHired) {
       const afford = canAfford(this.meta, WIZARD_COST);
       this.panel(
-        "A SCHOLAR, PASSING THROUGH",
+        "ALDWIN · STAFF UPGRADES",
         [
-          `"Your blade's well kept. Your casting is not."`,
-          `"Cover the materials and I'll teach you the staff."`,
-          `"Same as the forge taught you the sword."`,
+          `I can upgrade the damage from your staff matches.`,
+          `Hire me to unlock permanent staff upgrades.`,
+          `Each level adds +4 damage to your spells.`,
           ``,
-          `your bank:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`,
+          `Resources:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`,
         ],
         [
           { label: `HIRE  🪵${WIZARD_COST.wood} 🪨${WIZARD_COST.ore} 💎${WIZARD_COST.treasure}`, enabled: afford, cb: () => this.hireWizard() },
-          { label: "not today" },
+          { label: "later" },
         ],
       );
       return;
@@ -1743,13 +1635,13 @@ export class CampScene extends Phaser.Scene {
     const cap = studyCap(this.meta.biome);
     if (lvl >= cap) {
       this.panel(
-        "🪄 ALDWIN'S STUDY",
+        "🪄 STAFF UPGRADES",
         [
-          `the staff is at its ${this.meta.biome} peak (level ${lvl})`,
-          `every cast carries +${lvl * SPELL_BONUS_PER_LEVEL} damage`,
+          `Staff level ${lvl} · area maximum reached`,
+          `Spell damage bonus: +${lvl * SPELL_BONUS_PER_LEVEL}`,
           ``,
-          `"Nothing more I can teach you here."`,
-          `"Take me somewhere new and we'll see."`,
+          `You have all the staff upgrades for this area.`,
+          `More upgrades unlock in the next area.`,
         ],
         [{ label: "later" }],
       );
@@ -1758,12 +1650,12 @@ export class CampScene extends Phaser.Scene {
     const cost = studyCost(lvl);
     const afford = canAfford(this.meta, { ore: cost });
     this.panel(
-      "🪄 ALDWIN'S STUDY",
+      "🪄 STAFF UPGRADES",
       [
-        `staff lore:  +${lvl * SPELL_BONUS_PER_LEVEL} → +${(lvl + 1) * SPELL_BONUS_PER_LEVEL} damage on EVERY cast`,
-        `(${cap - lvl} lesson${cap - lvl === 1 ? "" : "s"} left on this road)`,
+        `Spell bonus: +${lvl * SPELL_BONUS_PER_LEVEL} → +${(lvl + 1) * SPELL_BONUS_PER_LEVEL} damage`,
+        `Upgrades available in this area: ${cap - lvl}`,
         ``,
-        `your bank:  🪨 ${this.meta.ore}`,
+        `Resources:  🪨 ${this.meta.ore}`,
       ],
       [
         { label: `STUDY  🪨${cost}`, enabled: afford, cb: () => this.studyUpgrade(cost) },
@@ -1787,7 +1679,7 @@ export class CampScene extends Phaser.Scene {
     this.toast("Aldwin joins the camp 🪄");
     this.refreshWayfarerMark();
     if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
+      this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
   }
 
   private studyUpgrade(cost: number) {
@@ -1797,30 +1689,30 @@ export class CampScene extends Phaser.Scene {
     this.refreshResources();
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.staffLevel >= studyCap(this.meta.biome);
-    this.toast(atPeak ? `staff at its peak — +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} per cast 🪄` : `staff improved — level ${this.meta.staffLevel} 🪄`);
+    this.toast(atPeak ? `Staff maxed for this area · +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} spell damage` : `staff improved — level ${this.meta.staffLevel} 🪄`);
     this.refreshWayfarerMark();
     if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
+      this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
   }
 
   /** Wren's forge: permanent sword levels, capped per zone — the cap SUNDERS. */
   private furnaceTapped() {
     if (this.editMode || this.panelOpen || this.cutscene) return;
     if (!this.meta.blacksmithHired) {
-      this.toast("furnace is cold — someone in that tent knows how to work it");
+      this.toast("Hire Wren from the tent to unlock sword upgrades.");
       return;
     }
     const lvl = this.meta.swordLevel;
     const cap = forgeCap(this.meta.biome);
     if (lvl >= cap) {
       this.panel(
-        "⚒ WREN'S FORGE",
+        "⚒ SWORD UPGRADES",
         [
-          `the blade is at its ${this.meta.biome} peak (level ${lvl})`,
-          `one stroke fells any common foe on this road`,
+          `Sword level ${lvl} · area maximum reached`,
+          `One sword match now defeats any regular enemy here.`,
           ``,
-          `"my anvil's done all it can here. a harder`,
-          ` land will ask for a harder edge."`,
+          `You have all the sword upgrades for this area.`,
+          `More upgrades unlock in the next area.`,
         ],
         [{ label: "later" }],
       );
@@ -1830,15 +1722,15 @@ export class CampScene extends Phaser.Scene {
     const afford = canAfford(this.meta, { ore: cost });
     const nextNote =
       lvl + 1 >= cap
-        ? `level ${lvl} → ${lvl + 1}:  the PEAK — sword matches fell common foes outright`
-        : `level ${lvl} → ${lvl + 1}:  first strike +${(lvl + 1) * SWORD_BONUS_PER_LEVEL} damage`;
+        ? `Level ${lvl + 1}: one sword match defeats regular enemies`
+        : `Level ${lvl} → ${lvl + 1}: +${(lvl + 1) * SWORD_BONUS_PER_LEVEL} first-hit bonus`;
     this.panel(
-      "⚒ WREN'S FORGE",
+      "⚒ SWORD UPGRADES",
       [
         nextNote,
-        `(${cap - lvl} forging${cap - lvl === 1 ? "" : "s"} left on this road)`,
+        `Upgrades available in this area: ${cap - lvl}`,
         ``,
-        `your bank:  🪨 ${this.meta.ore}`,
+        `Resources:  🪨 ${this.meta.ore}`,
       ],
       [
         { label: `FORGE  🪨${cost}`, enabled: afford, cb: () => this.forgeUpgrade(cost) },
@@ -1854,10 +1746,10 @@ export class CampScene extends Phaser.Scene {
     this.refreshResources();
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.swordLevel >= forgeCap(this.meta.biome);
-    this.toast(atPeak ? "edge is perfect — one stroke drops any common foe ⚔" : `blade sharpened — level ${this.meta.swordLevel} ⚔`);
+    this.toast(atPeak ? "Sword maxed. One match defeats regular enemies in this area." : `blade sharpened — level ${this.meta.swordLevel} ⚔`);
     this.refreshWayfarerMark(); // a forge oath may now be ready to turn in
     if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("quest done — the Wayfarer has your payment"));
+      this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
   }
 
   /** The Wayfarer's quest board: accepted quests with progress + new offers to accept. */
@@ -1871,7 +1763,7 @@ export class CampScene extends Phaser.Scene {
       rewarded.forEach((q, i) =>
         this.time.delayedCall(250 + i * 1200, () => {
           this.sfx("coin3", 0.5);
-          this.toast(`oath kept: ${q.label}  +${q.reward} 💎`);
+          this.toast(`Quest complete: ${q.label}  +${q.reward} 💎`);
         }),
       );
     }
@@ -1879,92 +1771,38 @@ export class CampScene extends Phaser.Scene {
     this.closePanel();
     this.panelOpen = true;
 
-    const vw = this.scale.width;
-    const vh = this.scale.height;
-    const active = this.meta.active;
-    const offers = offeredQuests(this.meta);
-    const rows = Math.max(1, active.length + offers.length) + (active.length && offers.length ? 1 : 0);
-    const W = 600;
-    const H = 168 + rows * 34 + 56;
-    const box = this.add.container(0, 0).setDepth(90);
-    const veil = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.62).setInteractive();
-    const bg = this.add.rectangle(vw / 2, vh / 2, W, H, 0x14171f).setStrokeStyle(3, 0x2a2d38);
-    const title = this.add
-      .text(vw / 2, vh / 2 - H / 2 + 32, "THE WAYFARER", { fontFamily: "monospace", fontStyle: "bold", fontSize: "20px", color: "#ffe08a" })
-      .setOrigin(0.5);
-    box.add([veil, bg, title]);
-
-    const left = vw / 2 - W / 2 + 26;
-    let y = vh / 2 - H / 2 + 72;
-    const line = (txt: string, color = "#dfe3ea", size = "17px") => {
-      const t = this.add.text(left, y, txt, { fontFamily: EMOJI_FONT, fontSize: size, color });
-      box.add(t);
-      return t;
-    };
-
-    if (active.length) {
-      line(`— sworn (${active.length}/${MAX_ACTIVE}) —`, "#a0a7b2", "15px");
-      y += 26;
-      for (const aq of active) {
-        const q = questById(aq.id)!;
-        const p = questProgress(this.meta, aq);
-        const done = p.have >= p.need;
-        line(`${done ? "✅" : "▫️"} ${q.label}   (${p.have}/${p.need})`, done ? "#a9e6a9" : "#dfe3ea");
-        y += 34;
-      }
-    }
-    if (offers.length) {
-      line(`— the Wayfarer offers —`, "#a0a7b2", "15px");
-      y += 26;
-      for (const q of offers) {
-        line(`${q.label}   +${q.reward}💎`);
-        // ACCEPT button on the row
-        const bx = vw / 2 + W / 2 - 78;
-        const rect = this.add.rectangle(bx, y + 10, 104, 30, 0x2e5e34).setStrokeStyle(2, 0x54c26e).setInteractive({ useHandCursor: true });
-        const bt = this.add.text(bx, y + 10, "ACCEPT", { fontFamily: "monospace", fontStyle: "bold", fontSize: "15px", color: "#dff5df" }).setOrigin(0.5);
-        rect.on("pointerdown", () => {
-          if (acceptQuest(this.meta, q.id)) {
-            this.sfx("pickup", 0.55);
-            this.toast(`sworn: ${q.label}`);
-            this.closePanel();
-            this.goddessTapped(); // reopen with refreshed board
-          }
-        });
-        box.add([rect, bt]);
-        y += 34;
-      }
-    }
-    const cleared = allQuestsDone(this.meta);
-    const canTravel = roadOpen(this.meta); // pool cleared AND a next biome exists
-    if (!active.length && !offers.length) {
-      line(cleared ? "「 Every quest done. The way onward is open. 」" : "「 Nothing new for now. Come back after a run. 」", "#ffe08a");
-      y += 34;
-    } else {
-      y += 6;
-      const foot = cleared
-        ? "「 Every quest done. The way onward is open. 」"
-        : "「 Finish every quest on my list and I'll open the way onward. 」";
-      box.add(this.add.text(vw / 2, vh / 2 + H / 2 - 78, foot, { fontFamily: EMOJI_FONT, fontSize: "16px", color: "#ffe08a" }).setOrigin(0.5));
-    }
-
-    // bottom button: travel onward once the road is open, otherwise just close
-    const cbx = vw / 2;
-    const cby = vh / 2 + H / 2 - 36;
-    if (canTravel) {
-      const next = nextBiome(this.meta)!;
-      const label = `▸ take the road to the ${next === "forest" ? "High Forest" : next} ▸`;
-      const crect = this.add.rectangle(cbx, cby, 300, 40, 0x2e5e34).setStrokeStyle(2, 0x54c26e).setInteractive({ useHandCursor: true });
-      const ct = this.add.text(cbx, cby, label, { fontFamily: "monospace", fontStyle: "bold", fontSize: "16px", color: "#dff5df" }).setOrigin(0.5);
-      crect.on("pointerdown", () => this.travelOnward());
-      box.add([crect, ct]);
-    } else {
-      const crect = this.add.rectangle(cbx, cby, 150, 38, 0x2a2d38).setStrokeStyle(2, 0x3a3f4b).setInteractive({ useHandCursor: true });
-      const ct = this.add.text(cbx, cby, "onward", { fontFamily: "monospace", fontSize: "15px", color: "#dfe3ea" }).setOrigin(0.5);
-      crect.on("pointerdown", () => this.closePanel());
-      box.add([crect, ct]);
-    }
-
-    this.panelBox = box;
+    const cards: PanelCard[] = this.meta.active.map((aq) => {
+      const q = questById(aq.id)!;
+      const progress = questProgress(this.meta, aq);
+      return { title: q.label, icon: "📜", tag: "Active quest", lines: [`Reward · 💎 ${q.reward}`], progress };
+    });
+    for (const q of offeredQuests(this.meta)) cards.push({
+      title: q.label, icon: "📜", tag: "Available quest", lines: [`Reward · 💎 ${q.reward}`],
+      action: {
+        label: this.meta.active.length < MAX_ACTIVE ? "Accept quest" : "Quest slots full",
+        enabled: this.meta.active.length < MAX_ACTIVE,
+        run: () => {
+          if (!acceptQuest(this.meta, q.id)) return;
+          this.sfx("pickup", 0.55);
+          this.closePanel();
+          this.goddessTapped();
+        },
+      },
+    });
+    if (!cards.length) cards.push({
+      title: allQuestsDone(this.meta) ? "Area complete" : "You're all caught up",
+      icon: "✓", lines: [allQuestsDone(this.meta) ? "All quests in this area are complete." : "Come back after your next run."],
+    });
+    const ready = roadOpen(this.meta);
+    this.closeNativePanel = openCampPanel(this, {
+      title: "Quests", kind: "quests",
+      subtitle: `${this.meta.active.length}/${MAX_ACTIVE} active · 💎 ${this.meta.treasure} gems`,
+      cards,
+      footer: rewarded.length ? `Collected 💎 ${rewarded.reduce((sum, q) => sum + q.reward, 0)} in quest rewards.`
+        : ready ? "The next area is ready." : "Complete this area's quests to unlock the next.",
+      actions: ready ? [{ label: `Next area: ${nextBiome(this.meta)}`, run: () => { this.closePanel(); this.travelOnward(); } }] : [],
+      onClose: () => this.closePanel(),
+    });
   }
 
   /** The road is open — break camp and rebuild the scene in the next biome. */
@@ -1987,6 +1825,14 @@ export class CampScene extends Phaser.Scene {
   private depart() {
     if (this.departing || this.editMode || this.panelOpen || this.cutscene) return;
     this.departing = true;
+    if (this.villageHub) {
+      // The DOM hub stays opaque while its own curtain fades to black.
+      // Hide the legacy scene too, including the frame during scene handoff.
+      this.cameras.main.setVisible(false);
+      this.villageHub.root.classList.add("is-departing");
+      this.time.delayedCall(600, () => this.scene.start("game"));
+      return;
+    }
     this.hero.play("hero-walk");
     // a slow, deliberate jog to the portal — then a gentle fade well after he sets off
     this.tweens.add({ targets: this.hero, x: 700, duration: 2300, ease: "Sine.easeIn" });
@@ -2330,7 +2176,7 @@ export class CampScene extends Phaser.Scene {
     this.copyBtn.on("pointerdown", () => {
       const json = JSON.stringify(serialise(), null, 1);
       navigator.clipboard?.writeText(json).then(
-        () => this.toast("layout copied — paste it to Claude to bake it in"),
+        () => this.toast("Layout copied to clipboard."),
         () => console.log(json),
       );
       console.log("[camp layout]", json);
@@ -2464,11 +2310,123 @@ export class CampScene extends Phaser.Scene {
     this.input.on("pointerup", () => (dragging = null));
   }
 
-  /** Full-bleed reflow: sky + earth span the viewport; the camp scales off height. */
+  /** Native navigation keeps every service reachable even when the camera crops the camp. */
+  private buildCampDock() {
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has("debug")) {
+      this.buildLegacyCampDock();
+      return;
+    }
+    this.villageHub?.destroy();
+    const guarded = (action: () => void) => () => {
+      if (!this.departing && !this.panelOpen && !this.cutscene) action();
+    };
+    this.villageHub = createVillageHub(this.meta, biomeDef(this.meta.biome).label, {
+      shop: guarded(() => this.peddlerTapped()),
+      forge: guarded(() => this.meta.blacksmithHired ? this.furnaceTapped() : this.tentTapped()),
+      magic: guarded(() => this.mageTapped()),
+      quests: guarded(() => this.goddessTapped()),
+      start: () => this.depart(), menu: () => this.openMenu(),
+    });
+  }
+
+  private buildLegacyCampDock() {
+    this.campDock?.remove();
+    const dock = document.createElement("nav");
+    dock.className = "mb-camp-dock";
+    dock.setAttribute("aria-label", "Camp services");
+    const heading = document.createElement("div");
+    heading.className = "mb-camp-heading";
+    const title = document.createElement("strong");
+    title.textContent = "Get ready for the next run";
+    const copy = document.createElement("span");
+    copy.textContent = "Pick a quest, upgrade your gear, and head out.";
+    heading.append(title, copy);
+    dock.append(heading);
+    const actions = document.createElement("div");
+    actions.className = "mb-camp-services";
+    const add = (label: string, action: () => void, primary = false) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = primary ? "mb-action mb-camp-start" : "mb-action mb-action--secondary";
+      button.textContent = label;
+      if (!primary) {
+        const detail = document.createElement("span");
+        detail.className = "mb-service-detail";
+        detail.dataset.service = label;
+        detail.textContent = label === "Quests" ? "View goals and collect rewards"
+          : label === "Item shop" ? "Pack useful items for your run"
+          : label === "Sword upgrades" ? `Sword level ${this.meta.swordLevel} · Permanent damage`
+          : `Staff level ${this.meta.staffLevel} · Permanent damage`;
+        button.append(detail);
+      }
+      button.addEventListener("click", () => {
+        if (this.departing || this.cutscene || this.panelOpen) return;
+        action();
+      });
+      (primary ? dock : actions).append(button);
+    };
+    add("Quests", () => this.goddessTapped());
+    add("Item shop", () => this.peddlerTapped());
+    add("Sword upgrades", () => this.meta.blacksmithHired ? this.furnaceTapped() : this.tentTapped());
+    add("Magic upgrades", () => this.mageTapped());
+    dock.append(actions);
+    add("Start run  →", () => this.depart(), true);
+    document.getElementById("game")!.append(dock);
+    this.campDock = dock;
+    this.campPan?.remove();
+    const pan = document.createElement("div");
+    pan.className = "mb-camp-pan";
+    pan.setAttribute("aria-label", "Explore camp. Swipe sideways or choose a location.");
+    const nav = document.createElement("nav");
+    nav.className = "mb-camp-stops";
+    nav.setAttribute("aria-label", "Camp locations");
+    const stops: [string, number][] = [
+      ["Market", this.lay.peddler.x], ["Tent", -100],
+      ["Forge", this.lay.furnace.x], ["Portal", this.lay.portal.x],
+    ];
+    for (const [label, focus] of stops) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("pointerdown", event => event.stopPropagation());
+      button.addEventListener("click", () => { this.campFocus = focus; this.layout(); });
+      nav.append(button);
+    }
+    const hint = document.createElement("span");
+    hint.className = "mb-camp-swipe";
+    hint.textContent = "‹ Swipe to explore camp ›";
+    pan.append(hint, nav);
+    let drag: { x: number; focus: number } | null = null;
+    pan.addEventListener("pointerdown", event => {
+      event.stopPropagation();
+      event.preventDefault();
+      if (this.departing || this.panelOpen || this.cutscene) return;
+      drag = { x: event.clientX, focus: this.campFocus };
+      pan.setPointerCapture(event.pointerId);
+    });
+    pan.addEventListener("pointermove", event => {
+      event.stopPropagation();
+      if (!drag) return;
+      this.campFocus = Phaser.Math.Clamp(drag.focus - (event.clientX - drag.x) / this.campScale, -380, 430);
+      this.layout();
+    });
+    pan.addEventListener("pointerup", event => { event.stopPropagation(); drag = null; });
+    pan.addEventListener("pointercancel", () => { drag = null; });
+    document.getElementById("game")!.append(pan);
+    this.campPan = pan;
+  }
+
+  /** A closer portrait camp above the service dock; wide screens show the whole camp. */
   private layout() {
     const vw = this.scale.width;
     const vh = this.scale.height;
-    const groundY = Math.round(vh * GROUND_FRAC);
+    const portrait = vh > vw;
+    this.peddlerBark?.setVisible(!portrait);
+    // The wide camp composition leaves a phone with a huge empty sky and tiny
+    // characters. Portrait gets a closer camera: the ground comes up and the
+    // central camp activity fills the lower half while the sky remains visible.
+    const dockHeight = this.campDock?.getBoundingClientRect().height ?? 290;
+    const groundY = portrait ? Math.round(Math.max(145, vh - dockHeight - 92)) : Math.round(vh * 0.7);
     for (const p of this.parallax) {
       p.sprite.setPosition(0, 0).setSize(vw, groundY);
       const sc = groundY / PARALLAX_SRC_H;
@@ -2481,9 +2439,11 @@ export class CampScene extends Phaser.Scene {
     const gsc = bandH / 96; // one vertical repeat: grass lip on top, dirt below
     this.ground.setTileScale(gsc, gsc);
 
-    this.campScale = Math.min(vh / DH, vw / DW); // fit by height AND width — never sprawl past the edges
-    // offset so the (asymmetric) composition is visually centred: hill far-left, portal right edge
-    const px = Math.round(vw / 2 - CONTENT_CX * this.campScale);
+    this.campScale = portrait
+      ? Math.min(1.15, vw / 380)
+      : Math.min(vh / DH, vw / DW); // fit by height AND width — never sprawl past the edges
+    // Keep the entire authored village. Portrait browses it at a readable scale.
+    const px = Math.round(vw / 2 - (portrait ? this.campFocus : CONTENT_CX) * this.campScale);
     this.propBox.setPosition(px, groundY).setScale(this.campScale);
     this.backBox?.setPosition(px, groundY).setScale(this.campScale); // identical transform
     if (this.snowZone) this.snowZone.width = vw + 40; // snow spans the new width
