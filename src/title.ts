@@ -6,6 +6,7 @@
 import Phaser from "phaser";
 import { biomeDef } from "./camp";
 import { loadMeta, readSlot, SAVE_SLOTS } from "./meta";
+import { readCheckpoint } from "./run-save";
 import { musicV, setSoundLevel } from "./audio";
 
 const PARALLAX_SRC_H = 216; // vnitti layer source height (shared with camp/run)
@@ -33,6 +34,7 @@ export class TitleScene extends Phaser.Scene {
   private version!: Phaser.GameObjects.Text; // build number, bottom-right
   private starting = false;
   private uiScale = 1; // layout()'s shrink factor — hover/press tweens scale off this
+  private uiScaleY = 1;
 
   constructor() {
     super("title");
@@ -103,7 +105,7 @@ export class TitleScene extends Phaser.Scene {
     let hasSave = false;
     for (let n = 1; n <= SAVE_SLOTS; n++) if (readSlot(n)) hasSave = true;
     const returning = meta.campIntroSeen || meta.slain > 0;
-    this.btnStart = this.buildButton(returning ? "CONTINUE  →" : "LET'S PLAY  →", true, () => this.setOut());
+    this.btnStart = this.buildButton(readCheckpoint(meta) ? "RESUME RUN  →" : returning ? "CONTINUE  →" : "LET'S PLAY  →", true, () => this.setOut());
     this.btnLoad = this.buildButton("LOAD GAME", false, hasSave ? () => this.openLoad() : null);
     this.saveInfo = this.add.text(0, 0, returning ? `BEST DEPTH  ${meta.bestDepth}     ·     SWORD LEVEL  ${meta.swordLevel}` : "SWAP TO ATTACK   ·   MATCH TO DEFEND", {
       fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: "12px", fontStyle: "bold", color: "#91a7bc", letterSpacing: 1,
@@ -170,8 +172,8 @@ export class TitleScene extends Phaser.Scene {
     const c = this.add.container(0, 0, parts).setDepth(20).setSize(w, h);
     if (enabled)
       c.setInteractive({ useHandCursor: true })
-        .on("pointerover", () => this.tweens.add({ targets: c, scale: this.uiScale * 1.05, duration: 120, ease: "Quad.easeOut" }))
-        .on("pointerout", () => this.tweens.add({ targets: c, scale: this.uiScale, duration: 120, ease: "Quad.easeOut" }))
+        .on("pointerover", () => this.tweens.add({ targets: c, scaleX: this.uiScale * 1.05, scaleY: this.uiScaleY * 1.05, duration: 120, ease: "Quad.easeOut" }))
+        .on("pointerout", () => this.tweens.add({ targets: c, scaleX: this.uiScale, scaleY: this.uiScaleY, duration: 120, ease: "Quad.easeOut" }))
         .on("pointerdown", cb);
     return c;
   }
@@ -187,11 +189,11 @@ export class TitleScene extends Phaser.Scene {
   private setOut() {
     if (this.starting) return;
     this.starting = true;
-    this.tweens.add({ targets: this.btnStart, scale: this.uiScale * 0.94, duration: 80, yoyo: true });
+    this.tweens.add({ targets: this.btnStart, scaleX: this.uiScale * 0.94, scaleY: this.uiScaleY * 0.94, duration: 80, yoyo: true });
     const vw = this.scale.width;
     const vh = this.scale.height;
     const out = this.add.rectangle(vw / 2, vh / 2, vw * 2, vh * 2, 0x05060a, 0).setDepth(50);
-    this.tweens.add({ targets: out, fillAlpha: 1, duration: 420, ease: "Quad.easeIn", onComplete: () => this.scene.start("camp") });
+    this.tweens.add({ targets: out, fillAlpha: 1, duration: 420, ease: "Quad.easeIn", onComplete: () => this.scene.start(readCheckpoint(loadMeta()) ? "game" : "camp") });
   }
 
   /** Full-bleed reflow, mirroring the camp: sky spans, ground bands, UI stacks off centre. */
@@ -211,9 +213,40 @@ export class TitleScene extends Phaser.Scene {
     this.veil.setPosition(0, 0).setSize(vw, vh);
 
     const cx = vw / 2;
+    this.tweens.killTweensOf([this.btnStart, this.btnLoad]);
+    // Phone typography uses screen pixels instead of shrinking the desktop
+    // card (which reduced 12px copy to just 7px on a 393px-wide phone).
+    if (vw < 600 && vh >= vw) {
+      const cardW = vw - 32;
+      const cardH = Math.min(500, vh - 32);
+      const top = Math.round((vh - cardH) / 2);
+      const contentW = cardW - 32;
+      this.card.clear().fillStyle(0x0c1724, 0.96).fillRoundedRect(16, top, cardW, cardH, 18);
+      this.card.lineStyle(1, 0x3d5966, 0.8).strokeRoundedRect(16, top, cardW, cardH, 18);
+      this.eyebrow.setText("PUZZLE COMBAT").setScale(1).setFontSize(12).setPosition(cx, top + cardH * .09);
+      this.title.setScale(1).setFontSize(Math.min(48, contentW / 5.5)).setPosition(cx, top + cardH * .2);
+      this.tagline.setText("Match tiles. Beat enemies.\nUpgrade your next run.").setScale(1).setFontSize(16)
+        .setWordWrapWidth(contentW).setAlign("center").setPosition(cx, top + cardH * .32);
+      this.tiles.forEach((t, i) => {
+        this.tweens.killTweensOf(t);
+        t.setAlpha(1).setScale(.72).setPosition(cx + (i - 1) * 82, top + cardH * .48);
+        this.tweens.add({ targets: t, y: t.y + 5, duration: 1500 + i * 180, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+      });
+      this.saveInfo.setScale(1).setFontSize(13).setWordWrapWidth(contentW).setAlign("center").setPosition(cx, top + cardH * .6);
+      this.uiScale = Math.min(1, contentW / 330);
+      this.uiScaleY = 1;
+      this.btnStart.setScale(this.uiScale, 1).setPosition(cx, top + cardH * .73);
+      this.btnLoad.setScale(this.uiScale, 1).setPosition(cx, top + cardH * .73 + 62);
+      this.foot.setText("Progress saves automatically.").setScale(1).setFontSize(13).setPosition(cx, top + cardH - 16);
+      this.version.setScale(1).setFontSize(12).setPosition(vw - 14, vh - 10);
+      return;
+    }
+    this.tagline.setText("Match tiles. Beat enemies. Upgrade your next run.").setFontSize(17);
+    this.foot.setText("Progress saves automatically. Pick up where you left off.");
     if (vh < 520 && vw >= 600) {
       const left = vw * 0.28, right = vw * 0.73;
       this.uiScale = Math.min(1, (vw * 0.43 - 20) / 330);
+      this.uiScaleY = this.uiScale;
       this.card.clear().fillStyle(0x0c1724, 0.96).fillRoundedRect(16, 12, vw - 32, vh - 24, 18);
       this.card.lineStyle(1, 0x3d5966).strokeRoundedRect(16, 12, vw - 32, vh - 24, 18);
       this.eyebrow.setText("PUZZLE COMBAT").setScale(1).setFontSize(15).setPosition(left, vh * 0.2);
@@ -240,6 +273,7 @@ export class TitleScene extends Phaser.Scene {
     const copyScale = s;
     const buttonScale = s;
     this.uiScale = buttonScale;
+    this.uiScaleY = buttonScale;
     this.card.clear().fillStyle(0x0c1724, 0.94).fillRoundedRect(cx - 300 * s, cy - 270 * s, 600 * s, 540 * s, 22 * s);
     this.card.lineStyle(1, 0x3d5966, 0.8).strokeRoundedRect(cx - 300 * s, cy - 270 * s, 600 * s, 540 * s, 22 * s);
     this.eyebrow.setScale(s).setPosition(cx, cy - 218 * s);

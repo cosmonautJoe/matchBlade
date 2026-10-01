@@ -18,18 +18,20 @@
   .mb-camp-stops { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; margin-top: 5px; }
   .mb-camp-stops button { min-height: 40px; border: 1px solid #718063; border-radius: 8px; background: #1d3028; color: #f1e6cb; font: 600 14px system-ui; cursor: pointer; }
   .mb-camp-dock {
-    top: 40%; padding: 22px; gap: 18px;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    top: auto; padding: 16px; gap: 12px;
+    grid-template-rows: auto auto auto;
     background: linear-gradient(155deg, #22372c, #111e1a);
     border-color: #6c805c; box-shadow: 0 -8px 32px #09100e77;
   }
-  .mb-camp-heading strong { font-size: 24px; line-height: 1.15; }
-  .mb-camp-services { gap: 12px; min-height: 0; }
+  .mb-camp-heading strong { font-size: 20px; line-height: 1.2; }
+  .mb-camp-heading span { display: none; }
+  .mb-camp-services { gap: 8px; min-height: 0; }
   .mb-camp-services .mb-action {
-    text-align: left; padding: 16px; font-size: 18px;
+    text-align: left; padding: 12px; font-size: 16px;
     background: #293e32; border-color: #536f53; border-radius: 14px;
   }
-  .mb-camp-start { min-height: 58px !important; font-size: 19px; }
+  .mb-service-detail { margin-top: 4px; font-size: 13px; line-height: 1.3; }
+  .mb-camp-start { min-height: 50px !important; font-size: 18px; }
 }
 @media (orientation: landscape) {
   .mb-service-detail { display: none; }
@@ -40,9 +42,9 @@
 }
 @media (max-height: 680px) and (orientation: portrait) {
   .mb-camp-pan { bottom: 66%; }
-  .mb-camp-dock { top: 34%; padding: 14px; gap: 10px; }
+  .mb-camp-dock { top: auto; padding: 12px; gap: 8px; }
   .mb-camp-services .mb-action { padding: 10px; font-size: 16px; }
-  .mb-service-detail { margin-top: 4px; font-size: 12px; }
+  .mb-service-detail { display: none; }
   .mb-camp-heading span { display: none; }
 }
 .mb-panel-overlay {
@@ -110,5 +112,6 @@
 @media (max-width: 520px) {
   .mb-panel-header, .mb-panel-content, .mb-panel-footer { padding: 12px; }
   .mb-panel--shop .mb-card, .mb-panel--quests .mb-card { display: flex; }
-  .mb-footer-actions, .mb-footer-actions .mb-action { flex: 1; }
+  .mb-footer-copy, .mb-footer-actions { flex: 1 1 100%; width: 100%; }
+  .mb-footer-actions .mb-action { flex: 1 1 0; min-width: 0; }
 }

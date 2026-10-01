@@ -404,7 +404,8 @@ export class Tutorial {
    *  clear of the action at ground level) — used by the hands-on steps. */
   private banner(text: string) {
     const vw = this.g.scale.width;
-    const w = Math.min(700, vw - 270); // stay clear of the skip button top-right
+    const portrait = this.g.scale.height > vw;
+    const w = Math.min(700, vw - (portrait ? 24 : 270));
     const t = this.g.add
       .text(0, 0, text, {
         fontFamily: EMOJI_FONT,
@@ -416,7 +417,7 @@ export class Tutorial {
       .setOrigin(0.5);
     const bw = t.width + 36;
     const bh = t.height + 20;
-    const cont = this.keep(this.g.add.container(vw / 2, 10 + bh / 2).setDepth(94));
+    const cont = this.keep(this.g.add.container(vw / 2, (portrait ? 56 : 10) + bh / 2).setDepth(94));
     const gfx = this.g.add.graphics();
     gfx.fillStyle(0x0e1015, 0.92);
     gfx.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 10);
@@ -485,8 +486,8 @@ export class Tutorial {
   }
   private toScreenRect(r: Rect): Rect {
     const p = this.g.toScreen(r.x, r.y);
-    const s = this.g.uiScale();
-    return { x: p.x, y: p.y, w: r.w * s, h: r.h * s };
+    const end = this.g.toScreen(r.x + r.w, r.y + r.h);
+    return { x: p.x, y: p.y, w: end.x - p.x, h: end.y - p.y };
   }
   private pad(r: Rect, n: number): Rect {
     return { x: r.x - n, y: r.y - n, w: r.w + n * 2, h: r.h + n * 2 };

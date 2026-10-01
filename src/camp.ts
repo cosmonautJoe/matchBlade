@@ -15,8 +15,10 @@
  */
 
 import Phaser from "phaser";
+import { preloadPlayer, createPlayerAnimations, PLAYER_TEXTURE, PLAYER_DENSITY, PLAYER_ORIGIN } from "./player-art";
 import { openCampPanel, type PanelCard } from "./camp-ui";
 import { createVillageHub } from "./village-hub";
+import { createCaravan } from "./caravan";
 import {
   type MetaState,
   loadMeta,
@@ -443,7 +445,7 @@ export class CampScene extends Phaser.Scene {
   private shopOffers: ItemDef[] = []; // this visit's three wares
   private closeNativePanel: (() => void) | null = null;
   private campDock: HTMLElement | null = null;
-  private villageHub: ReturnType<typeof createVillageHub> | null = null;
+  private villageHub: ReturnType<typeof createVillageHub> | ReturnType<typeof createCaravan> | null = null;
   private campPan: HTMLElement | null = null;
   private campFocus = -130;
   private peddlerBark: Phaser.GameObjects.Container | null = null;
@@ -473,7 +475,7 @@ export class CampScene extends Phaser.Scene {
     img(biome.floor.key, biome.floor.file);
 
     // hero (shared with GameScene — whoever loads first wins)
-    if (!this.textures.exists("warrior")) this.load.spritesheet("warrior", "sprites/warrior.png", { frameWidth: 80, frameHeight: 64 });
+    preloadPlayer(this);
     // NPCs: the blacksmith (WarriorWoman sheet, same layout as the hero) + the quest-giving Wayfarer
     if (!this.textures.exists("smith")) this.load.spritesheet("smith", "sprites/smith.png", { frameWidth: 80, frameHeight: 64 });
     // Aldwin the Mage (scripts/gen_mage.py — the Evil Wizard sheet in arcane blue)
@@ -676,7 +678,19 @@ export class CampScene extends Phaser.Scene {
     // arrival moments, one per visit: the first-ever walk-in outranks the
     // Peddler, who turns up the first time you come home with a diamond banked
     const replayIntro = new URLSearchParams(location.search).has("intro");
-    if (!this.meta.campIntroSeen || replayIntro) this.playIntro();
+    if (this.villageHub && "announce" in this.villageHub) {
+      if (!this.meta.campIntroSeen) {
+        this.meta.campIntroSeen = true;
+        this.villageHub.announce("Your caravan. Pick a quest, then head out to collect supplies.");
+      }
+      if (!this.meta.peddlerArrived && this.meta.treasure >= 1) {
+        this.meta.peddlerArrived = true;
+        this.villageHub.announce("The merchant has joined your caravan. The item shop is open.");
+      }
+      saveMeta(this.meta);
+      this.villageHub.refresh();
+    }
+    else if (!this.meta.campIntroSeen || replayIntro) this.playIntro();
     else if (!this.meta.peddlerArrived && this.meta.treasure >= 1) this.playPeddlerArrival();
     else this.refreshWayfarerMark();
 
@@ -688,8 +702,7 @@ export class CampScene extends Phaser.Scene {
       if (this.anims.exists(key)) return;
       this.anims.create({ key, frames: this.anims.generateFrameNumbers(tex, { start, end }), frameRate: fps, repeat: -1 });
     };
-    mk("hero-idle", "warrior", 0, 7, 8);
-    mk("hero-walk", "warrior", 48, 55, 15);
+    createPlayerAnimations(this);
     mk("smith-idle", "smith", 0, 7, 8);
     mk("smith-walk", "smith", 48, 55, 12);
     mk("peddler-idle", "knight-idle", 0, 3, 5);
@@ -819,7 +832,7 @@ export class CampScene extends Phaser.Scene {
     }
 
     // hero stands in the middle of camp
-    this.hero = this.add.sprite(this.lay.hero.x, 2 + AY(this.lay.hero), "warrior").setOrigin(0.5, 0.734).setScale(AS(this.lay.hero, 2.1)).setDepth(7).play("hero-idle");
+    this.hero = this.add.sprite(this.lay.hero.x, 2 + AY(this.lay.hero), PLAYER_TEXTURE).setOrigin(0.5, PLAYER_ORIGIN).setScale(AS(this.lay.hero, 2.1) / PLAYER_DENSITY).setDepth(7).play("hero-idle");
     this.propBox.add(this.hero);
     this.editable.push({ obj: this.hero, key: "npc:hero", npc: "hero", base: 2, baseScale: 2.1 });
 
@@ -1388,6 +1401,10 @@ export class CampScene extends Phaser.Scene {
 
   /** Her shop: three wares for diamonds, packed into your slots for the NEXT run. */
   private peddlerTapped() {
+    if (!this.meta.peddlerArrived && this.villageHub && "announce" in this.villageHub) {
+      this.panel("Meet the merchant", ["Bring back your first gem from a run. The merchant will join your caravan and open the item shop."], [{label:"Got it"}]);
+      return;
+    }
     if (this.editMode || this.panelOpen || this.cutscene) return;
     this.closePanel();
     this.panelOpen = true;
@@ -1613,6 +1630,10 @@ export class CampScene extends Phaser.Scene {
    */
   private mageTapped() {
     if (this.editMode || this.panelOpen || this.cutscene) return;
+    if (!this.meta.wizardHired && !wizardAvailable(this.meta.biome)) {
+      this.panel("Unknown traveler", ["There's room for someone new. Keep exploring to discover who will join your caravan."], [{label:"Got it"}]);
+      return;
+    }
     if (!this.meta.wizardHired) {
       const afford = canAfford(this.meta, WIZARD_COST);
       this.panel(
@@ -1799,7 +1820,7 @@ export class CampScene extends Phaser.Scene {
       subtitle: `${this.meta.active.length}/${MAX_ACTIVE} active · 💎 ${this.meta.treasure} gems`,
       cards,
       footer: rewarded.length ? `Collected 💎 ${rewarded.reduce((sum, q) => sum + q.reward, 0)} in quest rewards.`
-        : ready ? "The next area is ready." : "Complete this area's quests to unlock the next.",
+        : ready ? "The next area is ready." : "Defeat the final boss at depth 20 to unlock the next area. Quests give extra rewards.",
       actions: ready ? [{ label: `Next area: ${nextBiome(this.meta)}`, run: () => { this.closePanel(); this.travelOnward(); } }] : [],
       onClose: () => this.closePanel(),
     });
@@ -2149,7 +2170,8 @@ export class CampScene extends Phaser.Scene {
         if (e.npc) {
           // y matters — folk can stand on raised slabs
           const ay = Math.round(e.obj.y) - (e.base ?? 0); // strip the sprite's own offset
-          const sc = +(e.obj as unknown as { scaleX: number }).scaleX.toFixed(2);
+          const density = e.npc === "hero" ? PLAYER_DENSITY : 1;
+          const sc = +((e.obj as unknown as { scaleX: number }).scaleX * density).toFixed(2);
           const resized = e.baseScale !== undefined && Math.abs(sc - e.baseScale) > 0.001;
           anchors[e.npc] = { x: Math.round(e.obj.x), ...(ay ? { y: ay } : {}), ...(resized ? { s: sc } : {}) };
           continue;
@@ -2312,7 +2334,7 @@ export class CampScene extends Phaser.Scene {
 
   /** Native navigation keeps every service reachable even when the camera crops the camp. */
   private buildCampDock() {
-    if (import.meta.env.DEV && new URLSearchParams(location.search).has("debug")) {
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has("legacy-camp")) {
       this.buildLegacyCampDock();
       return;
     }
@@ -2320,13 +2342,17 @@ export class CampScene extends Phaser.Scene {
     const guarded = (action: () => void) => () => {
       if (!this.departing && !this.panelOpen && !this.cutscene) action();
     };
-    this.villageHub = createVillageHub(this.meta, biomeDef(this.meta.biome).label, {
+    const actions = {
       shop: guarded(() => this.peddlerTapped()),
       forge: guarded(() => this.meta.blacksmithHired ? this.furnaceTapped() : this.tentTapped()),
       magic: guarded(() => this.mageTapped()),
       quests: guarded(() => this.goddessTapped()),
+      travel: guarded(() => this.travelOnward()),
       start: () => this.depart(), menu: () => this.openMenu(),
-    });
+    };
+    this.villageHub = import.meta.env.DEV && new URLSearchParams(location.search).has("village-preview")
+      ? createVillageHub(this.meta, biomeDef(this.meta.biome).label, actions)
+      : createCaravan(this.meta, biomeDef(this.meta.biome), actions);
   }
 
   private buildLegacyCampDock() {
@@ -2382,14 +2408,18 @@ export class CampScene extends Phaser.Scene {
     nav.setAttribute("aria-label", "Camp locations");
     const stops: [string, number][] = [
       ["Market", this.lay.peddler.x], ["Tent", -100],
-      ["Forge", this.lay.furnace.x], ["Portal", this.lay.portal.x],
+      ["Forge", this.lay.furnace.x], ["Trail", this.lay.portal.x],
     ];
     for (const [label, focus] of stops) {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
       button.addEventListener("pointerdown", event => event.stopPropagation());
-      button.addEventListener("click", () => { this.campFocus = focus; this.layout(); });
+      button.addEventListener("click", () => {
+        if (this.departing || this.panelOpen || this.cutscene) return;
+        this.campFocus = focus;
+        this.layout();
+      });
       nav.append(button);
     }
     const hint = document.createElement("span");
@@ -2426,7 +2456,11 @@ export class CampScene extends Phaser.Scene {
     // characters. Portrait gets a closer camera: the ground comes up and the
     // central camp activity fills the lower half while the sky remains visible.
     const dockHeight = this.campDock?.getBoundingClientRect().height ?? 290;
-    const groundY = portrait ? Math.round(Math.max(145, vh - dockHeight - 92)) : Math.round(vh * 0.7);
+    const dockTop = this.campDock?.getBoundingClientRect().top ?? vh - dockHeight;
+    const groundY = portrait ? Math.round(Math.max(145, dockTop - 80)) : Math.round(vh * 0.7);
+    if (this.campPan && portrait) {
+      this.campPan.style.bottom = `${vh - dockTop + 8}px`;
+    }
     for (const p of this.parallax) {
       p.sprite.setPosition(0, 0).setSize(vw, groundY);
       const sc = groundY / PARALLAX_SRC_H;
@@ -2440,7 +2474,7 @@ export class CampScene extends Phaser.Scene {
     this.ground.setTileScale(gsc, gsc);
 
     this.campScale = portrait
-      ? Math.min(1.15, vw / 380)
+      ? Math.min(1.35, vw / 320, Math.max(.65, (groundY - 70) / 220))
       : Math.min(vh / DH, vw / DW); // fit by height AND width — never sprawl past the edges
     // Keep the entire authored village. Portrait browses it at a readable scale.
     const px = Math.round(vw / 2 - (portrait ? this.campFocus : CONTENT_CX) * this.campScale);

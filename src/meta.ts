@@ -9,7 +9,7 @@
  * ordered pool; the player ACCEPTS up to MAX_ACTIVE at a time. Progress counts
  * from the moment of acceptance (delta quests snapshot a baseline), so you
  * can't retro-complete. Completing quests frees a slot and the next offers
- * appear. Clearing the WHOLE pool opens the road to the next biome.
+ * appear. Quests are optional; defeating the final boss opens the next biome.
  */
 
 export interface ActiveQuest {
@@ -21,6 +21,8 @@ export interface MetaState {
   version: 1;
   // the caravan's current stop; the quest board + both scenes' art route off this
   biome: string;
+  clearedBiomes: string[];
+  activeRun?: import("./run-save").RunCheckpoint;
   // banked resources (keys are per-run tension — they don't bank)
   wood: number;
   ore: number;
@@ -58,6 +60,7 @@ export function defaultMeta(): MetaState {
   return {
     version: 1,
     biome: "plains",
+    clearedBiomes: [],
     wood: 0,
     ore: 0,
     treasure: 0,
@@ -85,17 +88,30 @@ export function loadMeta(): MetaState {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaultMeta();
     const parsed = JSON.parse(raw) as Partial<MetaState>;
-    return { ...defaultMeta(), ...parsed, version: 1 };
+    return migrateMeta(parsed);
   } catch {
     return defaultMeta();
   }
 }
 
-export function saveMeta(m: MetaState): void {
+/** Preserve roads unlocked by the old quest gate when loading older saves. */
+export function migrateMeta(parsed: Partial<MetaState>): MetaState {
+  const m: MetaState = { ...defaultMeta(), ...parsed, version: 1 };
+  m.clearedBiomes = Array.isArray(parsed.clearedBiomes) ? [...parsed.clearedBiomes] : [];
+  const visited = BIOME_ORDER.indexOf(m.biome as typeof BIOME_ORDER[number]);
+  for (const [i, biome] of BIOME_ORDER.entries()) {
+    if ((i < visited || (!Array.isArray(parsed.clearedBiomes) && QUEST_POOLS[biome].every(q => m.questsRewarded.includes(q.id)))) && !m.clearedBiomes.includes(biome))
+      m.clearedBiomes.push(biome);
+  }
+  return m;
+}
+
+export function saveMeta(m: MetaState): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(m));
+    return true;
   } catch {
-    /* storage unavailable (private mode etc.) — play on without persistence */
+    return false;
   }
 }
 
@@ -117,7 +133,7 @@ export function readSlot(n: number): SlotData | null {
     if (!raw) return null;
     const p = JSON.parse(raw) as Partial<SlotData>;
     if (!p.meta) return null;
-    return { savedAt: p.savedAt ?? 0, meta: { ...defaultMeta(), ...p.meta, version: 1 } };
+    return { savedAt: p.savedAt ?? 0, meta: migrateMeta(p.meta) };
   } catch {
     return null;
   }
@@ -126,7 +142,9 @@ export function readSlot(n: number): SlotData | null {
 /** Snapshot the active save into a slot. */
 export function saveToSlot(n: number, m: MetaState): void {
   try {
-    localStorage.setItem(slotKey(n), JSON.stringify({ savedAt: Date.now(), meta: m } satisfies SlotData));
+    const meta = { ...m };
+    delete meta.activeRun; // manual slots contain camp progress; live recovery uses the active save
+    localStorage.setItem(slotKey(n), JSON.stringify({ savedAt: Date.now(), meta } satisfies SlotData));
   } catch {
     /* storage unavailable */
   }
@@ -136,6 +154,7 @@ export function saveToSlot(n: number, m: MetaState): void {
 export function loadFromSlot(n: number): boolean {
   const s = readSlot(n);
   if (!s) return false;
+  delete s.meta.activeRun;
   saveMeta(s.meta);
   return true;
 }
@@ -153,6 +172,8 @@ export function bankRun(
   m.slain += run.kills;
   m.chestsOpened += run.chests;
   m.bestDepth = Math.max(m.bestDepth, run.kills); // depth == kills this run
+  if (run.kills >= 20 && !m.clearedBiomes.includes(m.biome)) m.clearedBiomes.push(m.biome);
+  delete m.activeRun; // settlement and checkpoint removal share one storage write
   // single-run quests: did this run satisfy any accepted "in one run" targets?
   for (const aq of m.active) {
     const q = questById(aq.id);
@@ -269,7 +290,7 @@ export const DUNGEON_QUESTS: Quest[] = [
   { id: "d_depth20", label: "Defeat the second boss", shortLabel: "clear the deep", reward: 80, kind: "run-depth", target: 20 },
 ];
 
-// Ordered march of the caravan. Each biome has a quest pool that gates the next.
+// Ordered march of the caravan. Each biome has an optional quest pool.
 export const BIOME_ORDER = ["plains", "forest", "snow", "dungeon"] as const;
 export const QUEST_POOLS: Record<string, Quest[]> = {
   plains: PLAINS_QUESTS,
@@ -372,9 +393,9 @@ export function nextBiome(m: MetaState): string | null {
   return i >= 0 && i < BIOME_ORDER.length - 1 ? BIOME_ORDER[i + 1] : null;
 }
 
-/** True when the pool is cleared AND there's somewhere new to go. */
+/** The final boss has fallen and there's somewhere new to go. */
 export function roadOpen(m: MetaState): boolean {
-  return allQuestsDone(m) && nextBiome(m) !== null;
+  return m.clearedBiomes.includes(m.biome) && nextBiome(m) !== null;
 }
 
 /** Break camp and travel to the next biome. Clears any dangling active quests. */
@@ -382,7 +403,7 @@ export function advanceBiome(m: MetaState): boolean {
   const next = nextBiome(m);
   if (!roadOpen(m) || !next) return false;
   m.biome = next;
-  m.active = []; // pool cleared; the new biome offers fresh oaths
+  // Carry optional quests forward; players don't lose accepted goals by traveling.
   saveMeta(m);
   return true;
 }

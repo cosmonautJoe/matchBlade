@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Player animation preview</title>
+<style>
+html,body{margin:0;background:#12231e;color:#eee;font:15px system-ui}header{padding:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,select{font:inherit;padding:9px;background:#233d31;color:white;border:1px solid #8ca977;border-radius:6px}h1{font-size:19px;margin:0;width:100%}#stage{height:260px}canvas{display:block;image-rendering:pixelated}#poses{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:12px;gap:8px}figure{margin:0;text-align:center;background:#294335;border:1px solid #45604e}figure canvas{width:100%}figcaption{padding:4px;color:#e3cf93}#status{padding:0 16px;font-size:13px;color:#b6d8c0}
+</style>
+<header><h1>Original player · animation check</h1><label>Animation <select id="animation"></select></label><button id="play">Replay</button><button id="pause">Pause</button><button id="step">Next frame</button><button id="combo">Sword combo → idle</button></header>
+<p id="status">Loading sprites…</p><p id="checks"></p><div id="stage"></div><div id="poses"></div>
+<script type="module">
+import Phaser from 'phaser';
+import {preloadPlayer,createPlayerAnimations,PLAYER_TEXTURE,PLAYER_ORIGIN,PLAYER_ANIMATIONS,PLAYER_FRAME_COUNT,PLAYER_DENSITY,PLAYER_FRAME_W,PLAYER_FRAME_H,preparePlayerSheet,drawPlayerFrame} from '/src/player-art.ts';
+if(!import.meta.env.DEV) throw new Error('Development preview only');
+const choices=document.querySelector('#animation');
+for(const a of PLAYER_ANIMATIONS){const o=document.createElement('option');o.value=a.key;o.textContent=a.key.replace('hero-','');choices.append(o)}
+let hero,scene,selected=PLAYER_ANIMATIONS[0],sheet,index=0;
+const status=document.querySelector('#status');
+const audit=()=>{
+ const cv=document.createElement('canvas');cv.width=PLAYER_FRAME_W;cv.height=PLAYER_FRAME_H;
+ const c=cv.getContext('2d',{willReadFrequently:true});let clipped=0,empty=0;const feet=[];
+ for(const f of PLAYER_ANIMATIONS.flatMap(a=>a.frames)){
+  c.clearRect(0,0,cv.width,cv.height);drawPlayerFrame(c,sheet,f,0,0,cv.width,cv.height);
+  const a=c.getImageData(0,0,cv.width,cv.height).data;let count=0,bottom=0,edge=false;
+  for(let y=0;y<cv.height;y++)for(let x=0;x<cv.width;x++)if(a[(y*cv.width+x)*4+3]>24){count++;bottom=y+1;if(x===0||y===0||x===cv.width-1||y===cv.height-1)edge=true}
+  if(!count)empty++;if(edge)clipped++;if(PLAYER_ANIMATIONS[0].frames.includes(f))feet.push(bottom);
+ }
+ const drift=Math.max(...feet)-Math.min(...feet);
+ document.querySelector('#checks').textContent=`${PLAYER_FRAME_COUNT} frames checked: ${empty} empty, ${clipped} clipped. Idle ground drift: ${drift}px. Atlas ${sheet.width}×${sheet.height}.`;
+ if(empty||clipped||drift>1)throw new Error('Player frame audit failed');
+};
+const strips=()=>{
+ document.querySelector('#poses').replaceChildren();
+ for(const [i,f] of selected.frames.entries()){
+  const fig=document.createElement('figure'),cv=document.createElement('canvas'),caption=document.createElement('figcaption');
+  cv.width=320;cv.height=256;const c=cv.getContext('2d');c.imageSmoothingEnabled=false;
+  c.fillStyle='#87ab7850';c.fillRect(159,0,2,256);c.fillRect(0,188,320,2);
+  drawPlayerFrame(c,sheet,f,0,0,320,256);caption.textContent=`Frame ${i+1}`;fig.append(cv,caption);document.querySelector('#poses').append(fig);
+ }
+};
+class Preview extends Phaser.Scene{
+ preload(){preloadPlayer(this)}
+ create(){
+  scene=this;createPlayerAnimations(this);sheet=preparePlayerSheet(this.textures.get('player-source').getSourceImage());
+  const w=this.scale.width;
+  this.add.rectangle(w/2,230,w,60,0x314832);
+  this.add.rectangle(w/2,201,w,2,0xb4ca8d);
+  this.add.rectangle(w/2,120,1,160,0x647861);
+  hero=this.add.sprite(w/2,200,PLAYER_TEXTURE).setOrigin(.5,PLAYER_ORIGIN).setScale(7 / PLAYER_DENSITY).play(selected.key);
+  hero.on('animationcomplete',a=>{status.textContent=`${a.key} complete · ${PLAYER_FRAME_COUNT} original sprite frames`});
+  status.textContent=`${PLAYER_FRAME_COUNT} original sprite frames`;strips();audit();
+  this.scale.on('resize',size=>hero.setX(size.width/2));
+ }
+}
+new Phaser.Game({type:Phaser.AUTO,parent:'stage',backgroundColor:'#182b24',pixelArt:true,scale:{mode:Phaser.Scale.RESIZE,width:document.documentElement.clientWidth,height:260},scene:Preview});
+choices.addEventListener('change',()=>{selected=PLAYER_ANIMATIONS.find(a=>a.key===choices.value);index=0;hero.anims.stop();hero.play(selected.key);strips();status.textContent=selected.key+' playing';document.querySelector('#pause').textContent='Pause'});
+document.querySelector('#play').onclick=()=>{hero.anims.stop();hero.play(selected.key);status.textContent=selected.key+' playing';document.querySelector('#pause').textContent='Pause'};
+document.querySelector('#pause').onclick=e=>{if(hero.anims.isPaused){hero.anims.resume();e.target.textContent='Pause'}else{hero.anims.pause();e.target.textContent='Resume'}};
+document.querySelector('#step').onclick=()=>{hero.anims.stop();hero.setFrame(selected.frames[index++%selected.frames.length]);status.textContent='Frame '+((index-1)%selected.frames.length+1)};
+document.querySelector('#combo').onclick=()=>{hero.anims.stop();hero.play('hero-attack').chain(['hero-attack2','hero-attack3','hero-idle']);status.textContent='Three-hit combo playing'};
+</script></html>
+

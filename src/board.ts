@@ -11,7 +11,7 @@
  * animated version lives in the game layer. This module stays pure logic.
  */
 
-// Keep one board topology across rotation: every tile and cascade survives a resize.
+// Default portrait board. Landscape callers supply 10 columns and 5 rows.
 export const W = 7;
 export const H = 7;
 
@@ -41,7 +41,7 @@ export interface Coord { c: number; r: number; }
 export interface Match { cells: Coord[]; type: number; len: number; dir: "h" | "v"; }
 
 /** Build a full grid with no pre-existing matches (so play starts stable). */
-export function makeInitialGrid(rand: () => number = Math.random): number[][] {
+export function makeInitialGrid(rand: () => number = Math.random, W = 7, H = 7): number[][] {
   const g: number[][] = Array.from({ length: H }, () => Array<number>(W).fill(EMPTY));
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
@@ -60,6 +60,7 @@ export function makeInitialGrid(rand: () => number = Math.random): number[][] {
 
 /** Find every horizontal/vertical run of 3+ same-type tiles. */
 export function findMatches(g: number[][]): Match[] {
+  const H = g.length, W = g[0]?.length ?? 0;
   const out: Match[] = [];
 
   // horizontal
@@ -121,6 +122,7 @@ export function hasPossibleMove(g: number[][]): boolean {
 
 /** The first adjacent swap that would create a match — the pair the Hint button lights up. */
 export function findHint(g: number[][]): { a: Coord; b: Coord } | null {
+  const H = g.length, W = g[0]?.length ?? 0;
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
       if (c + 1 < W && swapMakesMatch(g, { r, c }, { r, c: c + 1 })) return { a: { r, c }, b: { r, c: c + 1 } };
@@ -136,6 +138,7 @@ export function findHint(g: number[][]): { a: Coord; b: Coord } | null {
  * an animated equivalent; this headless version is handy for logic/tests.)
  */
 export function collapseAndRefill(g: number[][], rand: () => number = Math.random) {
+  const H = g.length, W = g[0]?.length ?? 0;
   for (let c = 0; c < W; c++) {
     const survivors: number[] = [];
     for (let r = 0; r < H; r++) if (g[r][c] !== EMPTY) survivors.push(g[r][c]);

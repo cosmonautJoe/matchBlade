@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Run flow checks</title>
+<style>body{font:18px system-ui;background:#101c25;color:white;padding:20px}button{display:block;padding:16px;margin:12px 0;font:inherit}pre{white-space:pre-wrap;font-size:14px}</style>
+<h1>Run flow checks</h1><p>Use a separate dev server on port 5174. Fixtures never run on the normal game origin.</p>
+<button data-case="fight">Recover a 10×5 fight</button><button data-case="chest">Recover interrupted chest</button>
+<button data-case="boss">Recover boss stage 2</button><button data-case="victory">Finish road and unlock travel</button>
+<button data-case="tutorial">Fresh portrait tutorial</button><pre id="status"></pre>
+<script type="module">
+import {defaultMeta,saveMeta,loadMeta} from '/src/meta.ts';
+import {makeInitialGrid} from '/src/board.ts';
+import {newRun,makeEnemy} from '/src/run.ts';
+import {itemById} from '/src/items.ts';
+document.querySelector('#status').textContent=JSON.stringify(loadMeta(),null,2);
+for(const button of document.querySelectorAll('button'))button.onclick=()=>{
+ if(location.port!=='5174')throw new Error('Use isolated port 5174');
+ const kind=button.dataset.case,m=defaultMeta();
+ m.campIntroSeen=true;m.peddlerArrived=true;m.tutorialSeen=kind!=='tutorial';m.wood=22;m.ore=18;
+ if(kind!=='tutorial'){
+ const run=newRun(0,3,'plains',0);run.killed=kind==='victory'?20:kind==='boss'?9:4;
+ run.enemy=kind==='chest'||kind==='victory'?null:makeEnemy(run.killed,'plains',()=>0);
+ run.pressure=.4;run.block=8;run.resources={wood:8,ore:6,treasure:3,keys:2};run.score=400;
+ m.activeRun={version:1,savedAt:Date.now(),run,grid:makeInitialGrid(Math.random,10,5),items:['hearth',null,null,null,null,null],
+ chestsOpened:kind==='chest'||kind==='victory'?2:1,sinceChest:0,bestCascade:2,rainy:false,arenaWard:kind==='boss'?1:0,
+ pendingChest:kind==='chest'||kind==='victory'?[{kind:'wood',n:8,icon:'🪵'},{kind:'item',n:1,icon:'🗺️',item:itemById('ink')}]:null,
+ buffs:{freezeLeft:0,hornLeft:0,ledgerLeft:0,burnLeft:0,burnAcc:0,skeletonCharges:0,panCharges:0,spursActive:false,inkActive:false,bossChestNext:false}};
+ }
+ saveMeta(m);location.href='/';
+};
+</script></html>

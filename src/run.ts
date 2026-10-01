@@ -55,6 +55,7 @@ export interface RunState {
   score: number;
   resources: Resources;
   over: boolean;
+  endReason?: "pressure" | "enemy" | "boss";
   biome: string; // the road we're on — picks which creatures the zone fields
   swordBonus: number; // forge upgrades: extra damage folded into the first sword hit
   spellBonus: number; // Aldwin's study: extra damage folded into every cast
@@ -273,7 +274,7 @@ function clampPressure(s: RunState) {
  * funnel through here). Handles score, the kill, and the forward surge.
  *
  * The BOSS is immune to ordinary damage: he is only felled by his arena
- * minigame, whose execution passes `force`. Without this, the ~1.6s of his
+ * minigame, whose completion passes `force`. Without this, the ~1.6s of his
  * walk-in — before the arena takes over — left him damageable, and a banked
  * sword match could chip or even kill him as he strode in.
  */
@@ -403,6 +404,7 @@ export function pierceStrike(s: RunState): number {
   const net = s.enemy.power * ARENA_PIERCE_MULT * s.pierceMult; // the Salve softens the landing
   s.pressure += net;
   clampPressure(s);
+  if (s.over) s.endReason = "boss";
   return net;
 }
 
@@ -425,6 +427,7 @@ export function enemyStrike(s: RunState): number {
   const net = s.enemy.power * ((cost - paid) / cost); // what you can't pay for lands
   s.pressure += net;
   clampPressure(s);
+  if (s.over) s.endReason = "enemy";
   return net;
 }
 
@@ -442,4 +445,5 @@ export function scroll(s: RunState, dp: number): void {
   if (s.over || dp <= 0) return;
   s.pressure += dp;
   clampPressure(s);
+  if (s.over) s.endReason = "pressure";
 }

@@ -25,6 +25,7 @@ export class MenuScene extends Phaser.Scene {
   private root: Phaser.GameObjects.Container | null = null;
   private view: View = "main";
   private dragging: ((px: number) => void) | null = null; // active slider, if any
+  private redraw: () => void = () => this.showMain();
 
   constructor() {
     super("menu");
@@ -38,7 +39,14 @@ export class MenuScene extends Phaser.Scene {
   create() {
     const vw = this.scale.width;
     const vh = this.scale.height;
-    this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.7).setInteractive(); // swallow taps to the world
+    const shade = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.7).setInteractive();
+    const resize = () => {
+      this.dragging = null;
+      shade.setPosition(this.scale.width / 2, this.scale.height / 2).setSize(this.scale.width, this.scale.height);
+      this.redraw();
+    };
+    this.scale.on("resize", resize);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", resize));
 
     this.input.keyboard?.on("keydown-ESC", () => {
       if (this.view === "main" || this.direct) this.resume();
@@ -74,6 +82,8 @@ export class MenuScene extends Phaser.Scene {
     const bg = this.add.rectangle(vw / 2, vh / 2, W, h, 0x14171f, 0.98).setStrokeStyle(3, 0x2a2d38);
     box.add(bg);
     this.root = box;
+    const fit = Math.min(1, (vh - 16) / h);
+    box.setScale(fit).setPosition(vw / 2 * (1 - fit), vh / 2 * (1 - fit));
     return { box, x: vw / 2, y: vh / 2 - h / 2, w: W };
   }
 
@@ -122,6 +132,7 @@ export class MenuScene extends Phaser.Scene {
   // ---- views ----------------------------------------------------------------
 
   private showMain() {
+    this.redraw = () => this.showMain();
     this.view = "main";
     const inRun = this.from === "game"; // retreat only means something mid-run
     const compact = this.scale.height < 520;
@@ -130,7 +141,7 @@ export class MenuScene extends Phaser.Scene {
     this.title(box, x, y, "— PAUSED —");
     const bw = w - 80;
     let by = y + (compact ? 68 : 92);
-    const step = compact ? 46 : 58;
+    const step = compact ? Math.min(46, (H - 100) / (inRun ? 5 : 4)) : 58;
     this.button(box, x, by, bw, "resume", () => this.resume());
     if (inRun)
       this.button(box, x, (by += step), bw, "return to camp", () =>
@@ -157,7 +168,7 @@ export class MenuScene extends Phaser.Scene {
     this.button(box, x, (by += step), bw, "save game", () => this.showSlots("save"));
     this.button(box, x, (by += step), bw, "load game", () => this.showSlots("load"));
     this.button(box, x, (by += step), bw, "options", () => this.showOptions());
-    box.add(
+    if (!compact) box.add(
       this.add
         .text(x, y + H - 22, "esc closes · progress auto-saves as you play", { fontFamily: "monospace", fontSize: "13px", color: "#8a93a3" })
         .setOrigin(0.5),
@@ -165,6 +176,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private showOptions() {
+    this.redraw = () => this.showOptions();
     this.view = "options";
     const { box, x, y, w } = this.freshRoot(330);
     this.title(box, x, y, "OPTIONS");
@@ -201,7 +213,8 @@ export class MenuScene extends Phaser.Scene {
     box.add([track, fill, knob, pct]);
 
     const apply = (px: number) => {
-      const v = Phaser.Math.Clamp((px - tx) / tw, 0, 1);
+      const localX = (px - box.x) / box.scaleX;
+      const v = Phaser.Math.Clamp((localX - tx) / tw, 0, 1);
       fill.width = Math.max(1, tw * v);
       knob.x = tx + tw * v;
       pct.setText(`${Math.round(v * 100)}`);
@@ -217,6 +230,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private showSlots(mode: "save" | "load") {
+    this.redraw = () => this.showSlots(mode);
     this.view = mode;
     const { box, x, y, w } = this.freshRoot(380);
     this.title(box, x, y, mode === "save" ? "SAVE GAME" : "LOAD GAME");
@@ -278,12 +292,13 @@ export class MenuScene extends Phaser.Scene {
 
   /** Inline confirm view for the irreversible moves. */
   private confirmStep(message: string, yesLabel: string, yes: () => void, back: () => void) {
+    this.redraw = () => this.confirmStep(message, yesLabel, yes, back);
     this.view = "confirm";
     const { box, x, y, w } = this.freshRoot(240);
     this.title(box, x, y, "ARE YOU SURE?");
     box.add(
       this.add
-        .text(x, y + 104, message, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#dfe3ea", align: "center", lineSpacing: 6 })
+        .text(x, y + 104, message, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#dfe3ea", align: "center", lineSpacing: 6, wordWrap: { width: w - 40 } })
         .setOrigin(0.5),
     );
     this.button(box, x - (w - 80) / 4 - 6, y + 240 - 44, (w - 92) / 2, yesLabel, yes, { danger: true });

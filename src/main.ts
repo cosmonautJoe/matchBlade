@@ -19,9 +19,8 @@
  */
 
 import Phaser from "phaser";
+import { preloadPlayer, createPlayerAnimations, PLAYER_TEXTURE, PLAYER_DENSITY, PLAYER_ORIGIN } from "./player-art";
 import {
-  W,
-  H,
   TYPES,
   EMPTY,
   type Coord,
@@ -91,6 +90,9 @@ import { sfxV, ambV, musicV, audioSettings, setAudioSettings, setSoundLevel } fr
 import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress, forgeCap } from "./meta";
 import { Tutorial } from "./tutorial";
 import { showResults } from "./results";
+import { readCheckpoint, type RunCheckpoint } from "./run-save";
+import { malgrimArena, malgrimToken } from "./malgrim-art";
+import { showChestReward } from "./chest-reward";
 
 // ---- layout ---------------------------------------------------------------
 // The centre column (runner lane over the match board) is authored in these fixed
@@ -98,8 +100,8 @@ import { showResults } from "./results";
 // to the live viewport. Side panels (resources / item slots) fill the leftover width,
 // so the game fills any landscape screen — phone or desktop — with no letterboxing.
 const TILE = 92;
-const GRID_W = W * TILE; // 10*92 = 920
-const GRID_H = H * TILE; // 5*92 = 460
+const GRID_W = 7 * TILE; // fixed runner design width
+const GRID_H = 7 * TILE; // default portrait / chest presentation
 const PADIN = 8; // compact inset keeps more room for the board
 // Keep the runner as a shallow cinematic strip so the puzzle owns most of a
 // landscape phone. The whole centre can then scale up without stretching tiles.
@@ -109,7 +111,7 @@ const GRID_GAP = 10; // combat sits immediately above the tiles
 const LANE_Y = PADIN;
 const GRID_X = PADIN; // board / lane left inset (design-local)
 const GRID_Y = LANE_Y + LANE_H + GRID_GAP; // board top (design-local)
-const CENTER_DW = GRID_W + PADIN * 2; // 944 — centre-column design width
+const CENTER_DW = GRID_W + PADIN * 2; // runner design width
 const CENTER_DH = GRID_Y + GRID_H + PADIN; // centre-column design height
 const CXC = CENTER_DW / 2; // centre-column horizontal centre (design-local)
 const UI_W = GRID_W; // lane inner width
@@ -137,7 +139,7 @@ interface ItemSlotUI {
 const FLOOR_H = 42; // thicker ground makes the scrolling terrain easier to read
 const GROUND_Y = LANE_Y + LANE_H - FLOOR_H; // feet / floor-surface line
 // Foot fraction measured from each sheet (lowest opaque pixel) so they sit on the ground.
-const HERO_ORIGIN = 0.734; // WarriorMan feet at y47/64
+const HERO_ORIGIN = PLAYER_ORIGIN;
 const SLIME_ORIGIN = 0.656; // slime base at y41/64
 const SKULL_X = PADIN + 28; // death marker at the far left of the lane
 const SAFE_X = PADIN + GRID_W * 0.43;
@@ -146,7 +148,7 @@ const ENTER_X = CENTER_DW + 80; // enemies walk in from off the right
 const HERO_SCALE = 3.15;
 const SLIME_SCALE = 3.15;
 // boss: the Cindermage (Evil Wizard pack, CC0) — 150x150 frames, feet at y101, faces right natively
-const BOSS_SCALE = 1.25;
+const BOSS_SCALE = 2.15;
 const BOSS_ORIGIN = 0.675;
 
 // How each creature variant is dressed on the lane. animPrefix drives the
@@ -246,7 +248,7 @@ const SWIPE_TOL = 55;
 type SwipeDir = "up" | "down" | "left" | "right";
 const SWIPE_GLYPH: Record<SwipeDir, string> = { up: "↑", down: "↓", left: "←", right: "→" };
 const SWIPE_ANGLE: Record<SwipeDir, number> = { right: 0, down: 90, left: 180, up: -90 };
-/** Per-boss stage cards. Every warden runs exactly three, then the execution. */
+/** Per-boss stage cards. Every warden is defeated after exactly three stages. */
 type StageCard = { title: string; sub: string; taunt: string };
 const BOSS_STAGES: Record<string, StageCard[]> = {
   malgrim: [
@@ -294,7 +296,7 @@ const TENNIS_EARLY_MS = 140; // the tap window opens this early before the ball 
 const TENNIS_LATE_MS = 110; // ...and forgives this much lateness
 const TENNIS_WHIFF_LOCK_MS = 380; // a swing at nothing leaves you open — mashing loses
 // ---- GORRACH'S GORING RUN (forest boss arena) ------------------------------
-// Three horns, three different games, then the execution.
+// Three horns, three different games, then victory.
 //   HORN I   THE CHARGE    — three trampled paths. He paws, one path lights
 //                            RED, then he charges it. Tap another path to leap
 //                            clear. The telegraph shortens; the last charge
@@ -407,7 +409,7 @@ const BOSS_DEFS: Record<string, BossDef> = {
 const BOSS_FOR_BIOME: Record<string, string> = { plains: "malgrim", forest: "gorrach", snow: "hoarfrost", dungeon: "malgrim" };
 const bossForBiome = (biome: string) => BOSS_DEFS[BOSS_FOR_BIOME[biome] ?? "malgrim"];
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
-const DEATH_BODY_LEFT = 27; // px the flat death pose extends left of the sprite x (measured in warrior.png); used to keep the corpse on-lane
+const DEATH_BODY_LEFT = 27; // original sprite's sideways fall
 const HP_W = 70;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
@@ -561,6 +563,10 @@ function buzz(ms = 14) {
 
 class GameScene extends Phaser.Scene {
   // board
+  private recovered: RunCheckpoint | null = null;
+  private pendingChest: ChestPull[] | null = null;
+  private checkpointAt = 0;
+  private saveWarningShown = false;
   private grid: number[][] = [];
   private tiles: (Phaser.GameObjects.Container | null)[][] = [];
   private frags: { o: Phaser.GameObjects.Image; vx: number; vy: number; vr: number; life: number }[] = []; // falling tile pieces
@@ -625,6 +631,20 @@ class GameScene extends Phaser.Scene {
   // responsive shell: the lane + board live in centerBox (design coords), scaled to
   // fit the viewport; the side panels flank it and absorb the leftover width.
   private centerBox!: Phaser.GameObjects.Container;
+  private puzzleBox!: Phaser.GameObjects.Container;
+  private wideLayout = false;
+  private puzzleScale = 1;
+  private boardCols = 7;
+  private boardRows = 7;
+  private get boardWidth() { return this.boardCols * TILE; }
+  private get boardHeight() { return this.boardRows * TILE; }
+  private get boardCenter() { return GRID_X + this.boardWidth / 2; }
+  private portraitLaneTop = 0;
+  private portraitBoardBottom = 0;
+  private portraitFooterHeight = 140;
+  private laneClip?: Phaser.GameObjects.Graphics;
+  private runProgress!: Phaser.GameObjects.Graphics;
+  private runProgressRect = new Phaser.Geom.Rectangle();
   private centerScale = 1;
   private centerBaseX = 0;
   private centerBaseY = 0;
@@ -704,8 +724,7 @@ class GameScene extends Phaser.Scene {
     const sheet = (key: string, file: string, fw: number, fh: number) => {
       if (!this.textures.exists(key)) this.load.spritesheet(key, `sprites/${file}`, { frameWidth: fw, frameHeight: fh });
     };
-    // hero: WarriorMan — one 10x3 sheet of 80x64 frames (row0 idle, row1 attack)
-    sheet("warrior", "warrior.png", 80, 64);
+    preloadPlayer(this);
     // enemy: slime — top-down pack, 64x64 frames; we use the front-facing row 0
     sheet("slime-idle", "slime_idle.png", 64, 64);
     sheet("slime-walk", "slime_run.png", 64, 64);
@@ -800,9 +819,18 @@ class GameScene extends Phaser.Scene {
   }
 
   create() {
+    this.recovered = this.devJumpBoss ? null : readCheckpoint(loadMeta());
+    this.pendingChest = null;
+    this.checkpointAt = 0;
+    this.saveWarningShown = false;
+    // Pick the topology once. Rotation only changes presentation: never grant a free reshuffle.
+    this.boardCols = this.scale.width >= this.scale.height ? 10 : 7;
+    this.boardRows = this.boardCols === 10 ? 5 : 7;
+    if (this.recovered) { this.boardRows = this.recovered.grid.length; this.boardCols = this.recovered.grid[0].length; }
     this.meta = loadMeta();
     // forge + study bite all run; the zone fields its own bestiary
     this.run = newRun(this.meta.swordLevel, forgeCap(this.meta.biome), this.meta.biome, this.meta.staffLevel);
+    if (this.recovered) this.run = structuredClone(this.recovered.run);
     this.boss = bossForBiome(this.meta.biome); // each road has its own warden and its own game
     this.chestsOpened = 0;
     this.busy = false;
@@ -817,6 +845,7 @@ class GameScene extends Phaser.Scene {
     this.bossBar = null;
     // no weather underground; the pass snows instead of raining
     this.rainy = this.meta.biome === "snow" || this.meta.biome === "dungeon" ? false : Math.random() < RAIN_CHANCE;
+    if (this.recovered) this.rainy = this.recovered.rainy;
     this.heroLockX = false;
     this.heroKnock = 0;
     this.settleCamera(); // a restart must never inherit a stranded zoom/shake
@@ -885,8 +914,18 @@ class GameScene extends Phaser.Scene {
     this.buildGrassGround();
     this.buildPanels();
     this.centerBox = this.add.container(0, 0);
+    this.puzzleBox = this.add.container(0, 0);
     this.buildLane();
     this.buildBoard();
+    if (this.recovered) {
+      const c = this.recovered;
+      Object.assign(this, c.buffs);
+      this.chestsOpened = c.chestsOpened; this.sinceChest = c.sinceChest; this.bestCascade = c.bestCascade;
+      for (const [i, id] of c.items.entries()) if (id) {
+        const def = itemById(id); if (def) this.fillSlot(def, this.itemSlots[i]);
+      }
+      if (c.pendingChest) for (const pull of c.pendingChest) this.applyPull(pull);
+    }
     this.buildInput();
     // danger vignette: screen-space (NOT the centre column) so it hugs the viewport edges
     this.vignette = this.add.image(0, 0, "vignette").setDepth(76).setAlpha(0);
@@ -940,17 +979,18 @@ class GameScene extends Phaser.Scene {
     // scenes, and a lingering camp scene would show its SKY through that gap.
     // Painting our own background makes the run visually self-contained.
     this.cameras.main.setBackgroundColor(0x0a0b0f);
-    this.cameras.main.fadeIn(300, 5, 6, 10);
+    if (!this.recovered) this.cameras.main.fadeIn(300, 5, 6, 10);
+    else this.cameras.main.resetFX();
     // intro: the hero jogs in from off the left edge to meet the first foe.
     // Slow both approaches together so the hero's run reads at a natural pace.
-    const INTRO_MS = 1550;
-    this.spawnOrc(INTRO_MS);
+    const INTRO_MS = this.recovered ? 500 : 1550;
+    if (this.run.killed < RUN_COMPLETE_AT) this.spawnOrc(INTRO_MS);
     this.hero.setX(-30);
     this.heroLockX = true;
     this.hero.play("hero-walk", true);
     this.tweens.add({
       targets: this.hero,
-      x: SAFE_X,
+      x: this.heroXForPressure(),
       duration: INTRO_MS - 40, // arrive just before the slime, so enterFight's idle looks right
       ease: "Sine.easeOut",
       onComplete: () => (this.heroLockX = false),
@@ -971,17 +1011,17 @@ class GameScene extends Phaser.Scene {
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
     // the Peddler's goods: items bought at camp arrive already packed in slots
-    const stocked = this.meta.stockedItems ?? [];
+    const stocked = this.recovered ? [] : this.meta.stockedItems ?? [];
     if (stocked.length) {
       this.meta.stockedItems = [];
-      saveMeta(this.meta);
-      this.time.delayedCall(900, () => {
+      // Packed items and their checkpoint are persisted together below.
+      {
         for (const id of stocked) {
           const def = itemById(id);
           if (def) this.fillSlot(def);
         }
         this.notice("Items from the shop are ready.", "#ffe08a");
-      });
+      }
     }
 
     // first time into the puzzle: the guided tutorial runs over the live scene
@@ -994,6 +1034,19 @@ class GameScene extends Phaser.Scene {
     }
 
     this.installSwipeReader();
+    this.writeCheckpoint(true);
+    const suspend = () => { this.writeCheckpoint(); this.openMenu(); };
+    const hidden = () => { if (document.hidden) suspend(); };
+    document.addEventListener("visibilitychange", hidden);
+    window.addEventListener("pagehide", suspend);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      document.removeEventListener("visibilitychange", hidden);
+      window.removeEventListener("pagehide", suspend);
+    });
+    if (this.recovered) this.time.delayedCall(0, () => {
+      if (this.run.killed >= RUN_COMPLETE_AT) this.showRunComplete();
+      else { this.notice("Run restored. Resume when you're ready.", "#82efcd"); this.openMenu(); }
+    });
 
     if (import.meta.env.DEV) (globalThis as unknown as { __mb: GameScene }).__mb = this;
 
@@ -1011,17 +1064,7 @@ class GameScene extends Phaser.Scene {
       if (this.anims.exists(key)) return;
       this.anims.create({ key, frames: this.anims.generateFrameNumbers(tex, { start, end }), frameRate: fps, repeat });
     };
-    // hero (WarriorMan full sheet 80x64, 16 cols x 25 rows) — official row order:
-    // row0 Idle (0-7), row2 Walk (32-39), row3 Run (48-55). Attack combo rows:
-    // row9 Attack (144-150), row10 Attack 2 (160-164), row11 Attack 3 (176-183),
-    // row12 Spell (192-207, blue sword). NB: row4 is Jump, row6 Jump-Attack — not ground play.
-    mk("hero-idle", "warrior", 0, 7, 8, -1);
-    mk("hero-walk", "warrior", 48, 55, 15, -1);
-    mk("hero-attack", "warrior", 144, 150, 18, 0);
-    mk("hero-attack2", "warrior", 160, 164, 18, 0);
-    mk("hero-attack3", "warrior", 176, 183, 18, 0);
-    mk("hero-spell", "warrior", 192, 207, 18, 0);
-    mk("hero-death", "warrior", 368, 374, 10, 0); // row 23 Death (plays on game over)
+    createPlayerAnimations(this);
     // enemy slime — front-facing row 0 of each 64x64 sheet (keep orc-* keys)
     mk("orc-idle", "slime-idle", 0, 5, 6, -1);
     mk("orc-walk", "slime-walk", 0, 7, 10, -1);
@@ -1119,7 +1162,7 @@ class GameScene extends Phaser.Scene {
     const p = this.toLocal(x, y); // pointer is screen px; the board lives in the scaled centre column
     const c = Math.floor((p.x - GRID_X) / TILE);
     const r = Math.floor((p.y - GRID_Y) / TILE);
-    if (c < 0 || c >= W || r < 0 || r >= H) return null;
+    if (c < 0 || c >= this.boardCols || r < 0 || r >= this.boardRows) return null;
     return { r, c };
   }
   private heroXForPressure() {
@@ -1131,8 +1174,10 @@ class GameScene extends Phaser.Scene {
 
   // --- responsive shell helpers ---
   /** Parent a game-world object into the scaled centre column. */
-  private inBox<T extends Phaser.GameObjects.GameObject>(o: T): T {
-    this.centerBox.add(o);
+  private inBox<T extends Phaser.GameObjects.GameObject>(o: T, puzzle?: boolean): T {
+    const positioned = o as Phaser.GameObjects.GameObject & { y?: number };
+    const onBoard = puzzle ?? (o instanceof Phaser.GameObjects.Graphics || (positioned.y ?? 0) >= GRID_Y);
+    (onBoard ? this.puzzleBox : this.centerBox).add(o);
     return o;
   }
 
@@ -1142,6 +1187,9 @@ class GameScene extends Phaser.Scene {
   }
   /** screen px -> design-local. */
   private toLocal(sx: number, sy: number) {
+    if (sy >= this.puzzleBox.y + GRID_Y * this.puzzleScale) {
+      return { x: (sx - this.puzzleBox.x) / this.puzzleScale, y: (sy - this.puzzleBox.y) / this.puzzleScale };
+    }
     return { x: (sx - this.centerBox.x) / this.centerScale, y: (sy - this.centerBox.y) / this.centerScale };
   }
 
@@ -1166,29 +1214,35 @@ class GameScene extends Phaser.Scene {
     const y0 = ins.t;
     const uw = Math.max(120, vw - ins.l - ins.r);
     const uh = Math.max(120, vh - ins.t - ins.b);
-    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
     const portrait = uh > uw;
-    // Portrait uses the side art as slim edge rails, leaving the readable HUD
-    // and the full board width to the centre column. Landscape keeps the full
-    // resource and item rails around the combat scene.
-    const leftW = portrait ? 0 : Math.round(clamp(uw * 0.15, 128, 200));
-    const rightW = portrait ? 0 : Math.round(clamp(uw * 0.075, 68, 112));
-    const availW = Math.max(80, uw - leftW - rightW);
-    const topReserve = portrait ? 68 : 0;
-    const bottomReserve = portrait ? 174 : 0;
-    const usableH = Math.max(120, uh - topReserve - bottomReserve);
-    const s = Math.min(availW / CENTER_DW, usableH / CENTER_DH);
+    this.wideLayout = !portrait;
+    if (this.wideLayout) {
+      this.layoutWide(x0, y0, uw, uh);
+      return;
+    }
+    // Size the square puzzle from the phone width. Crop excess sky in the
+    // runner instead of shrinking both play surfaces to fit their total height.
+    const topReserve = 64;
+    this.portraitFooterHeight = uh < 640 ? 120 : 140;
+    const progressGap = 16;
+    const minLaneHeight = Math.max(80, Math.min(100, uh * .14));
+    const roomHeight = uh - topReserve - this.portraitFooterHeight - minLaneHeight - progressGap;
+    const boardSize = Math.min(uw - 12, roomHeight * this.boardWidth / this.boardHeight);
+    const puzzleScale = boardSize / this.boardWidth;
+    const boardHeight = this.boardHeight * puzzleScale;
+    const s = boardSize / GRID_W;
     this.centerScale = s;
-    const cw = CENTER_DW * s;
-    const ch = CENTER_DH * s;
-    // Let the existing decorated rails use spare width instead of black gutters.
-    const spare = Math.max(0, uw - leftW - cw - rightW);
+    const cw = boardSize;
     const shellW = uw;
     const shellX = x0;
-    const cx = Math.round(shellX + leftW + spare * 0.5);
-    const cy = portrait
-      ? Math.round(y0 + topReserve + Math.max(0, (usableH - ch) * 0.3))
-      : Math.round(y0 + topReserve + (usableH - ch) / 2);
+    const boardX = x0 + (uw - boardSize) / 2;
+    const laneHeight = Math.min(LANE_H * s, uh - topReserve - this.portraitFooterHeight - boardHeight - progressGap);
+    this.portraitLaneTop = y0 + topReserve;
+    const cx = boardX - GRID_X * s;
+    const cy = this.portraitLaneTop + laneHeight - (LANE_Y + LANE_H) * s;
+    const boardTop = this.portraitLaneTop + laneHeight + progressGap;
+    this.runProgressRect.setTo(boardX + 5, boardTop - progressGap / 2 - 3, boardSize - 10, 6);
+    this.portraitBoardBottom = boardTop + boardHeight;
     this.centerBaseX = cx;
     this.centerBaseY = cy;
     this.centerBaseScale = s;
@@ -1198,11 +1252,22 @@ class GameScene extends Phaser.Scene {
     }
     const view = this.tutorialHitFocus ? this.tutorialHitView() : { x: cx, y: cy, scale: s };
     this.applyCenterView(view.x, view.y, view.scale);
+    this.puzzleScale = puzzleScale;
+    this.puzzleBox.setScale(puzzleScale).setPosition(boardX - GRID_X * puzzleScale, boardTop - GRID_Y * puzzleScale);
+    this.centerBox.clearMask(true);
+    if (!this.laneClip?.scene) this.laneClip = this.add.graphics().setVisible(false);
+    this.laneClip.clear().fillStyle(0xffffff).fillRect(boardX - 1, this.portraitLaneTop, boardSize + 2, laneHeight);
+    this.centerBox.setMask(this.laneClip.createGeometryMask());
     this.laneHudScale = Math.max(1, 1 / s);
-    this.laneGuard.setScale(this.laneHudScale).setPosition(GRID_X + 6 / s, LANE_Y + 20 / s);
-    this.laneMutes.forEach((chip, i) => chip.setScale(this.laneHudScale)
-      .setPosition(GRID_X + UI_W - (26 + i * 46) / s, LANE_Y + 24 / s));
+    const hudY = (this.portraitLaneTop - cy) / s;
+    this.laneGuard.setScale(this.laneHudScale).setPosition(GRID_X + 6 / s, hudY + 20 / s);
+    this.laneMutes.forEach((chip, i) => {
+      chip.setScale(this.laneHudScale).setPosition(GRID_X + UI_W - (26 + i * 46) / s, hudY + 24 / s);
+      const compact = Math.min(uw, uh) <= 600;
+      (chip.getAt(0) as Phaser.GameObjects.Rectangle).setSize(compact ? 28 : 44, compact ? 28 : 40);
+    });
     this.defBadge.setFontSize(this.worldFont(13, 15));
+    this.layoutBossBar();
     if (this.tutorialViewTweenDone) {
       const done = this.tutorialViewTweenDone;
       this.tutorialViewTweenDone = null;
@@ -1212,9 +1277,60 @@ class GameScene extends Phaser.Scene {
     this.layoutPanels(shellX, y0, shellW, uh, cx, cw);
   }
 
+  /** Classic landscape composition: stats | fight above puzzle | inventory. */
+  private layoutWide(x: number, y: number, w: number, h: number) {
+    const leftW = Phaser.Math.Clamp(w * .15, 160, 220);
+    const rightW = Phaser.Math.Clamp(w * .075, 64, 112);
+    const gap = 16;
+    // Fit the 10×5 board and runner into the entire centre column with square tiles.
+    const available = Math.max(100, w - leftW - rightW - 8);
+    const aspect = this.boardHeight / this.boardWidth;
+    const boardSize = Math.min(available, (h - gap - 16) / (aspect + 180 / GRID_W), (h - gap - 100) / aspect);
+    const scale = boardSize / GRID_W;
+    const puzzleScale = boardSize / this.boardWidth;
+    const boardHeight = this.boardHeight * puzzleScale;
+    const laneHeight = Math.max(84, 180 * scale);
+    const totalHeight = laneHeight + gap + boardHeight;
+    const shellWidth = leftW + boardSize + rightW + 8;
+    const shellX = x + (w - shellWidth) / 2;
+    const boardX = shellX + leftW + 4;
+    const laneTop = y + (h - totalHeight) / 2;
+    const laneX = boardX - GRID_X * scale;
+    const laneY = laneTop + laneHeight - (LANE_Y + LANE_H) * scale;
+    const boardTop = laneTop + laneHeight + gap;
+    this.centerBaseX = laneX; this.centerBaseY = laneY; this.centerBaseScale = scale;
+    this.portraitLaneTop = laneTop; // visible lane edge, shared by labels and masks
+    this.tutorialViewTween?.stop(); this.tutorialViewTween = null;
+    this.applyCenterView(laneX, laneY, scale);
+    this.puzzleScale = puzzleScale;
+    this.puzzleBox.setScale(puzzleScale).setPosition(boardX - GRID_X * puzzleScale, boardTop - GRID_Y * puzzleScale);
+    this.centerBox.clearMask(true);
+    if (!this.laneClip?.scene) this.laneClip = this.add.graphics().setVisible(false);
+    this.laneClip.clear().fillStyle(0xffffff).fillRect(boardX - 1, laneTop, boardSize + 2, laneHeight);
+    this.centerBox.setMask(this.laneClip.createGeometryMask());
+    this.runProgressRect.setTo(boardX + 5, boardTop - gap / 2 - 3, boardSize - 10, 6);
+    this.laneHudScale = Math.max(1, 1 / scale);
+    const hudY = (laneTop - laneY) / scale;
+    this.laneGuard.setScale(this.laneHudScale).setPosition(GRID_X + 6 / scale, hudY + 20 / scale);
+    this.laneMutes.forEach((chip, i) => {
+      chip.setScale(this.laneHudScale).setPosition(GRID_X + UI_W - (26 + i * 46) / scale, hudY + 24 / scale);
+      const compact = Math.min(w, h) <= 600;
+      (chip.getAt(0) as Phaser.GameObjects.Rectangle).setSize(compact ? 28 : 44, compact ? 28 : 40);
+    });
+    this.layoutBossBar();
+    this.defBadge.setFontSize(this.worldFont(13, 15));
+    if (this.tutorialViewTweenDone) {
+      const done = this.tutorialViewTweenDone; this.tutorialViewTweenDone = null;
+      this.time.delayedCall(0, done);
+    }
+    this.vignette?.setPosition(this.scale.width / 2, this.scale.height / 2).setDisplaySize(this.scale.width, this.scale.height);
+    this.refreshHud();
+    this.layoutPanels(shellX, y, shellWidth, h, boardX - 4, boardSize + 8);
+  }
+
   /** Left panel = resources / score / gear; right panel = the vertical item-slot rack. Always visible. */
   private layoutPanels(x0: number, y0: number, uw: number, uh: number, cx: number, cw: number) {
-    const portrait = uh > uw;
+    const portrait = !this.wideLayout;
     const lLeft = x0;
     const lw = cx - x0; // left panel: usable-left -> centre-left
     const rLeft = cx + cw;
@@ -1242,8 +1358,8 @@ class GameScene extends Phaser.Scene {
 
     if (portrait) {
       // Reuse the biome panels as horizontal scenery, with no vertical rails.
-      const above = this.centerBaseY;
-      const below = this.centerBaseY + CENTER_DH * this.centerBaseScale;
+      const above = this.portraitLaneTop;
+      const below = this.portraitBoardBottom;
       this.leftPanel.setPosition(x0 + uw / 2, y0 + (above - y0) / 2)
         .setSize(uw, above - y0).setStrokeStyle(0).setDepth(-2);
       this.rightPanel.setPosition(x0 + uw / 2, below + (y0 + uh - below) / 2)
@@ -1259,27 +1375,27 @@ class GameScene extends Phaser.Scene {
       }
       // Compact top bar: resources remain visible without forcing four tiny
       // rows into the decorative edge rail.
-      const topY = y0 + 14;
+      const topY = y0 + 19;
       const itemW = (uw - 42) / this.resIcons.length;
       for (let i = 0; i < this.resIcons.length; i++) {
         const x = Math.round(x0 + itemW * i + 8);
-        this.resIcons[i].setVisible(true).setPosition(x, topY).setFontSize(18);
-        this.resVals[i].setVisible(true).setPosition(x + 22, topY).setFontSize(16);
+        this.resIcons[i].setVisible(true).setPosition(x, topY).setFontSize(26);
+        this.resVals[i].setVisible(true).setPosition(x + 29, topY).setFontSize(21);
       }
-      this.scoreText.setVisible(true).setPosition(x0 + uw / 2, y0 + 37).setFontSize(14);
-      this.questText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(14)
-        .setWordWrapWidth(uw - 32).setPosition(x0 + 16, y0 + uh - 168);
+      this.scoreText.setVisible(true).setPosition(x0 + uw / 2, y0 + 42).setFontSize(14);
+      this.questText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(this.portraitFooterHeight <= 120 ? 12 : 14).setLineSpacing(2)
+        .setWordWrapWidth(uw - 20).setPosition(x0 + 10, below + 6);
       this.buffText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(14)
-        .setWordWrapWidth(uw - 122).setPosition(x0 + 110, y0 + uh - 51);
+        .setWordWrapWidth(uw - 122).setPosition(x0 + 110, y0 + uh - 32);
       this.menuBtn.setPosition(x0 + uw - 8, y0 + 6).setFontSize(22);
       this.hintBtn.setText("💡 Hint").setPosition(x0 + 8, y0 + uh - 8).setFontSize(14);
       this.gearText.setPosition(x0 + uw - 8, y0 + uh - 8).setVisible(false);
 
       // Inventory sits above the separate hint/effect row.
       const gap = 5;
-      const slot = Math.max(38, Math.min(52, (uw - 16 - (SLOT_N - 1) * gap) / SLOT_N));
+      const slot = Math.max(38, Math.min(this.portraitFooterHeight <= 120 ? 40 : 48, (uw - 16 - (SLOT_N - 1) * gap) / SLOT_N));
       const totalW = SLOT_N * slot + (SLOT_N - 1) * gap;
-      const rackY = y0 + uh - 87;
+      const rackY = y0 + uh - 46 - slot / 2;
       for (let i = 0; i < SLOT_N; i++) {
         const x = Math.round(x0 + (uw - totalW) / 2 + slot / 2 + i * (slot + gap));
         const it = this.itemSlots[i];
@@ -1298,10 +1414,10 @@ class GameScene extends Phaser.Scene {
     this.leftPanel.setDepth(0).setStrokeStyle(2, 0x526342);
     this.rightPanel.setDepth(0).setStrokeStyle(2, 0x526342);
     this.panelDecor.forEach(d => d.ts.setVisible(true).setDepth(0).setAlpha(d.ts.getData("landscapeAlpha") ?? d.ts.alpha));
-    this.questText.setVisible(true);
-    this.buffText.setVisible(true);
-    this.scoreText.setFontSize(17);
-    this.gearText.setVisible(!import.meta.env.PROD);
+    this.questText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(14).setLineSpacing(3);
+    this.buffText.setVisible(true).setFontSize(13);
+    this.scoreText.setVisible(true).setFontSize(17);
+    this.gearText.setVisible(false);
     this.resIcons.forEach((icon) => icon.setVisible(true));
     this.resVals.forEach((value) => value.setVisible(true));
 
@@ -1333,7 +1449,7 @@ class GameScene extends Phaser.Scene {
 
     // Bottom controls own their own strip; active effects above can never share
     // the hint button's baseline.
-    this.hintBtn.setText("💡 Hint").setPosition(padX, y0 + uh - 12);
+    this.hintBtn.setText("💡 Hint").setFontSize(14).setPosition(padX, y0 + uh - 12);
     this.gearText.setPosition(lLeft + lw - 40, y0 + uh - 12);
     this.menuBtn.setPosition(x0 + uw - 10, y0 + 6);
 
@@ -1372,6 +1488,7 @@ class GameScene extends Phaser.Scene {
         this.panelDecor.push({ ts, edge: d.edge, h: d.h, side });
       }
     this.buildPanelLife(theme.kind); // created HERE so the critters render under the text/slots
+    this.runProgress = this.add.graphics().setDepth(-0.5);
 
     // resources: one icon + one number per row, positioned explicitly so spacing is exact
     const RES_GLYPHS = ["🪵", "🪨", "💎", "🔑"];
@@ -1473,10 +1590,11 @@ class GameScene extends Phaser.Scene {
     this.holdTimer = null;
   }
   private refreshHud() {
+    this.drawRunProgress();
     const r = this.run.resources;
     const vals = [r.wood, r.ore, r.treasure, r.keys];
     for (let i = 0; i < this.resVals.length; i++) this.resVals[i].setText(`${vals[i]}`);
-    this.scoreText.setText(`DEPTH ${this.run.killed}/20\nSCORE ${this.run.score}`);
+    this.scoreText.setText(`DEPTH ${this.run.killed}/20${this.wideLayout ? "\n" : "   ·   "}SCORE ${this.run.score}`);
     if (this.run.score > this.lastScoreShown) {
       this.lastScoreShown = this.run.score;
       this.tweens.killTweensOf(this.scoreText);
@@ -1500,10 +1618,32 @@ class GameScene extends Phaser.Scene {
         .replace(/ run$/, "");
       return `${p.have >= p.need ? "✓ " : ""}${short} ${p.have}/${p.need}`;
     });
-    const portrait = this.scale.height > this.scale.width;
     this.questText.setText(lines.length
-      ? portrait ? lines.filter(Boolean).join("  •  ") : `QUESTS\n${lines.join("\n")}`
-      : portrait ? "No active quests · Pick one at camp" : "");
+      ? lines.filter(Boolean).join("  •  ")
+      : "No active quests · Pick one at camp");
+  }
+
+  /** Run distance is earned by defeating enemies; bosses mark the milestones. */
+  private drawRunProgress() {
+    const g = this.runProgress;
+    const { x, y, width, height } = this.runProgressRect;
+    if (!g || width <= 0) return;
+    g.setVisible(!this.chestActive);
+    const completed = Phaser.Math.Clamp(this.run.killed, 0, RUN_COMPLETE_AT);
+    const filled = width * completed / RUN_COMPLETE_AT;
+    g.clear();
+    g.fillStyle(0x172a2c).fillRoundedRect(x, y, width, height, 3);
+    g.lineStyle(1, 0x405559).strokeRoundedRect(x, y, width, height, 3);
+    if (filled > 0) g.fillStyle(0x83dcc1).fillRoundedRect(x, y, Math.max(height, filled), height, 3);
+    for (let depth = BOSS_EVERY; depth <= RUN_COMPLETE_AT; depth += BOSS_EVERY) {
+      const mx = x + width * depth / RUN_COMPLETE_AT;
+      const my = y + height / 2;
+      g.fillStyle(completed >= depth ? 0xf4d48c : 0x7b6749);
+      g.lineStyle(1, 0xf4d48c);
+      const diamond = [{ x: mx, y: my - 4 }, { x: mx + 4, y: my }, { x: mx, y: my + 4 }, { x: mx - 4, y: my }];
+      g.fillPoints(diamond, true).strokePoints(diamond, true);
+    }
+    g.fillStyle(0xe1fff3).fillCircle(x + filled, y + height / 2, 3);
   }
 
   // --- runner lane (all objects live in centerBox, design-local coords) ---
@@ -1547,14 +1687,16 @@ class GameScene extends Phaser.Scene {
       const bg = this.add.rectangle(0, 0, 44, 40, 0x0c1018, 0.72).setStrokeStyle(2, 0x3a4152, 0.9);
       const ic = this.add.text(0, 1, "", { fontFamily: EMOJI_FONT, fontSize: "15px" }).setOrigin(0.5);
       const slash = this.add.line(0, 0, -9, 9, 9, -9, 0xff6a5a, 1).setLineWidth(2).setVisible(false);
-      this.laneMutes.push(this.inBox(this.add.container(x, LANE_Y + 22, [bg, ic, slash]).setDepth(30)));
+      // The visible mobile chip is compact; its invisible touch area stays generous.
+      const hit = this.add.zone(0, 0, 44, 44);
+      this.laneMutes.push(this.inBox(this.add.container(x, LANE_Y + 22, [bg, ic, slash, hit]).setDepth(30)));
       const paint = () => {
         const m = isMuted();
         ic.setText(glyphFor(m)).setAlpha(m ? 0.4 : 1);
         slash.setVisible(m);
       };
       paint();
-      bg.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
+      hit.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
         flip();
         this.game.events.emit("audio-changed"); // live beds re-level immediately
         paint();
@@ -1575,7 +1717,7 @@ class GameScene extends Phaser.Scene {
     );
 
     this.hero = this.inBox(
-      this.add.sprite(SAFE_X, GROUND_Y, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(HERO_SCALE).play("hero-idle"),
+      this.add.sprite(SAFE_X, GROUND_Y, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(HERO_SCALE / PLAYER_DENSITY).play("hero-idle"),
     );
 
     this.enemyHpBg = this.inBox(this.add.rectangle(0, 0, HP_W, 10, 0x000000, 0.55).setOrigin(0.5).setVisible(false));
@@ -1644,13 +1786,13 @@ class GameScene extends Phaser.Scene {
 
   // --- board ---
   private buildBoard() {
-    this.inBox(this.add.rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W + 8, GRID_H + 8, 0x0e1015).setStrokeStyle(2, 0x2a2d38));
-    this.grid = makeInitialGrid();
-    this.tiles = Array.from({ length: H }, () => Array<Phaser.GameObjects.Container | null>(W).fill(null));
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
+    this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth + 8, this.boardHeight + 8, 0x0e1015).setStrokeStyle(2, 0x2a2d38));
+    this.grid = this.recovered ? structuredClone(this.recovered.grid) : makeInitialGrid(Math.random, this.boardCols, this.boardRows);
+    this.tiles = Array.from({ length: this.boardRows }, () => Array<Phaser.GameObjects.Container | null>(this.boardCols).fill(null));
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
     this.selection = this.inBox(this.add.rectangle(0, 0, TILE - 3, TILE - 3)
-      .setStrokeStyle(3, 0x82efcd).setDepth(51).setVisible(false));
+      .setStrokeStyle(3, 0x82efcd).setDepth(51).setVisible(false), true);
   }
   private makeTile(r: number, c: number, type: number): Phaser.GameObjects.Container {
     const face = this.add.image(0, 0, tileArtKey(type)).setDisplaySize(FACE, FACE);
@@ -1710,7 +1852,7 @@ class GameScene extends Phaser.Scene {
         Math.abs(dx) > Math.abs(dy)
           ? { r: coord.r, c: coord.c + (dx > 0 ? 1 : -1) }
           : { r: coord.r + (dy > 0 ? 1 : -1), c: coord.c };
-      if (target.c < 0 || target.c >= W || target.r < 0 || target.r >= H) return;
+      if (target.c < 0 || target.c >= this.boardCols || target.r < 0 || target.r >= this.boardRows) return;
       void this.trySwap(coord, target);
     });
     this.input.on("pointerupoutside", () => { this.down = null; this.clearSelection(); });
@@ -1725,6 +1867,7 @@ class GameScene extends Phaser.Scene {
 
   // --- per-frame: scroll pressure (only while engaged) + sprite placement ---
   update(_time: number, delta: number) {
+    if (_time - this.checkpointAt > 1000) { this.checkpointAt = _time; this.writeCheckpoint(); }
     const dts = delta / 1000;
     this.tickItems(dts);
     const canAct = !this.busy && !this.run.over && !this.runCompleteShown && !this.chestActive &&
@@ -1758,7 +1901,7 @@ class GameScene extends Phaser.Scene {
     // a blow leaves the hero reeling: he is driven back off his mark and walks
     // it off, so losing ground is something you SEE, not just a bar moving
     if (this.heroKnock > 0) this.heroKnock = Math.max(0, this.heroKnock - (delta / 1000) * KNOCK_RECOVER);
-    if (!this.heroLockX) this.hero.x = heroX - this.heroKnock; // held put while a killing swing lands
+    if (!this.heroLockX && !this.overShown) this.hero.x = heroX - this.heroKnock; // hold the final fall inside the lane
     // enemy pushes the hero toward the skull. NOT while it's dying: a killing
     // blow drops pressure instantly, and chaining the corpse to the new heroX
     // would teleport it forward (visible during a spell kill's bolt flight) —
@@ -1953,6 +2096,7 @@ class GameScene extends Phaser.Scene {
     if (!slot) return false;
     this.consumeSlot(slot);
     this.run.over = false;
+    this.run.endReason = undefined;
     this.run.pressure = HEARTH_PRESSURE;
     buzz(40);
     this.sfx("summon", 0.5, 1.25);
@@ -2079,7 +2223,7 @@ class GameScene extends Phaser.Scene {
     // name banner over the lane while he closes the distance
     const nm = this.inBox(
       this.add
-        .text(CXC, LANE_Y + 64, B.name, {
+        .text(CXC, this.laneRectD().y + 64, B.name, {
           fontFamily: "monospace",
           fontStyle: "bold",
           fontSize: "30px",
@@ -2117,19 +2261,52 @@ class GameScene extends Phaser.Scene {
     this.hideBossBar();
     const BW = 460;
     const BH = 13;
-    const root = this.add.container(CXC, LANE_Y + 30).setDepth(31);
+    const root = this.add.container(CXC, LANE_Y + (this.boss.arena === "shells" ? 52 : 30)).setDepth(31);
     const label = this.add
-      .text(0, -10, `☠ ${this.boss.name} · ${this.boss.wardMark}`, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "18px", color: "#ffb3a0" })
+      .text(0, -14, this.boss.arena === "shells" ? "MALGRIM" : `☠ ${this.boss.name} · ${this.boss.wardMark}`, { fontFamily: "system-ui, sans-serif", fontStyle: "bold", fontSize: "24px", color: "#ffe0b3",stroke:"#121923",strokeThickness:4 })
       .setOrigin(0.5, 1);
     const bg = this.add.rectangle(0, 0, BW, BH, 0x000000, 0.6).setStrokeStyle(2, 0x8a2d2d);
     const fill = this.add.rectangle(-BW / 2 + 2, 0, BW - 4, BH - 4, 0xe05a5a).setOrigin(0, 0.5);
     root.add([bg, fill, label]);
+    const dividers: Phaser.GameObjects.Rectangle[] = [];
+    if(this.boss.arena === "shells") {
+      fill.setFillStyle(0xe6a953);
+      for(let i=1;i<3;i++) {
+        const divider = this.add.rectangle(-BW/2+BW*i/3,0,3,BH,0x151c26);
+        dividers.push(divider); root.add(divider);
+      }
+      const haze=this.add.rectangle(0,LANE_H/2-52,UI_W,LANE_H,0x231a30,.12);
+      root.addAt(haze,0);
+      for(let i=0;i<10;i++) {
+        const ember=this.add.circle(-UI_W/2+20+i*(UI_W-40)/10,GROUND_Y-LANE_Y-52,2,0xffb467,.45);
+        root.add(ember);
+        const tween=this.tweens.add({targets:ember,y:80,alpha:0,duration:1800+i*170,delay:i*150,repeat:-1});
+        ember.once("destroy",()=>tween.stop());
+      }
+    }
     this.inBox(root);
     root.setAlpha(0);
     this.tweens.add({ targets: root, alpha: 1, duration: 400, delay: 350 });
     fill.scaleX = 0;
     this.tweens.add({ targets: fill, scaleX: 1, duration: 1500, delay: 400, ease: "Quad.easeOut" }); // dramatic fill-up
     this.bossBar = { root, fill };
+    root.setData("layout", { bg, label, dividers });
+    this.layoutBossBar();
+  }
+
+  private layoutBossBar() {
+    if (!this.bossBar) return;
+    const { root, fill } = this.bossBar;
+    const { bg, label, dividers } = root.getData("layout") as {
+      bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text; dividers: Phaser.GameObjects.Rectangle[];
+    };
+    // On phones the boss name and bar occupy the gap between guard and audio.
+    const width = Math.max(160, UI_W - 186 / this.centerBaseScale);
+    root.setY(this.laneRectD().y + 30 / this.centerBaseScale);
+    bg.setSize(width, 13);
+    fill.setX(-width / 2 + 2).setSize(width - 4, 9);
+    label.setFontSize(this.worldFont(24, 12)).setWordWrapWidth(width);
+    dividers.forEach((d, i) => d.setX(-width / 2 + width * (i + 1) / 3));
   }
 
   private hideBossBar() {
@@ -2615,6 +2792,7 @@ class GameScene extends Phaser.Scene {
 
   /** Play a sequence of one-shot anims back-to-back (Phaser chain), optional trailing loop. */
   private playCombo(keys: string[], then?: string, tempo = 1) {
+    if (this.overShown) return;
     const tail = then ? [...keys.slice(1), then] : keys.slice(1);
     if (tempo > 1) {
       this.hero.anims.timeScale = 1 / tempo;
@@ -2703,11 +2881,41 @@ class GameScene extends Phaser.Scene {
   }
 
   /** Pause the run under the system menu (Esc / ☰). Everything holds its breath. */
+  private writeCheckpoint(force = false) {
+    if (this.devJumpBoss || this.run.over || this.overShown || this.runCompleteShown || !this.itemSlots.length) return;
+    if (!force && (this.busy || this.chestActive || this.orcDying || this.phase === "chest" || this.tutorial?.active)) return;
+    if (this.grid.some(row => row.some(t => t === EMPTY))) return;
+    const m = loadMeta();
+    m.stockedItems = [...this.meta.stockedItems];
+    m.activeRun = {
+      version: 1, savedAt: Date.now(), run: structuredClone(this.run), grid: this.grid.map(row => [...row]),
+      items: this.itemSlots.map(slot => slot.item?.id ?? null), chestsOpened: this.chestsOpened,
+      sinceChest: this.sinceChest, bestCascade: this.bestCascade, rainy: this.rainy,
+      arenaWard: this.arenaActive ? Math.min(2, this.arenaWard) : this.recovered?.arenaWard ?? 0,
+      pendingChest: this.pendingChest ? structuredClone(this.pendingChest) : null,
+      buffs: { freezeLeft: this.freezeLeft, hornLeft: this.hornLeft, ledgerLeft: this.ledgerLeft,
+        burnLeft: this.burnLeft, burnAcc: this.burnAcc, skeletonCharges: this.skeletonCharges,
+        panCharges: this.panCharges, spursActive: this.spursActive, inkActive: this.inkActive,
+        bossChestNext: this.bossChestNext },
+    };
+    const saved = saveMeta(m);
+    if (!saved && !this.saveWarningShown) {
+      this.saveWarningShown = true;
+      this.notice("Saving is unavailable. Keep this tab open to finish your run.", "#ffd24a");
+    }
+  }
+
   private openMenu() {
     if (this.run.over || this.runCompleteShown) return;
+    this.writeCheckpoint();
     this.down = null;
     this.clearSelection();
     if (this.scene.isActive("menu")) return;
+    const reward = document.querySelector<HTMLElement>(".chest-reward");
+    if (reward) {
+      reward.style.visibility = "hidden";
+      this.events.once(Phaser.Scenes.Events.RESUME, () => { reward.style.visibility = ""; });
+    }
     this.scene.launch("menu", { from: "game" });
     this.scene.pause();
   }
@@ -2715,8 +2923,11 @@ class GameScene extends Phaser.Scene {
   /** Menu retreat: end the run early, banking the haul as if the scout had fallen. */
   public bankAndRetreat() {
     if (this.run.over || this.overShown || this.runCompleteShown) return; // death/victory paths bank themselves
+    if (this.pendingChest) for (const pull of [...this.pendingChest]) this.applyPull(pull);
+    this.pendingChest = null;
     const r = this.run.resources;
     bankRun(loadMeta(), { wood: r.wood, ore: r.ore, treasure: r.treasure, kills: this.run.killed, chests: this.chestsOpened });
+    this.run.over = true;
   }
 
   private clearHint() {
@@ -2955,7 +3166,7 @@ class GameScene extends Phaser.Scene {
 
     const t = this.inBox(
       this.add
-        .text(CXC, LANE_Y + 96, "BOSS DEFEATED!", {
+        .text(CXC, this.laneRectD().y + 96, "BOSS DEFEATED!", {
           fontFamily: "monospace", fontStyle: "bold", fontSize: "34px",
           color: "#ffffff", stroke: "#3a1d08", strokeThickness: 8,
         })
@@ -3031,6 +3242,7 @@ class GameScene extends Phaser.Scene {
     mk("▸ II", "#9fe6a0", () => this.debugArenaStage(1));
     mk("▸ III", "#9fe6a0", () => this.debugArenaStage(2));
     mk("▸ FINISH", "#ff9d6a", () => this.debugArenaStage(3));
+    mk("▣ CHEST", "#ffe08a", () => this.debugChest());
     mk("+9 guard", "#bfe0ff", () => {
       this.run.block += 9; // every stage punishes misses with a real strike — bank guard for a long study session
       this.refreshHud();
@@ -3063,12 +3275,17 @@ class GameScene extends Phaser.Scene {
 
   /**
    * DEV: skip to a beat of the CURRENT boss's arena (0/1/2 = his three stages,
-   * 3 = the exposed-and-execute finish). Rigs the boss first if he isn't up.
+   * 3 = complete the challenge). Rigs the boss first if he isn't up.
    */
   public debugArenaStage(n: number) {
+    this.restartArenaStage(n);
+  }
+
+  /** Restart one challenge stage for recovery or the developer stage selector. */
+  private restartArenaStage(n: number) {
     if (!this.arenaActive) {
       this.debugBoss();
-      this.time.delayedCall(3400, () => this.debugArenaStage(n)); // let him walk in and the board retract
+      this.time.delayedCall(3400, () => this.restartArenaStage(n)); // let him walk in and the board retract
       return;
     }
     // bump the generation so whatever stage the arena was about to open on its
@@ -3082,7 +3299,7 @@ class GameScene extends Phaser.Scene {
     if (n >= 3) {
       this.arenaDealsDone = this.boss.steps;
       this.drainBossBar();
-      this.arenaExecution(gen);
+      this.completeBossArena(gen);
       return;
     }
     if (this.boss.arena === "goring") {
@@ -3122,7 +3339,7 @@ class GameScene extends Phaser.Scene {
   // portals rise where it stood and Malgrim hides among fiery decoys. Tap the
   // REAL one (cyan staff glint) before he casts to crack a ward; wrong taps and
   // timeouts fire a fireball that the puzzle phase's guard charges can absorb.
-  // Three wards, each round faster and busier, then a finishing strike.
+  // Three wards, each round faster and busier; clearing the last wins the fight.
 
   private arenaWait(ms: number): Promise<void> {
     return new Promise((res) => this.time.delayedCall(ms, res));
@@ -3161,7 +3378,7 @@ class GameScene extends Phaser.Scene {
     this.arenaActive = true;
     const gen = ++this.arenaGen;
     this.phase = "arena"; // stationary arena: no scroll, no strikes, no world pan
-    this.arenaWard = 0;
+    this.arenaWard = this.recovered?.arenaWard ?? 0;
     this.arenaDealIdx = 0;
     this.arenaDealsDone = 0;
     this.arenaWardMissed = false;
@@ -3172,18 +3389,10 @@ class GameScene extends Phaser.Scene {
       this.boss.arena === "shells" ? "BOSS CHALLENGE" : this.boss.arena === "goring" ? "THE GORING RUN" : "THE THREE RIMES";
     this.notice(banner, this.boss.accent);
 
-    // Malgrim quits the lane in a burst of embers — the brutes stay put and
-    // fight from where they stand, so only he dissolves here.
-    if (this.boss.arena === "shells")
-      this.time.delayedCall(600, () => {
-        if (gen !== this.arenaGen || !this.orc) return;
-        this.sfx("spell", 0.5, 0.8);
-        const puff = this.inBox(
-          this.add.image(this.orc.x, GROUND_Y - 40, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(0xff8a4a).setScale(1).setDepth(30),
-        );
-        this.tweens.add({ targets: puff, scale: 3, alpha: 0, duration: 450, onComplete: () => puff.destroy() });
-        this.tweens.add({ targets: this.orc, alpha: 0, duration: 300 });
-      });
+    if (this.boss.arena === "shells" && this.orc) {
+      this.bossHold = true;
+      this.tweens.add({targets:this.orc,x:PADIN+UI_W-96,alpha:1,duration:500,ease:"Sine.easeOut"});
+    }
 
     void (async () => {
       while (this.busy) await this.arenaWait(120); // let any final cascade settle first
@@ -3191,7 +3400,11 @@ class GameScene extends Phaser.Scene {
       await this.hideBoard();
       await this.arenaWait(420);
       if (gen !== this.arenaGen || this.run.over) return;
-      if (this.boss.arena === "goring") this.goringIntro(gen);
+      if (this.recovered && this.recovered.arenaWard > 0) {
+        const ward = this.recovered.arenaWard; this.recovered = null;
+        this.restartArenaStage(ward);
+      }
+      else if (this.boss.arena === "goring") this.goringIntro(gen);
       else if (this.boss.arena === "rimes") this.rimesIntro(gen);
       else this.malgrimIntro(gen);
     })();
@@ -3220,6 +3433,11 @@ class GameScene extends Phaser.Scene {
     this.arenaWard++;
     this.arenaDealIdx = 0;
     this.arenaWardMissed = false;
+    if(this.boss.arena === "shells" && this.arenaWard < 3) {
+      this.malgrimSurface("Defence broken","Get ready for the next attack.",`${Math.min(this.arenaWard,3)} / 3`);
+      const R=this.arenaRect();
+      this.aReg(this.inBox(this.add.text(R.cx,R.cy,"DEFENCE BROKEN",{fontFamily:"system-ui, sans-serif",fontSize:"32px",fontStyle:"bold",color:"#ffe0a3"}).setOrigin(.5).setDepth(52)));
+    }
     if (taunt)
       this.time.delayedCall(950, () => {
         if (gen === this.arenaGen && this.arenaActive) this.notice(taunt, this.boss.accent);
@@ -3233,10 +3451,16 @@ class GameScene extends Phaser.Scene {
   /** Title card for a stage: name, then the rules, then the game starts. */
   private arenaStageIntro(gen: number, title: string, sub: string, start: () => void) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-    this.notice(title, "#ffd24a");
+    if(this.boss.arena === "shells") {
+      this.clearArenaObjs();
+      const names=["Find the openings","Break the falling spells","Return his fire"];
+      const rules=["Tap gold targets. Leave red traps alone.","Tap gold. Swipe blue along its arrow.","Tap when gold reaches your guard. Ignore red."];
+      this.malgrimSurface(names[this.arenaWard],rules[this.arenaWard],"GET READY");
+    }
+    if(this.boss.arena !== "shells") this.notice(title, "#ffd24a");
     this.time.delayedCall(850, () => {
       if (gen !== this.arenaGen) return;
-      this.notice(sub, "#ffd7a0");
+      if(this.boss.arena !== "shells") this.notice(sub, "#ffd7a0");
     });
     this.time.delayedCall(1700, () => {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
@@ -3271,7 +3495,19 @@ class GameScene extends Phaser.Scene {
 
   /** The arena's playfield: the rect the retracted board left behind. */
   private arenaRect() {
-    return { x: GRID_X, y: GRID_Y, w: GRID_W, h: GRID_H, cx: GRID_X + GRID_W / 2, cy: GRID_Y + GRID_H / 2 };
+    return { x: GRID_X, y: GRID_Y, w: this.boardWidth, h: this.boardHeight, cx: GRID_X + this.boardWidth / 2, cy: GRID_Y + this.boardHeight / 2 };
+  }
+
+  private malgrimSurface(title: string, instruction: string, progress: string) {
+    const art=malgrimArena(this,this.arenaRect(),Math.min(3,this.arenaWard+1),title,instruction,progress);
+    this.aReg(this.inBox(art.root));
+    return art.tally;
+  }
+
+  private spellToken(x:number,y:number,r:number,kind:"gold"|"red"|"blue") {
+    const root=this.add.container(x,y).setDepth(44);
+    root.add(this.add.image(0,0,malgrimToken(this,kind)).setDisplaySize(r*2.5,r*2.5));
+    return this.aReg(this.inBox(root));
   }
 
   // ---- the grammar's shared parts -------------------------------------------
@@ -3422,7 +3658,7 @@ class GameScene extends Phaser.Scene {
    * time it out, or kill it. `onTap` fires at most once.
    */
   private goldNode(x: number, y: number, r: number, onTap: () => void, gate?: () => boolean) {
-    const g = this.aReg(
+    const g = this.boss.arena === "shells" ? this.spellToken(x,y,r,"gold").setInteractive(new Phaser.Geom.Circle(0,0,r),Phaser.Geom.Circle.Contains) : this.aReg(
       this.inBox(this.add.circle(x, y, r, G_GOLD, 0.9).setStrokeStyle(4, G_GOLD_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
     );
     let spent = false;
@@ -3447,7 +3683,7 @@ class GameScene extends Phaser.Scene {
    * rewards, it only ever costs, and it looks nothing like gold.
    */
   private redNode(x: number, y: number, r: number, onTouched: () => void) {
-    const g = this.aReg(
+    const g = this.boss.arena === "shells" ? this.spellToken(x,y,r,"red").setInteractive(new Phaser.Geom.Circle(0,0,r),Phaser.Geom.Circle.Contains) : this.aReg(
       this.inBox(this.add.circle(x, y, r, G_RED, 0.85).setStrokeStyle(4, G_RED_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
     );
     let spent = false;
@@ -3507,7 +3743,7 @@ class GameScene extends Phaser.Scene {
    * blue exists as a separate colour.
    */
   private swipeNode(x: number, y: number, r: number, dir: SwipeDir, onHit: () => void, onWrong?: () => void, gate?: () => boolean) {
-    const ring = this.aReg(this.inBox(this.add.circle(x, y, r, G_BLUE, 0.85).setStrokeStyle(4, G_BLUE_EDGE, 1).setDepth(44)));
+    const ring = this.boss.arena === "shells" ? this.spellToken(x,y,r,"blue") : this.aReg(this.inBox(this.add.circle(x, y, r, G_BLUE, 0.85).setStrokeStyle(4, G_BLUE_EDGE, 1).setDepth(44)));
     const arrow = this.aReg(
       this.inBox(
         this.add
@@ -3598,7 +3834,7 @@ class GameScene extends Phaser.Scene {
     void net;
     // a heavy blow bleeds the screen red, so the difference is felt, not read
     if (times > 1) {
-      const flash = this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, G_RED, 0.28).setDepth(70));
+      const flash = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth, this.boardHeight, G_RED, 0.28).setDepth(70));
       this.tweens.add({ targets: flash, fillAlpha: 0, duration: 420, onComplete: () => flash.destroy() });
     }
   }
@@ -3661,7 +3897,6 @@ class GameScene extends Phaser.Scene {
   private emberCourt(gen: number, wave: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     this.clearArenaObjs();
-    this.grammarLegend();
     const R = this.arenaRect();
     const WAVES = [
       { golds: 4, reds: 2, life: 1500, gap: 460 },
@@ -3671,8 +3906,7 @@ class GameScene extends Phaser.Scene {
     const cfg = WAVES[wave];
     let struck = 0;
     let done = false;
-    this.arenaLabel(R.x + 14, R.y + 12, `THE EMBER COURT  ${wave + 1} / ${WAVES.length}`, "#ffd7a0", 17);
-    const tally = this.arenaLabel(R.x + R.w - 170, R.y + 12, `0 / ${cfg.golds}`, "#ffd24a", 18);
+    const tally = this.malgrimSurface("Find the openings",`Wave ${wave+1} / 3 · Tap gold. Avoid red.`,`0 / ${cfg.golds}`);
 
     const finishWave = () => {
       if (done) return;
@@ -3695,7 +3929,7 @@ class GameScene extends Phaser.Scene {
     const burn = () => {
       if (done || this.bellForgives()) return;
       this.arenaWardMissed = true;
-      this.notice("that one was a lie", "#ff8a6a");
+      this.notice("Avoid the red spells", "#ff8a6a");
       this.arenaStrikeHero(ARENA_RED_STRIKES);
     };
 
@@ -3706,16 +3940,20 @@ class GameScene extends Phaser.Scene {
       ...Array<boolean>(cfg.golds).fill(true),
       ...Array<boolean>(cfg.reds).fill(false),
     ]) as boolean[];
+    const positions=Phaser.Utils.Array.Shuffle(Array.from({length:12},(_,i)=>({
+      x:R.x+86+(i%4)*(R.w-172)/3,
+      y:R.y+168+Math.floor(i/4)*(R.h-296)/2,
+    })));
     this.aTimer(
       this.time.addEvent({
         delay: cfg.gap,
         repeat: total - 1,
         callback: () => {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
-          const x = R.x + 90 + Math.random() * (R.w - 180);
-          const y = R.y + 76 + Math.random() * (R.h - 200);
+          const {x,y}=positions[spawned%positions.length];
           const isGold = order[spawned++];
           this.sfx("spell", 0.26, isGold ? 1.35 : 0.85);
+          this.bossSwing();
           // his silhouette behind each image, so the court still reads as HIM
           const fig = this.aReg(
             this.inBox(
@@ -3739,6 +3977,15 @@ class GameScene extends Phaser.Scene {
                 if (struck >= cfg.golds) finishWave();
               })
             : this.redNode(x, y, 46, burn);
+          // A draining ring makes the target's remaining lifetime readable.
+          const clock=this.aReg(this.inBox(this.add.graphics().setDepth(43)));
+          const life={remaining:1};
+          this.tweens.add({targets:life,remaining:0,duration:cfg.life,onUpdate:()=>{
+            if(!node.scene) {clock.clear();return;}
+            clock.clear().lineStyle(3,isGold?0xffd68c:0xe57a82,.8);
+            clock.beginPath();clock.arc(x,y,57,-Math.PI/2,-Math.PI/2+Math.PI*2*life.remaining,false);clock.strokePath();
+          },onComplete:()=>clock.destroy()});
+          node.once("destroy",()=>{this.tweens.killTweensOf(life);clock.destroy();if(fig.scene)fig.destroy();});
           this.time.delayedCall(cfg.life, () => {
             // a tapped node destroys itself, so only fade what is still alive
             const live = [fig, node].filter((o) => o.scene);
@@ -3756,7 +4003,7 @@ class GameScene extends Phaser.Scene {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
           done = true;
           this.arenaWardMissed = true;
-          this.notice("too slow", "#ff8a6a");
+          this.notice("Missed a target", "#ff8a6a");
           this.arenaStrikeHero();
           this.time.delayedCall(900, () => {
             if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
@@ -3778,7 +4025,6 @@ class GameScene extends Phaser.Scene {
   private emberFall(gen: number, round: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     this.clearArenaObjs();
-    this.grammarLegend();
     const R = this.arenaRect();
     const ROUNDS = [
       { need: 5, dropMs: 2100, gap: 900, redChance: 0.25 },
@@ -3789,13 +4035,16 @@ class GameScene extends Phaser.Scene {
     let struck = 0;
     let done = false;
 
-    this.arenaLabel(R.x + 14, R.y + 12, `THE EMBER FALL  ${round + 1} / ${ROUNDS.length}`, "#ffd7a0", 17);
-    const tally = this.arenaLabel(R.x + R.w - 170, R.y + 12, `0 / ${cfg.need}`, "#ffd24a", 18);
+    const tally = this.malgrimSurface("Break the falling spells",`Wave ${round+1} / 3 · Tap gold. Swipe blue.`,`0 / ${cfg.need}`);
 
     const LANES = 4;
     const laneX = (i: number) => R.x + R.w * (0.22 + 0.185 * i);
-    const topY = R.y + 74;
-    const floorY = R.y + R.h - 62;
+    const topY = R.y + 146;
+    const floorY = R.y + R.h - 92;
+    for(let i=0;i<LANES;i++) {
+      this.aReg(this.inBox(this.add.rectangle(laneX(i),(topY+floorY)/2,R.w*.15,floorY-topY+30,0x81bbd0,.035).setStrokeStyle(1,0x91bace,.08).setDepth(41)));
+      this.aReg(this.inBox(this.add.ellipse(laneX(i),floorY,72,16,0xd8ad72,.12).setStrokeStyle(1,0xd8ad72,.4).setDepth(41)));
+    }
     // the floor line: what reaches this has beaten you
     this.aReg(this.inBox(this.add.rectangle(R.cx, floorY, R.w - 60, 4, 0x7d6a4a, 0.8).setDepth(41)));
 
@@ -3839,6 +4088,7 @@ class GameScene extends Phaser.Scene {
           const carrier = { y: topY };
           let handled = false;
           this.sfx("fireball1", 0.22, kind === "red" ? 0.8 : 1.3);
+          this.bossSwing();
 
           let node: { move: (x: number, y: number) => void; destroy: () => void };
           if (kind === "blue") {
@@ -3874,7 +4124,7 @@ class GameScene extends Phaser.Scene {
               node.destroy();
               if (handled || done || gen !== this.arenaGen) return;
               // red is SUPPOSED to land; anything else landing is on you
-              if (kind !== "red") slip(kind === "blue" ? "uncut — it lands" : "missed — it lands");
+              if (kind !== "red") slip(kind === "blue" ? "Swipe the blue spells" : "Missed a target");
             },
           });
         },
@@ -3893,6 +4143,16 @@ class GameScene extends Phaser.Scene {
   // RED is the one you must not touch.
   private startTennis(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    const R=this.arenaRect();
+    const rally=this.malgrimSurface("Return his fire","Tap when gold reaches the ring. Ignore red.",`1 / ${TENNIS_SHOTS.length}`);
+    const targetX=R.x+112, serveX=R.x+R.w-92, trackY=R.cy+15;
+    this.aReg(this.inBox(this.add.rectangle(R.cx,trackY,R.w-140,116,0x080f18,.7).setStrokeStyle(1,0x7e9eb5,.2).setDepth(41)));
+    this.aReg(this.inBox(this.add.rectangle((targetX+serveX)/2,trackY,serveX-targetX,2,0xb9d1df,.3).setDepth(42)));
+    const guard=this.aReg(this.inBox(this.add.circle(targetX,trackY,48,0xe7bd62,.08).setStrokeStyle(4,0xffd78c,.9).setDepth(43)));
+    const prompt=this.aReg(this.inBox(this.add.text(R.cx,trackY+108,"Watch the incoming spell",{fontFamily:"system-ui, sans-serif",fontSize:"26px",fontStyle:"bold",color:"#d3dfeb"}).setOrigin(.5).setDepth(46)));
+    this.aReg(this.inBox(this.add.text(targetX,trackY-88,"YOUR GUARD",{fontFamily:"system-ui, sans-serif",fontSize:"18px",fontStyle:"bold",color:"#ffe0a3"}).setOrigin(.5).setDepth(46)));
+    this.aReg(this.inBox(this.add.text(serveX,trackY-88,"INCOMING",{fontFamily:"system-ui, sans-serif",fontSize:"18px",fontStyle:"bold",color:"#a9bbc9"}).setOrigin(.5).setDepth(46)));
     const reg = <T extends Phaser.GameObjects.GameObject>(o: T): T => {
       this.arenaObjs.push(o);
       return o;
@@ -3916,10 +4176,9 @@ class GameScene extends Phaser.Scene {
     // the guard ring: meet the ball HERE
     const zone = reg(this.inBox(this.add.ellipse(this.hero.x + 64, GROUND_Y - 42, 66, 66).setStrokeStyle(4, G_GOLD_EDGE, 0.9).setDepth(43)));
     this.tweens.add({ targets: zone, alpha: 0.45, duration: 480, yoyo: true, repeat: -1 });
-    const rally = this.arenaLabel(GRID_X + 14, GRID_Y + 12, `RALLY 1 / ${shots.length}`, "#ffd7a0", 17);
 
     // the racket: a full-court tap catcher (timing is everything)
-    const catcher = reg(this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0xffffff, 0.001).setDepth(60).setInteractive()));
+    const catcher = reg(this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth, this.boardHeight, 0xffffff, 0.001).setDepth(60).setInteractive()));
 
     type Ball = { img: Phaser.GameObjects.Image; ring: Phaser.GameObjects.Ellipse; arrival: number; kind: "gold" | "red"; alive: boolean };
     let balls: Ball[] = [];
@@ -3927,6 +4186,21 @@ class GameScene extends Phaser.Scene {
     let resolving = false; // true only BETWEEN volleys, so a rally can stay live
     let goldsLeft = 0; // golds still to return in this volley
     let token = 0; // stale launches from an abandoned volley must not join the next
+    const echoes=new Map<Ball,Phaser.GameObjects.Image>();
+    this.aTimer(this.time.addEvent({delay:30,loop:true,callback:()=>{
+      for(const [ball,echo] of echoes) if(!ball.alive || !ball.img.scene || !balls.includes(ball)) {echo.destroy();echoes.delete(ball);}
+      for(const ball of balls) {
+        if(!ball.alive || !ball.img.scene) continue;
+        let echo=echoes.get(ball);
+        if(!echo) {echo=reg(this.inBox(this.add.image(serveX,trackY,malgrimToken(this,ball.kind)).setDisplaySize(82,82).setDepth(45)));echoes.set(ball,echo);}
+        const ratio=Phaser.Math.Clamp((ball.img.x-(this.hero.x+64))/(MX-34-(this.hero.x+64)),0,1);
+        echo.setPosition(targetX+(serveX-targetX)*ratio,trackY);
+      }
+      const ready=balls.find(b=>b.alive && this.time.now>=b.arrival-winEarly() && this.time.now<=b.arrival+winLate());
+      guard.setFillStyle(ready?.kind==="gold"?0xffd78c:0xe7bd62,ready?.kind==="gold"?.28:.06);
+      if(!resolving) prompt.setText(ready ? ready.kind==="gold" ? "TAP NOW" : "LET RED PASS" : balls.length ? "Wait for the ring…" : "Watch Malgrim’s cast");
+      prompt.setColor(ready?.kind==="gold"?"#ffe2a0":ready?.kind==="red"?"#ffb0ae":"#d3dfeb");
+    }}));
 
     const cfgNow = () => shots[Math.min(this.arenaDealIdx, shots.length - 1)];
     const winEarly = () => cfgNow().early ?? TENNIS_EARLY_MS;
@@ -3968,11 +4242,11 @@ class GameScene extends Phaser.Scene {
       if (this.arenaDealIdx >= shots.length) {
         this.time.delayedCall(650, () => {
           if (gen !== this.arenaGen || this.run.over) return;
-          this.arenaStageClear(gen, "STAGE COMPLETE", "", () => this.arenaExecution(gen), 900);
+          this.arenaStageClear(gen, "STAGE COMPLETE", "", () => this.completeBossArena(gen), 900);
         });
         return;
       }
-      rally.setText(`RALLY ${this.arenaDealIdx + 1} / ${shots.length}`);
+      rally.setText(`${this.arenaDealIdx + 1} / ${shots.length}`);
       this.time.delayedCall(shots[this.arenaDealIdx - 1].restMs ?? 900, () => {
         if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
         throwShot();
@@ -3981,6 +4255,8 @@ class GameScene extends Phaser.Scene {
 
     /** One gold struck true: it flies back and burns him. */
     const reflected = (b: Ball) => {
+      prompt.setText("RETURNED!").setColor("#b7f3d7");
+      this.tweens.add({targets:guard,scale:1.14,duration:120,yoyo:true});
       b.alive = false;
       goldsLeft--;
       this.tweens.killTweensOf(b.img);
@@ -4164,31 +4440,21 @@ class GameScene extends Phaser.Scene {
     throwShot();
   }
 
-  /** Third ward down: he staggers back into the lane, helpless. One tap ends it. */
-  private arenaExecution(gen: number) {
-    if (gen !== this.arenaGen || this.run.over || !this.orc) return;
-    this.bossHold = true; // he is where he fell to his knees; the finisher comes to him
+  /** Clearing the third stage defeats the boss; no extra strike or tap. */
+  private completeBossArena(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive || !this.orc || this.orcDying || this.run.enemy?.kind !== "boss") return;
+    // Retire stage callbacks before awarding the kill, so it can only pay once.
+    this.arenaGen++;
     this.clearArenaObjs();
-    this.notice("TAP TO FINISH", "#ffd24a");
-    this.sfx("summon", 0.45, 0.8);
-
-    // he sags back into the lane, drained and flickering
-    const bk = this.boss.key;
-    this.orc.setAlpha(this.boss.arena === "shells" ? 0 : 1).setTint(0x9a94b8).play(this.boss.hasHurt ? `${bk}-hurt` : `${bk}-idle`);
-    this.tweens.add({ targets: this.orc, alpha: 1, duration: 420 });
-    this.orc.once("animationcomplete", () => {
-      if (this.orc && this.orcAnim === bk) this.orc.play(`${bk}-idle`);
-    });
-
-    const ring = this.arenaObjs[this.arenaObjs.push(
-      this.inBox(this.add.ellipse(this.orc.x, GROUND_Y - 34, 96, 116).setStrokeStyle(4, 0xffd24a, 0.95).setDepth(44)),
-    ) - 1] as Phaser.GameObjects.Ellipse;
-    this.tweens.add({ targets: ring, scaleX: 1.18, scaleY: 1.18, alpha: 0.4, duration: 480, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
-
-    const zone = this.arenaObjs[this.arenaObjs.push(
-      this.inBox(this.add.rectangle(this.orc.x, GROUND_Y - 40, 150, 170, 0xffffff, 0.001).setDepth(45).setInteractive({ useHandCursor: true })),
-    ) - 1] as Phaser.GameObjects.Rectangle;
-    zone.on("pointerdown", () => this.arenaFinisher(gen));
+    this.arenaActive = false;
+    this.bossHold = false;
+    this.tweens.killTweensOf(this.hero);
+    this.heroLockX = true;
+    this.orc.setAlpha(1).clearTint();
+    dealDamage(this.run, this.run.enemy.hp, true);
+    this.killOrc(900); // normal defeat animation, bounty, chest and run progression
+    this.surgeAfterKill(180);
+    this.showBoard();
   }
 
   // ================= GORRACH'S GORING RUN (forest boss arena) =================
@@ -4202,7 +4468,7 @@ class GameScene extends Phaser.Scene {
       this.inBox(
         this.add
           .text(x, y, text, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${this.worldFont(size, 15)}px`, color: colour, stroke: "#0a0b0f", strokeThickness: 3,
-            wordWrap: { width: Math.max(130, GRID_X + GRID_W - x - 12) } })
+            wordWrap: { width: Math.max(130, GRID_X + this.boardWidth - x - 12) } })
           .setDepth(50),
       ),
     );
@@ -4242,7 +4508,7 @@ class GameScene extends Phaser.Scene {
       lanes.push(r);
     }
     const tok = this.aReg(
-      this.inBox(this.add.sprite(R.x + 96, laneY(heroLane), "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.3).setDepth(45).play("hero-idle")),
+      this.inBox(this.add.sprite(R.x + 96, laneY(heroLane), PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.3 / PLAYER_DENSITY).setDepth(45).play("hero-idle")),
     );
     const leap = (i: number) => {
       if (i === heroLane) return;
@@ -4388,7 +4654,7 @@ class GameScene extends Phaser.Scene {
       ),
     );
     const you = this.aReg(
-      this.inBox(this.add.sprite(R.cx - 200, strainY, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.5).setDepth(45).play("hero-idle")),
+      this.inBox(this.add.sprite(R.cx - 200, strainY, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.5 / PLAYER_DENSITY).setDepth(45).play("hero-idle")),
     );
 
     const finish = () => {
@@ -4585,7 +4851,7 @@ class GameScene extends Phaser.Scene {
       this.inBox(this.add.sprite(R.cx + 190, strainY, "mino-idle").setOrigin(0.5, 0.9).setScale(0.72).setFlipX(this.boss.faceLeft).setDepth(45).play("mino-idle")),
     );
     const you = this.aReg(
-      this.inBox(this.add.sprite(R.cx - 190, strainY, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.4).setDepth(45).play("hero-idle")),
+      this.inBox(this.add.sprite(R.cx - 190, strainY, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.4 / PLAYER_DENSITY).setDepth(45).play("hero-idle")),
     );
 
     let sweep: Phaser.Tweens.Tween | null = null;
@@ -4655,7 +4921,7 @@ class GameScene extends Phaser.Scene {
       if (notch >= HORNS_NOTCHES) {
         sweep?.stop();
         clockTween?.stop();
-        this.arenaStageClear(gen, "STAGE COMPLETE", "", () => this.arenaExecution(gen), 900);
+        this.arenaStageClear(gen, "STAGE COMPLETE", "", () => this.completeBossArena(gen), 900);
         return;
       }
       restart();
@@ -4693,7 +4959,7 @@ class GameScene extends Phaser.Scene {
       }),
     );
 
-    const catcher = this.aReg(this.inBox(this.add.rectangle(CXC, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0xffffff, 0.001).setDepth(60).setInteractive()));
+    const catcher = this.aReg(this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth, this.boardHeight, 0xffffff, 0.001).setDepth(60).setInteractive()));
     catcher.on("pointerdown", () => {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive || notch >= HORNS_NOTCHES) return;
       if (this.time.now < lockedUntil) return;
@@ -4899,7 +5165,7 @@ class GameScene extends Phaser.Scene {
     // your scout, dragged along the floor of the pit
     const floorY = R.y + R.h - 74;
     const tok = this.aReg(
-      this.inBox(this.add.sprite(R.cx, floorY, "warrior").setOrigin(0.5, HERO_ORIGIN).setScale(2.2).setDepth(46).play("hero-idle")),
+      this.inBox(this.add.sprite(R.cx, floorY, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.2 / PLAYER_DENSITY).setDepth(46).play("hero-idle")),
     );
     this.arenaLabel(R.x + 14, R.y + 40, "drag low to run — tap the gold warmth", "#9aa0ab", 14);
 
@@ -5114,43 +5380,8 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: core, scale: 0.7, duration: 120, yoyo: true });
       if (hits >= HEART_HITS) {
         done = true;
-        this.arenaStageClear(gen, "STAGE COMPLETE", "", () => this.arenaExecution(gen), 900);
+        this.arenaStageClear(gen, "STAGE COMPLETE", "", () => this.completeBossArena(gen), 900);
       }
-    });
-  }
-
-  /** The finishing strike: dash across the arena and end him. */
-  private arenaFinisher(gen: number) {
-    if (gen !== this.arenaGen || this.run.over || !this.orc || this.orcDying) return;
-    this.clearArenaObjs(); // ring + tap zone
-    this.heroLockX = true;
-    this.hero.play("hero-walk", true);
-    this.sfx("swing3", 0.5);
-    this.tweens.add({
-      targets: this.hero,
-      x: this.orc.x - 52,
-      duration: 260,
-      ease: "Quad.easeIn",
-      onComplete: () => {
-        if (gen !== this.arenaGen || this.run.over) {
-          this.heroLockX = false;
-          return;
-        }
-        this.playCombo(["hero-attack3"]);
-        this.sfx("combo6", 0.6);
-        buzz(40);
-        this.cameras.main.shake(320, 0.012);
-        const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xfff2d8, 0.85).setDepth(48));
-        this.tweens.add({ targets: flash, fillAlpha: 0, duration: 420, onComplete: () => flash.destroy() });
-        this.time.delayedCall(260, () => {
-          if (gen !== this.arenaGen) return;
-          if (this.run.enemy) dealDamage(this.run, this.run.enemy.hp, true); // force: the arena's killing blow — score, surge, the lot
-          this.killOrc(700); // death + bossSpoils + the road onward
-          this.surgeAfterKill(800);
-          this.arenaActive = false;
-          this.time.delayedCall(1100, () => this.showBoard()); // the puzzle rises back as the coins rain
-        });
-      },
     });
   }
 
@@ -5158,8 +5389,8 @@ class GameScene extends Phaser.Scene {
   private hideBoard(): Promise<void> {
     return new Promise((res) => {
       let pending = 0;
-      for (let r = 0; r < H; r++)
-        for (let c = 0; c < W; c++) {
+      for (let r = 0; r < this.boardRows; r++)
+        for (let c = 0; c < this.boardCols; c++) {
           const t = this.tiles[r][c];
           if (!t) continue;
           pending++;
@@ -5182,8 +5413,8 @@ class GameScene extends Phaser.Scene {
 
   /** The board rises back into play. */
   private showBoard() {
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) {
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) {
         const t = this.tiles[r][c];
         if (!t) continue;
         this.tweens.killTweensOf(t);
@@ -5422,8 +5653,8 @@ class GameScene extends Phaser.Scene {
    */
   private strikeTelegraph() {
     if (this.run.over || this.phase !== "fight" || !this.orc || this.orcDying || this.tutorial?.active || this.arenaActive) return;
-    const shade = this.inBox(this.add.rectangle(CXC, GRID_Y + 16, GRID_W, 32, 0x8a1622, 0).setDepth(40));
-    const rim = this.inBox(this.add.rectangle(CXC, GRID_Y - 3, GRID_W, 3, 0xff4a3a, 0).setDepth(40).setBlendMode(Phaser.BlendModes.ADD));
+    const shade = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + 16, this.boardWidth, 32, 0x8a1622, 0).setDepth(40));
+    const rim = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y - 3, this.boardWidth, 3, 0xff4a3a, 0).setDepth(40).setBlendMode(Phaser.BlendModes.ADD), true);
     this.tweens.add({ targets: shade, fillAlpha: 0.2, duration: STRIKE_TELE_MS * 0.55, ease: "Sine.easeIn" });
     this.tweens.add({ targets: rim, fillAlpha: 0.7, duration: STRIKE_TELE_MS * 0.55, ease: "Sine.easeIn" });
     // release right as the blow lands (or would have — strike() re-checks the world)
@@ -5447,24 +5678,24 @@ class GameScene extends Phaser.Scene {
    * flashes over the board, and a claw-streak rakes across it.
    */
   private boardHitReact(isBoss: boolean) {
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) {
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) {
         const t = this.tiles[r][c];
         if (!t) continue;
         const a = (Math.random() * 2 - 1) * (isBoss ? 5 : 3.5);
         this.tweens.add({ targets: t, angle: a, duration: 45, yoyo: true, repeat: 1, ease: "Sine.easeInOut", delay: Math.random() * 60 });
       }
-    const wash = this.inBox(this.add.rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W, GRID_H, 0xc03028, isBoss ? 0.16 : 0.11).setDepth(44));
+    const wash = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth, this.boardHeight, 0xc03028, isBoss ? 0.16 : 0.11).setDepth(44));
     this.tweens.add({ targets: wash, fillAlpha: 0, duration: 260, ease: "Quad.easeOut", onComplete: () => wash.destroy() });
     // three raking claw lines, upper-right to lower-left across the board face
     const claw = this.inBox(this.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(45).setAlpha(0.85));
-    const cx0 = CXC + GRID_W * 0.22;
-    const cy0 = GRID_Y + GRID_H * 0.18;
+    const cx0 = this.boardCenter + this.boardWidth * 0.22;
+    const cy0 = GRID_Y + this.boardHeight * 0.18;
     for (let i = 0; i < 3; i++) {
       claw.lineStyle(i === 1 ? 5 : 3, 0xff6a4a, 0.9);
       claw.beginPath();
       claw.moveTo(cx0 + i * 34, cy0 + i * 10);
-      claw.lineTo(cx0 - GRID_W * 0.34 + i * 34, cy0 + GRID_H * 0.5 + i * 10);
+      claw.lineTo(cx0 - this.boardWidth * 0.34 + i * 34, cy0 + this.boardHeight * 0.5 + i * 10);
       claw.strokePath();
     }
     this.tweens.add({ targets: claw, alpha: 0, duration: 300, ease: "Quad.easeOut", onComplete: () => claw.destroy() });
@@ -5474,7 +5705,7 @@ class GameScene extends Phaser.Scene {
   private boardGuardRipple() {
     const ring = this.inBox(
       this.add
-        .rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W + 10, GRID_H + 10)
+        .rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth + 10, this.boardHeight + 10)
         .setStrokeStyle(4, 0x7ec4ff, 0.9)
         .setBlendMode(Phaser.BlendModes.ADD)
         .setDepth(44),
@@ -5538,14 +5769,29 @@ class GameScene extends Phaser.Scene {
   private async openChest() {
     const cont = this.chest!;
     this.chestActive = true;
+    this.runProgress.setVisible(false);
+    // One overlay keeps reward text clear of lane cropping and HUD decoration.
+    const CX = CXC;
+    const CY = Math.round(CENTER_DH * 0.42);
+    const veil = this.add.rectangle(0, 0, 1, 1, 0x05060a, 0).setDepth(89);
+    const overlay = this.add.container(0, 0).setDepth(90);
+    const add = <T extends Phaser.GameObjects.GameObject>(o: T): T => { overlay.add(o); return o; };
+    const local = (x: number, y: number) => ({ x: (x - overlay.x) / overlay.scaleX, y: (y - overlay.y) / overlay.scaleY });
+    const layoutReveal = () => {
+      const scale = Math.min(1.15, (this.scale.width - 24) / CENTER_DW, (this.scale.height - 48) / 660);
+      overlay.setScale(scale).setPosition(this.scale.width / 2 - CX * scale, this.scale.height / 2 - CY * scale);
+      veil.setPosition(this.scale.width / 2, this.scale.height / 2).setSize(this.scale.width, this.scale.height);
+    };
+    layoutReveal();
+    this.scale.on("resize", layoutReveal);
     this.chestsOpened++;
     this.chestFast = false;
     // a dedicated SKIP button (not "tap anywhere") — random taps during the
     // reveal no longer accidentally fast-forward the payout
     const skipBtn = this.add
       .text(this.scale.width - 14, 14, "skip ▸", {
-        fontFamily: "monospace", fontStyle: "bold", fontSize: "14px", color: "#dfe3ea",
-        backgroundColor: "#14171f", padding: { x: 10, y: 6 },
+        fontFamily: "monospace", fontStyle: "bold", fontSize: "16px", color: "#dfe3ea",
+        backgroundColor: "#14171f", padding: { x: 12, y: 12 },
       })
       .setOrigin(1, 0)
       .setDepth(98)
@@ -5561,32 +5807,33 @@ class GameScene extends Phaser.Scene {
     if (freeOpen) this.skeletonCharges--;
     else this.run.resources.keys -= CHEST_KEY_COST;
     this.refreshHud();
-    const ks = this.toLocal(this.resIcons[3].x, this.resIcons[3].y); // fly from the keys counter
-    const key = this.inBox(
+    this.pendingChest = this.rollChest();
+    this.writeCheckpoint(true);
+    const ks = local(this.resIcons[3].x, this.resIcons[3].y); // fly from the keys counter
+    const key = add(
       this.add
         .text(ks.x, ks.y, freeOpen ? "🗝️" : "🔑", { fontFamily: EMOJI_FONT, fontSize: "22px" })
         .setOrigin(0.5)
         .setDepth(66)
         .setAlpha(freeOpen ? 0.8 : 1),
     );
-    await this.tweenP(key, { x: cont.x, y: cont.y - 40, scale: 0.8, angle: 90, duration: 480, ease: "Quad.easeIn" });
+    const chestScreen = this.toScreen(cont.x, cont.y);
+    const chestAt = local(chestScreen.x, chestScreen.y);
+    await this.tweenP(key, { x: chestAt.x, y: chestAt.y - 40, scale: 0.8, angle: 90, duration: 480, ease: "Quad.easeIn" });
     key.destroy();
     this.sfx("chest_unlock", 0.6);
     this.tweens.add({ targets: cont, angle: 3, duration: 60, yoyo: true, repeat: 3 });
     await this.cwait(500);
 
     // takeover — the world dims, the chest takes centre stage
-    const CX = CXC;
-    const CY = Math.round(CENTER_DH * 0.42); // blast centres on the centre column
-    const veil = this.inBox(this.add.rectangle(CX, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0x05060a, 0).setDepth(60));
     this.tweens.add({ targets: veil, fillAlpha: 0.82, duration: 380 });
-    const big = this.inBox(this.add.image(cont.x, cont.y - 30, "chest-closed").setScale(2).setDepth(62));
+    const big = add(this.add.image(chestAt.x, chestAt.y - 30, "chest-closed").setScale(2).setDepth(62));
     cont.destroy();
     this.chest = null;
     await this.tweenP(big, { x: CX, y: CY, scale: 3.6, duration: 620, ease: "Cubic.easeInOut" });
 
     // anticipation — three rattles, light bleeding from the seam... then a still beat
-    const seam = this.inBox(this.add.rectangle(CX, CY - 26, 120, 5, 0xfff3c0, 0).setDepth(63).setBlendMode(Phaser.BlendModes.ADD));
+    const seam = add(this.add.rectangle(CX, CY - 26, 120, 5, 0xfff3c0, 0).setDepth(63).setBlendMode(Phaser.BlendModes.ADD));
     this.tweens.add({ targets: seam, fillAlpha: 0.95, scaleX: 1.25, duration: 900 });
     for (let i = 0; i < 3; i++) {
       this.tweens.add({ targets: big, angle: 2.2 + i * 1.3, duration: 46, yoyo: true, repeat: 5 });
@@ -5598,19 +5845,19 @@ class GameScene extends Phaser.Scene {
 
     // POP — flash, shake, god rays, coin eruption
     big.setTexture("chest-open");
-    const flash = this.inBox(this.add.rectangle(CX, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0xfff6d8, 0.9).setDepth(67));
+    const flash = add(this.add.rectangle(CX, CENTER_DH / 2, CENTER_DW, CENTER_DH, 0xfff6d8, 0.9).setDepth(67));
     this.tweens.add({ targets: flash, fillAlpha: 0, duration: 260, ease: "Quad.easeOut", onComplete: () => flash.destroy() });
     this.cameras.main.shake(280, 0.011);
     this.sfx("chest_creak", 0.7);
     this.sfx("coin_pour", 0.85);
     const mkRay = (alpha: number, scale: number, angle: number) =>
-      this.inBox(this.add.image(CX, CY - 14, "godray").setDepth(61).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0).setScale(0.4).setAngle(angle).setData("a", alpha).setData("s", scale));
+      add(this.add.image(CX, CY - 14, "godray").setDepth(61).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0).setScale(0.4).setAngle(angle).setData("a", alpha).setData("s", scale));
     const rays = [mkRay(0.6, 2.9, 0), mkRay(0.35, 3.8, 15)];
     for (const r of rays) {
       this.tweens.add({ targets: r, alpha: r.getData("a"), scale: r.getData("s"), duration: 550, ease: "Quad.easeOut" });
       this.tweens.add({ targets: r, angle: r.angle + (r.angle ? -360 : 360), duration: r.angle ? 14000 : 11000, repeat: -1 });
     }
-    const coins = this.inBox(
+    const coins = add(
       this.add
         .particles(CX, CY - 20, "coin", {
           speed: { min: 380, max: 760 }, angle: { min: 235, max: 305 }, gravityY: 1150,
@@ -5619,7 +5866,7 @@ class GameScene extends Phaser.Scene {
         })
         .setDepth(63),
     );
-    const sparks = this.inBox(
+    const sparks = add(
       this.add
         .particles(CX, CY - 20, "spark", {
           speed: { min: 200, max: 620 }, angle: { min: 220, max: 320 }, gravityY: 700,
@@ -5630,7 +5877,7 @@ class GameScene extends Phaser.Scene {
     );
     coins.explode(30);
     sparks.explode(46);
-    const title = this.inBox(
+    const title = add(
       this.add
         .text(CX, CY - 190, "TREASURE!", { fontFamily: "monospace", fontStyle: "bold", fontSize: "44px", color: "#ffffff", stroke: "#3a1d08", strokeThickness: 8 })
         .setOrigin(0.5)
@@ -5643,14 +5890,14 @@ class GameScene extends Phaser.Scene {
     await this.cwait(680);
 
     // reveals — one at a time, hidden count, best pull saved for last
-    const pulls = this.rollChest();
+    const pulls = this.pendingChest!;
     const rowY = CY + 160;
     const rowX = (i: number) => CX - ((pulls.length - 1) * 92) / 2 + i * 92;
     const collected: { t: Phaser.GameObjects.Text; pull: ChestPull }[] = [];
     for (let i = 0; i < pulls.length; i++) {
       const pull = pulls[i];
       this.sfx(`combo${Math.min(2 + i, 6)}`, 0.5, 1 + i * 0.03); // escalating sting per pull
-      const orb = this.inBox(this.add.image(CX, CY - 24, "orb").setDepth(64).setBlendMode(Phaser.BlendModes.ADD).setScale(0.5));
+      const orb = add(this.add.image(CX, CY - 24, "orb").setDepth(64).setBlendMode(Phaser.BlendModes.ADD).setScale(0.5));
       this.tweens.add({ targets: big, angle: 1.6, duration: 50, yoyo: true, repeat: 2 });
       sparks.explode(pull.kind === "item" ? 30 : 12);
       await this.tweenP(orb, { y: CY - 150, scale: pull.kind === "item" ? 2.1 : 1.5, duration: 340, ease: "Quad.easeOut" });
@@ -5661,57 +5908,40 @@ class GameScene extends Phaser.Scene {
         this.sfx("pickup", 0.6, 0.9);
       }
       const label = pull.kind === "item" ? `${pull.icon} ${pull.item?.name ?? "NEW ITEM"}!` : `${pull.icon} +${pull.n}`;
-      const t = this.inBox(
+      const t = add(
         this.add
           .text(CX, CY - 150, label, {
-            fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: pull.kind === "item" ? "30px" : "26px",
+            fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${Math.max(30, Math.ceil(20 / overlay.scaleX))}px`,
             color: pull.kind === "item" ? "#ffd0f4" : pull.kind === "treasure" ? "#bfe6ff" : "#fff2b0",
-            stroke: "#2a0c06", strokeThickness: 6,
+            stroke: "#101820", strokeThickness: 3,
+            backgroundColor: "rgba(13, 23, 30, 0.88)", padding: { x: 14, y: 8 },
+            align: "center", wordWrap: { width: GRID_W - 48 },
           })
           .setOrigin(0.5)
           .setDepth(64)
           .setScale(0.2),
       );
       this.tweens.add({ targets: t, scale: 1.12, duration: 200, ease: "Back.easeOut" });
-      // items bring their tooltip to the reveal: what it does + how it's used,
-      // so the player learns the tool while the spotlight is on it (skip collapses this)
-      if (pull.kind === "item" && pull.item) {
-        const desc = this.inBox(
-          this.add
-            .text(CX, CY - 118, pull.item.desc, {
-              fontFamily: "monospace", fontSize: "21px", color: "#efe6d4",
-              stroke: "#14100c", strokeThickness: 4, align: "center", wordWrap: { width: 480 },
-            })
-            .setOrigin(0.5, 0)
-            .setDepth(64)
-            .setAlpha(0),
-        );
-        const how = this.inBox(
-          this.add
-            .text(CX, CY - 118, `· ${pull.item.hint} ·`, {
-              fontFamily: "monospace", fontStyle: "bold", fontSize: "18px", color: "#d9b87a",
-              stroke: "#14100c", strokeThickness: 3,
-            })
-            .setOrigin(0.5, 0)
-            .setDepth(64)
-            .setAlpha(0),
-        );
-        how.setY(desc.y + desc.height + 10);
-        this.tweens.add({ targets: [desc, how], alpha: 1, duration: 220, delay: 140 });
-        // read at your own pace — the reveal holds until a tap (skip ▸ still blows through)
-        const go = this.inBox(
-          this.add
-            .text(CX, how.y + 38, "tap ▸", { fontFamily: "monospace", fontStyle: "bold", fontSize: "18px", color: "#aab4c4", stroke: "#14100c", strokeThickness: 3 })
-            .setOrigin(0.5, 0)
-            .setDepth(64)
-            .setAlpha(0),
-        );
-        this.tweens.add({ targets: go, alpha: 0.9, duration: 300, delay: 500, yoyo: true, repeat: -1 });
-        await this.waitTap();
-        this.tweens.add({ targets: [desc, how, go], alpha: 0, duration: 180, onComplete: () => { desc.destroy(); how.destroy(); go.destroy(); } });
+      // Keep the readable item card outside the scaled animation layer.
+      if (pull.kind === "item" && pull.item && !this.chestFast) {
+        t.setVisible(false);
+        await new Promise<void>(resolve => {
+          const finish = () => {
+            this.input.off("pointerdown", finish);
+            this.events.off(Phaser.Scenes.Events.SHUTDOWN, removeCard);
+            removeCard();
+            resolve();
+          };
+          const removeCard = showChestReward(pull.item!, finish);
+          // The canvas Skip control can still finish the current reveal.
+          this.input.once("pointerdown", finish);
+          this.events.once(Phaser.Scenes.Events.SHUTDOWN, removeCard);
+        });
+        t.setVisible(true);
       } else {
         await this.cwait(560);
       }
+      t.setText(pull.kind === "item" ? pull.icon : `${pull.icon} +${pull.n}`).setFontSize(Math.ceil(15 / (overlay.scaleX * .72)));
       this.tweens.add({ targets: t, x: rowX(i), y: rowY, scale: 0.72, duration: 230, ease: "Quad.easeInOut" }); // tuck into the row
       collected.push({ t, pull });
     }
@@ -5724,23 +5954,26 @@ class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: big, alpha: 0, y: CY + 30, duration: 500, delay: 200, onComplete: () => big.destroy() });
     const itemTargets = this.itemSlots.filter((s) => !s.item);
     let itemTarget = 0;
+    const payouts: Promise<void>[] = [];
     for (let i = 0; i < collected.length; i++) {
       const { t, pull } = collected[i];
       const slot = pull.kind === "item" ? itemTargets[itemTarget++] : undefined;
       // slots + resource counter are screen-space panels; the reveal lives in the centre column
-      const tgt = slot ? this.toLocal(slot.x, slot.y) : this.toLocal(this.resIcons[0].x, this.resIcons[0].y);
+      const tgt = slot ? local(slot.x, slot.y) : local(this.resIcons[0].x, this.resIcons[0].y);
       const tx = tgt.x;
       const ty = tgt.y;
-      this.tweens.add({
-        targets: t, x: tx, y: ty, scale: 0.25, duration: 330, delay: i * 110, ease: "Cubic.easeIn",
+      payouts.push(new Promise<void>(resolve => this.tweens.add({
+        targets: t, x: tx, y: ty, scale: 0.25, duration: this.chestFast ? 90 : 330, delay: i * (this.chestFast ? 25 : 110), ease: "Cubic.easeIn",
         onComplete: () => {
           t.destroy();
           this.applyPull(pull, slot); // resources tick up as each one lands
           this.sfx(this.pick(["coin1", "coin3"]), 0.4, 1 + i * 0.06);
+          resolve();
         },
-      });
+      })));
     }
-    await this.cwait(collected.length * 110 + 430);
+    await Promise.all(payouts);
+    await this.cwait(100);
     this.sfx("pouch", 0.6);
     // the whole haul's score lands as one gold thump right where the chest stood
     const chestScore = pulls.reduce((s, p) => s + 25 + p.n * 2, 0);
@@ -5751,7 +5984,13 @@ class GameScene extends Phaser.Scene {
     // back to the road
     this.scale.off("resize", repositionSkip);
     skipBtn.destroy();
+    this.scale.off("resize", layoutReveal);
+    overlay.destroy();
+    veil.destroy();
+    this.pendingChest = null;
     this.chestActive = false;
+    this.writeCheckpoint(true);
+    this.drawRunProgress();
     if (!this.run.over) {
       this.advanceRoad();
       this.refreshHud();
@@ -5775,6 +6014,7 @@ class GameScene extends Phaser.Scene {
   }
 
   private applyPull(pull: ChestPull, itemSlot?: ItemSlotUI) {
+    if (this.pendingChest?.includes(pull)) this.pendingChest = this.pendingChest.filter(p => p !== pull);
     const r = this.run.resources;
     if (pull.kind === "wood") r.wood += pull.n;
     else if (pull.kind === "ore") r.ore += pull.n;
@@ -5802,12 +6042,6 @@ class GameScene extends Phaser.Scene {
     return new Promise((res) => this.time.delayedCall(this.chestFast ? Math.min(ms, 70) : ms, res));
   }
 
-  /** Hold a chest beat until the player taps (anywhere). Skipping waives the wait. */
-  private waitTap(): Promise<void> {
-    if (this.chestFast) return Promise.resolve();
-    return new Promise((res) => this.input.once("pointerdown", () => res()));
-  }
-
   /** Promise-wrapped tween; runs near-instant once the player has tapped to skip. */
   private tweenP(target: object, cfg: { duration: number } & Record<string, unknown>): Promise<void> {
     return new Promise((res) =>
@@ -5831,7 +6065,7 @@ class GameScene extends Phaser.Scene {
     this.busy = true;
     const P = SWORD; // 0
     const Q = 2; // shield
-    const b = H - 1; // bottom row
+    const b = this.boardRows - 1; // bottom row
     // Column 0: a vertical P-triple at the bottom with Q directly above (spacer over that).
     this.grid[b][0] = P;
     this.grid[b - 1][0] = P;
@@ -5845,8 +6079,8 @@ class GameScene extends Phaser.Scene {
       for (let r = b - 1; r >= 0; r--) this.grid[r][c] = (r + c) % 2 === 0 ? 5 : 6; // never pre-match
     }
     if (this.grid[b][3] === Q) this.grid[b][3] = 4; // keep the Q match width 3
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) {
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) {
         this.tiles[r][c]?.destroy();
         this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
       }
@@ -6044,8 +6278,8 @@ class GameScene extends Phaser.Scene {
     if (msg) this.notice(msg, "#8fd0ff");
     this.boardFlash(0.18);
     const outs: Promise<void>[] = [];
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) {
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) {
         const t = this.tiles[r][c];
         if (!t) continue;
         outs.push(new Promise((res) => this.tweens.add({ targets: t, scale: 0, angle: 90, duration: 160, delay: (r + c) * 8, onComplete: () => res() })));
@@ -6053,8 +6287,8 @@ class GameScene extends Phaser.Scene {
     await Promise.all(outs);
     this.rebuildBoard();
     for (let g = 0; g < 10 && !hasPossibleMove(this.grid); g++) this.rebuildBoard(); // never deal a dead board
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) {
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) {
         const t = this.tiles[r][c];
         if (!t) continue;
         t.setScale(0);
@@ -6069,8 +6303,8 @@ class GameScene extends Phaser.Scene {
     this.busy = true;
     const counts: Record<number, number> = {};
     const cells: Coord[] = [];
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++)
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++)
         if (this.grid[r][c] === WOOD || this.grid[r][c] === ORE) cells.push({ r, c });
     if (!cells.length) {
       this.busy = false;
@@ -6104,13 +6338,13 @@ class GameScene extends Phaser.Scene {
     this.targeting = { def, slot };
     const label = def.target === "cell" ? `${def.glyph} tap a tile to detonate` : `${def.glyph} tap a tile — its kind turns to swords`;
     const ring = this.inBox(
-      this.add.rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W + 6, GRID_H + 6).setStrokeStyle(3, 0xffe08a, 0.9).setDepth(72),
+      this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth + 6, this.boardHeight + 6).setStrokeStyle(3, 0xffe08a, 0.9).setDepth(72),
     );
     this.tweens.add({ targets: ring, alpha: 0.35, duration: 420, yoyo: true, repeat: -1 });
-    const txtBg = this.inBox(this.add.rectangle(CXC, GRID_Y + 26, 460, 34, 0x0e1015, 0.88).setStrokeStyle(2, 0x8a6d3a).setDepth(73));
+    const txtBg = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + 26, 460, 34, 0x0e1015, 0.88).setStrokeStyle(2, 0x8a6d3a).setDepth(73));
     const txt = this.inBox(
       this.add
-        .text(CXC, GRID_Y + 26, `${label} · tap elsewhere to cancel`, { fontFamily: EMOJI_FONT, fontSize: "18px", color: "#ffe08a" })
+        .text(this.boardCenter, GRID_Y + 26, `${label} · tap elsewhere to cancel`, { fontFamily: EMOJI_FONT, fontSize: "18px", color: "#ffe08a" })
         .setOrigin(0.5)
         .setDepth(74),
     );
@@ -6156,7 +6390,7 @@ class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: boom, scale: 14, alpha: 0, duration: 380, ease: "Quad.easeOut", onComplete: () => boom.destroy() });
     for (let r = center.r - SAPPER_RADIUS; r <= center.r + SAPPER_RADIUS; r++)
       for (let c = center.c - SAPPER_RADIUS; c <= center.c + SAPPER_RADIUS; c++) {
-        if (r < 0 || r >= H || c < 0 || c >= W || this.grid[r][c] === EMPTY) continue;
+        if (r < 0 || r >= this.boardRows || c < 0 || c >= this.boardCols || this.grid[r][c] === EMPTY) continue;
         const type = this.grid[r][c];
         counts[type] = (counts[type] ?? 0) + 1;
         const t = this.tiles[r][c];
@@ -6182,8 +6416,8 @@ class GameScene extends Phaser.Scene {
     this.sfx("spell", 0.6);
     this.boardFlash(0.22);
     const converts: Coord[] = [];
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) if (this.grid[r][c] === srcType) converts.push({ r, c });
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) if (this.grid[r][c] === srcType) converts.push({ r, c });
     for (const { r, c } of converts) {
       this.grid[r][c] = SWORD;
       this.tiles[r][c]?.destroy();
@@ -6248,7 +6482,8 @@ class GameScene extends Phaser.Scene {
 
   /** Small floating notice over the board (item feedback, gentle refusals). */
   private notice(msg: string, color = "#ffe08a") {
-    const at = this.toScreen(CXC, GRID_Y + 24);
+    const inLane = this.arenaActive && this.boss.arena === "shells";
+    const at = this.toScreen(inLane ? CXC : this.boardCenter, inLane ? this.laneRectD().y + 82 : GRID_Y + 24);
     const t = this.add.text(at.x, at.y, msg, {
       fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "18px", color,
       backgroundColor: "#101b20", padding: { x: 12, y: 8 }, align: "center",
@@ -6270,25 +6505,28 @@ class GameScene extends Phaser.Scene {
 
   /** design-local -> screen px (the centre column is scaled + centred by layout()). */
   public toScreen(x: number, y: number) {
+    if (y >= GRID_Y) return {x:this.puzzleBox.x+x*this.puzzleScale,y:this.puzzleBox.y+y*this.puzzleScale};
     return { x: this.centerBox.x + x * this.centerScale, y: this.centerBox.y + y * this.centerScale };
   }
   public uiScale() {
     return this.centerScale;
   }
   public laneRectD() {
-    return { x: GRID_X, y: LANE_Y, w: UI_W, h: LANE_H };
+    const top = (this.portraitLaneTop - this.centerBaseY) / this.centerBaseScale;
+    return { x: GRID_X, y: top, w: UI_W, h: LANE_Y + LANE_H - top };
   }
   public boardRectD() {
-    return { x: GRID_X, y: GRID_Y, w: GRID_W, h: GRID_H };
+    return { x: GRID_X, y: GRID_Y, w: this.boardWidth, h: this.boardHeight };
   }
   public cellRectD(r: number, c: number) {
     return { x: GRID_X + c * TILE, y: GRID_Y + r * TILE, w: TILE, h: TILE };
   }
   /** Bounding box of HUD resource rows [from..to] (wood, ore, treasure, keys) — already screen px. */
   public resourceRowsRect(from: number, to: number) {
-    const a = this.resIcons[from];
-    const b = this.resIcons[to];
-    return { x: a.x - 10, y: a.y - 22, w: 180, h: b.y - a.y + 44 };
+    const bounds = [...this.resIcons.slice(from, to + 1), ...this.resVals.slice(from, to + 1)].map(o => o.getBounds());
+    const left = Math.min(...bounds.map(b => b.left)) - 4;
+    const top = Math.min(...bounds.map(b => b.top)) - 4;
+    return { x: left, y: top, w: Math.max(...bounds.map(b => b.right)) + 4 - left, h: Math.max(...bounds.map(b => b.bottom)) + 4 - top };
   }
   /** Scripted strike for the tutorial beats; pierce ignores banked block (the knockback demo). */
   public demoStrike(pierce: boolean, slowMotion = false): boolean {
@@ -6437,8 +6675,8 @@ class GameScene extends Phaser.Scene {
    * scrubbed (without touching the planted cells), then changed sprites rebuilt.
    */
   public rigSwapMatch(type: number): { from: Coord; to: Coord } {
-    const b = H - 1;
-    const c0 = Math.floor(W / 2) - 1;
+    const b = this.boardRows - 1;
+    const c0 = Math.floor(this.boardCols / 2) - 1;
     const changed = new Set<string>();
     const set = (r: number, c: number, t: number) => {
       if (this.grid[r][c] === t) return;
@@ -6609,7 +6847,7 @@ class GameScene extends Phaser.Scene {
   private showCombo(depth: number) {
     const tint = ["#ffe08a", "#ffd24a", "#ff9d3a", "#ff6a3a", "#ff466a"][Math.min(depth - 2, 4)];
     const t = this.inBox(this.add
-      .text(CXC, GRID_Y + GRID_H * 0.32, `COMBO ×${depth}`, {
+      .text(this.boardCenter, GRID_Y + this.boardHeight * 0.32, `COMBO ×${depth}`, {
         fontFamily: "monospace",
         fontStyle: "bold",
         fontSize: `${22 + Math.min(depth, 5) * 4}px`,
@@ -6625,7 +6863,7 @@ class GameScene extends Phaser.Scene {
   }
 
   private boardFlash(alpha: number) {
-    const f = this.inBox(this.add.rectangle(CXC, GRID_Y + GRID_H / 2, GRID_W, GRID_H, 0xffffff, alpha).setDepth(45));
+    const f = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth, this.boardHeight, 0xffffff, alpha).setDepth(45));
     this.tweens.add({ targets: f, alpha: 0, duration: 200, ease: "Quad.easeOut", onComplete: () => f.destroy() });
   }
 
@@ -6633,6 +6871,9 @@ class GameScene extends Phaser.Scene {
     this.overShown = true;
     this.fadeOutMusic(900); // the song dies with him
     this.orc?.stop();
+    this.tweens.killTweensOf(this.hero);
+    this.hero.anims.nextAnim = null;
+    this.hero.anims.nextAnimsQueue.length = 0;
     this.hero.play("hero-death"); // the hero falls where the dark caught him
     // the big flat death pose sprawls left of the skull and off the lane — clamp it back on
     this.hero.x = Math.max(this.hero.x, PADIN + 8 + DEATH_BODY_LEFT * HERO_SCALE);
@@ -6655,6 +6896,7 @@ class GameScene extends Phaser.Scene {
       cascade: this.bestCascade,
       wood: r.wood, ore: r.ore, treasure: r.treasure,
       record: this.run.killed > this.meta.bestDepth,
+      reason: this.run.endReason,
     });
   }
 
@@ -7782,9 +8024,9 @@ class GameScene extends Phaser.Scene {
   }
   private async collapse() {
     const anims: Promise<void>[] = [];
-    for (let c = 0; c < W; c++) {
-      let write = H - 1;
-      for (let r = H - 1; r >= 0; r--) {
+    for (let c = 0; c < this.boardCols; c++) {
+      let write = this.boardRows - 1;
+      for (let r = this.boardRows - 1; r >= 0; r--) {
         const t = this.tiles[r][c];
         if (!t) continue;
         if (write !== r) {
@@ -7810,16 +8052,26 @@ class GameScene extends Phaser.Scene {
   }
   private rebuildBoard() {
     this.clearSelection();
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) {
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) {
         this.tiles[r][c]?.destroy();
         this.tiles[r][c] = null;
       }
-    this.grid = makeInitialGrid();
-    for (let r = 0; r < H; r++)
-      for (let c = 0; c < W; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
+    this.grid = makeInitialGrid(Math.random, this.boardCols, this.boardRows);
+    for (let r = 0; r < this.boardRows; r++)
+      for (let c = 0; c < this.boardCols; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
   }
 }
+
+// Text uploads inherit the renderer's pixel-art filtering on EVERY update,
+// including setText, setFontSize and setResolution. Restore linear filtering
+// after uploading so scaled glyphs keep their antialiased edges.
+const updateText = Phaser.GameObjects.Text.prototype.updateText;
+Phaser.GameObjects.Text.prototype.updateText = function () {
+  const result = updateText.call(this);
+  this.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+  return result;
+};
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
