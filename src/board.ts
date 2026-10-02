@@ -24,7 +24,7 @@ export const EMPTY = -1;
 // raw resources (wood/ore) half as often, so matches lean toward damage over
 // stockpiling. The potion is a VERY RARE gift (~1 in 121 spawns — usually 0 on
 // a full 50-cell board, occasionally 1): tapped, not matched. Tweak to retune.
-export const SPAWN_WEIGHTS = [36, 18, 18, 18, 18, 9, 9, 1];
+export const SPAWN_WEIGHTS = [36, 18, 18, 18, 18, 12, 12, 1];
 const WEIGHT_SUM = SPAWN_WEIGHTS.reduce((a, b) => a + b, 0);
 
 /** Pick a tile id weighted by SPAWN_WEIGHTS (not a uniform 1/TYPES draw). */
@@ -39,6 +39,61 @@ export function randomType(rand: () => number = Math.random): number {
 
 export interface Coord { c: number; r: number; }
 export interface Match { cells: Coord[]; type: number; len: number; dir: "h" | "v"; }
+
+export interface BoardLayouts {
+  portrait?: number[][];
+  landscape?: number[][];
+  reserve?: number;
+}
+
+/** Reuse the tile bag, never roll tiles or award matches on orientation changes.
+ * Both arrangements are cached until gameplay changes the current board.
+ */
+export function reflowBoard(grid: number[][], wide: boolean, previous: BoardLayouts = {}):
+  { grid: number[][]; layouts: BoardLayouts } | null {
+  const from = grid[0].length === 10 ? "landscape" : "portrait";
+  const to = wide ? "landscape" : "portrait";
+  if (from === to) return { grid, layouts: previous };
+  const clone = (g: number[][]) => g.map(row => [...row]);
+  const unchanged = JSON.stringify(previous[from]) === JSON.stringify(grid);
+  const layouts: BoardLayouts = unchanged ? { ...previous } : { reserve: previous.reserve };
+  layouts[from] = clone(grid);
+  if (layouts[to]) return { grid: clone(layouts[to]!), layouts };
+  const bag = grid.flat();
+  if (wide) {
+    // Legacy 49-cell saves need one reserve, chosen once without RNG or a rare potion.
+    if (layouts.reserve === undefined) {
+      const counts = Array.from({ length: TYPES - 1 }, (_, t) => bag.filter(v => v === t).length);
+      layouts.reserve = counts.indexOf(Math.min(...counts));
+    }
+    bag.push(layouts.reserve);
+  } else layouts.reserve = bag.pop();
+  const cols = wide ? 10 : 7, rows = wide ? 5 : 7;
+  const result = Array.from({ length: rows }, () => Array<number>(cols).fill(EMPTY));
+  // Stable, deterministic packing with backtracking only when a run would form.
+  // No pre-existing triples may be cashed in by an unrelated swap after rotation.
+  let budget = 20000;
+  const place = (index: number): boolean => {
+    if (index === rows * cols) return hasPossibleMove(result);
+    if (--budget < 0) return false;
+    const r = Math.floor(index / cols), c = index % cols;
+    const tried = new Set<number>();
+    for (let i = 0; i < bag.length; i++) {
+      const t = bag[i];
+      if (tried.has(t)) continue;
+      tried.add(t);
+      if ((c >= 2 && result[r][c-1] === t && result[r][c-2] === t) ||
+          (r >= 2 && result[r-1][c] === t && result[r-2][c] === t)) continue;
+      bag.splice(i, 1); result[r][c] = t;
+      if (place(index + 1)) return true;
+      bag.splice(i, 0, t); result[r][c] = EMPTY;
+    }
+    return false;
+  };
+  if (!place(0)) return null;
+  layouts[to] = clone(result);
+  return { grid: result, layouts };
+}
 
 /** Build a full grid with no pre-existing matches (so play starts stable). */
 export function makeInitialGrid(rand: () => number = Math.random, W = 7, H = 7): number[][] {

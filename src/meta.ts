@@ -43,6 +43,8 @@ export interface MetaState {
   tutorialSeen: boolean;
   // the camp's arrival cutscene (walk in + the Wayfarer's welcome) has played
   campIntroSeen: boolean;
+  // The caravan story intro is separate from the retired camp tutorial.
+  caravanIntroSeen: boolean;
   // the Peddler has joined the camp (arrives the first time you bank a diamond)
   peddlerArrived: boolean;
   // item ids bought from the Peddler, delivered into slots when the next run starts
@@ -75,6 +77,7 @@ export function defaultMeta(): MetaState {
     bestDepth: 0,
     tutorialSeen: false,
     campIntroSeen: false,
+    caravanIntroSeen: false,
     peddlerArrived: false,
     stockedItems: [],
     active: [],
@@ -97,6 +100,8 @@ export function loadMeta(): MetaState {
 /** Preserve roads unlocked by the old quest gate when loading older saves. */
 export function migrateMeta(parsed: Partial<MetaState>): MetaState {
   const m: MetaState = { ...defaultMeta(), ...parsed, version: 1 };
+  // Hiring the smith now includes the first improvement, including existing saves.
+  if (m.blacksmithHired) m.swordLevel = Math.max(1, m.swordLevel);
   m.clearedBiomes = Array.isArray(parsed.clearedBiomes) ? [...parsed.clearedBiomes] : [];
   const visited = BIOME_ORDER.indexOf(m.biome as typeof BIOME_ORDER[number]);
   for (const [i, biome] of BIOME_ORDER.entries()) {
@@ -185,7 +190,18 @@ export function bankRun(
 
 // ---- costs (tuning knobs) ---------------------------------------------------
 // Hire ~= 2-3 decent early runs of banking: a real ask, not a wall.
-export const BLACKSMITH_COST = { wood: 30, ore: 30 };
+export const BLACKSMITH_COST = { wood: 20, ore: 20 };
+
+/** Set up the forge and improve the sword in one transaction. */
+export function unlockForge(m: MetaState): boolean {
+  if (m.blacksmithHired || !canAfford(m, BLACKSMITH_COST)) return false;
+  m.wood -= BLACKSMITH_COST.wood;
+  m.ore -= BLACKSMITH_COST.ore;
+  m.blacksmithHired = true;
+  m.swordLevel = Math.max(1, m.swordLevel);
+  saveMeta(m);
+  return true;
+}
 /** Ore cost of the next forge level (level is the CURRENT level). */
 export function forgeCost(level: number): number {
   return 20 + level * 15; // 20, 35, 50, ...

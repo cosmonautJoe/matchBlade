@@ -38,6 +38,16 @@ loaded.activeRun=fixture(); loaded.activeRun.run.over=true;
 assert.equal(readCheckpoint(loaded),null,'never resume a completed run');
 
 m=meta.defaultMeta(); m.activeRun=fixture();
+const rotated=board.reflowBoard(m.activeRun.grid,false);
+m.activeRun.grid=rotated.grid; m.activeRun.boardLayouts=rotated.layouts;
+meta.saveMeta(m);
+recovered=readCheckpoint(meta.loadMeta());
+assert.deepEqual(recovered.boardLayouts,rotated.layouts,'orientation memory and spare tile survive recovery');
+assert.deepEqual(board.reflowBoard(recovered.grid,true,recovered.boardLayouts).grid,rotated.layouts.landscape);
+m.activeRun.boardLayouts={portrait:[[99]],reserve:-1};
+assert.equal(readCheckpoint(m).boardLayouts,undefined,'malformed layout memory cannot break a valid run');
+
+m=meta.defaultMeta(); m.activeRun=fixture();
 meta.bankRun(m,{wood:12,ore:9,treasure:8,kills:20,chests:3});
 loaded=meta.loadMeta();
 assert.equal(loaded.wood,12); assert.equal(loaded.activeRun,undefined);

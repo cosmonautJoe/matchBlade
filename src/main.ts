@@ -19,6 +19,8 @@
  */
 
 import Phaser from "phaser";
+import { createCombatReadout } from "./combat-readout";
+import { createActiveEffects, activeItemEffects } from "./active-effects";
 import { preloadPlayer, createPlayerAnimations, PLAYER_TEXTURE, PLAYER_DENSITY, PLAYER_ORIGIN } from "./player-art";
 import {
   TYPES,
@@ -30,6 +32,8 @@ import {
   findHint,
   swap,
   hasPossibleMove,
+  reflowBoard,
+  type BoardLayouts,
 } from "./board";
 import {
   type RunState,
@@ -54,6 +58,8 @@ import {
   pierceStrike,
   spawnNext,
   scroll,
+  roadScrollRate,
+  attackInterval,
   BOSS_EVERY,
   BOSS_SCROLL_MULT,
   BOSS_BOUNTY,
@@ -413,8 +419,6 @@ const DEATH_BODY_LEFT = 27; // original sprite's sideways fall
 const HP_W = 70;
 
 // ---- runner tuning (safe to tweak / turn into upgrades later) --------------
-const SCROLL_PER_SEC = 0.017; // pressure gained per second while engaged
-const STRIKE_MS = 4800; // enemy strike cadence
 // spell casts (staff matches): the bolt leaves the staff partway into the cast,
 // flies, and everything downstream (damage number, hurt, death) lands on impact
 const CAST_LEAD_MS = 320;
@@ -583,6 +587,8 @@ class GameScene extends Phaser.Scene {
   private run!: RunState;
   private phase: "advance" | "fight" | "chest" | "arena" = "advance"; // arena = boss shell game (no scroll/strikes/pan)
   private parallax: { sprite: Phaser.GameObjects.TileSprite; scroll: number }[] = [];
+  private laneFrame!: Phaser.GameObjects.Rectangle;
+  private laneRainWash?: Phaser.GameObjects.Rectangle;
   private world: RunBiome = RUN_BIOMES.plains; // backdrop set for the current biome
   private floor!: Phaser.GameObjects.TileSprite;
   private hero!: Phaser.GameObjects.Sprite;
@@ -591,6 +597,10 @@ class GameScene extends Phaser.Scene {
   private orcRig: CreatureRig | null = null; // how the current foe is dressed (null for the boss)
   private orcDefense: Defense = "none"; // the current foe's armor school (badge + callouts)
   private defenseTaught = false; // first resisted/weak hit per foe shows a callout
+  private attackClock = 0;
+  private attackWarned = false;
+  private combatReadout?: ReturnType<typeof createCombatReadout>;
+  private activeNotice?: Phaser.GameObjects.Text;
   private defBadge!: Phaser.GameObjects.Text; // 🛡⚔ / 🛡🪄 beside the HP bar
 
   // the zone's boss arena (Malgrim's shell game / Gorrach's goring run / the three rimes)
@@ -636,6 +646,9 @@ class GameScene extends Phaser.Scene {
   private puzzleScale = 1;
   private boardCols = 7;
   private boardRows = 7;
+  private boardLayouts: BoardLayouts = {};
+  private boardFrame!: Phaser.GameObjects.Rectangle;
+  private failedBoardReflow = "";
   private get boardWidth() { return this.boardCols * TILE; }
   private get boardHeight() { return this.boardRows * TILE; }
   private get boardCenter() { return GRID_X + this.boardWidth / 2; }
@@ -658,13 +671,13 @@ class GameScene extends Phaser.Scene {
   private gearText!: Phaser.GameObjects.Text;
   private devJumpBoss = false; // set by init(): rig this run's first foe as the boss
   private menuBtn!: Phaser.GameObjects.Text; // ☰ opens the pause menu (Esc works too)
-  private hintBtn!: Phaser.GameObjects.Text; // 💡 lights up a valid swap on the board
   private hintObjs: Phaser.GameObjects.GameObject[] = []; // active hint rings (cleared on next move)
   private rotateHint!: Phaser.GameObjects.Text;
 
   // chests
   private chest: Phaser.GameObjects.Container | null = null; // the lane chest (body + key tag)
   private chestActive = false; // takeover sequence running — board input is frozen
+  private awaitingChest = false;
   private chestFast = false; // the skip ▸ button shortens every remaining beat
   private sinceChest = 0; // kills since the last chest
   private chestsOpened = 0; // opened this run (banked into meta quest stats on death)
@@ -691,8 +704,7 @@ class GameScene extends Phaser.Scene {
   private tipFor: number = -1; // slot index the tooltip is showing for
   private holdTimer: Phaser.Time.TimerEvent | null = null; // touch press-and-hold -> tooltip
   private holdShown = false; // this press already showed the tooltip -> release must not use
-  private buffText!: Phaser.GameObjects.Text; // live item-buff readout (left panel)
-  private buffStr = ""; // last rendered buff line (skip redundant setText)
+  private activeEffects?: ReturnType<typeof createActiveEffects>;
 
   // ---- peril feedback: the fight reaching the player's peripheral vision ----
   private vignette: Phaser.GameObjects.Image | null = null; // full-viewport red edge-glow
@@ -823,7 +835,9 @@ class GameScene extends Phaser.Scene {
     this.pendingChest = null;
     this.checkpointAt = 0;
     this.saveWarningShown = false;
-    // Pick the topology once. Rotation only changes presentation: never grant a free reshuffle.
+    // Recovered boards reflow at the next stable layout, preserving their tile bag.
+    this.boardLayouts = structuredClone(this.recovered?.boardLayouts ?? {});
+    this.failedBoardReflow = "";
     this.boardCols = this.scale.width >= this.scale.height ? 10 : 7;
     this.boardRows = this.boardCols === 10 ? 5 : 7;
     if (this.recovered) { this.boardRows = this.recovered.grid.length; this.boardCols = this.recovered.grid[0].length; }
@@ -858,6 +872,7 @@ class GameScene extends Phaser.Scene {
     this.frags = [];
     this.chest = null;
     this.chestActive = false;
+    this.awaitingChest = false;
     this.chestFast = false;
     this.sinceChest = 0;
     this.tutorial = null;
@@ -890,7 +905,6 @@ class GameScene extends Phaser.Scene {
     this.tipFor = -1;
     this.holdTimer = null;
     this.holdShown = false;
-    this.buffStr = "";
     this.buildPotionArt(); // before the filter pass + shard baking so it's a full citizen
     // The rest of the game keeps crisp nearest-neighbour sampling, but these
     // detailed composite faces need linear minification when the responsive
@@ -917,10 +931,21 @@ class GameScene extends Phaser.Scene {
     this.puzzleBox = this.add.container(0, 0);
     this.buildLane();
     this.buildBoard();
+    this.attackClock = 0; this.attackWarned = false;
+    this.combatReadout = createCombatReadout();
+    this.activeEffects = createActiveEffects();
+    const hideEffects = () => this.activeEffects?.show(false);
+    this.events.on(Phaser.Scenes.Events.PAUSE, hideEffects);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.events.off(Phaser.Scenes.Events.PAUSE, hideEffects);
+      this.combatReadout?.destroy(); this.activeEffects?.destroy();
+    });
     if (this.recovered) {
       const c = this.recovered;
       Object.assign(this, c.buffs);
       this.chestsOpened = c.chestsOpened; this.sinceChest = c.sinceChest; this.bestCascade = c.bestCascade;
+      this.awaitingChest = !!c.awaitingChest;
+      this.chestActive = this.awaitingChest;
       for (const [i, id] of c.items.entries()) if (id) {
         const def = itemById(id); if (def) this.fillSlot(def, this.itemSlots[i]);
       }
@@ -984,7 +1009,8 @@ class GameScene extends Phaser.Scene {
     // intro: the hero jogs in from off the left edge to meet the first foe.
     // Slow both approaches together so the hero's run reads at a natural pace.
     const INTRO_MS = this.recovered ? 500 : 1550;
-    if (this.run.killed < RUN_COMPLETE_AT) this.spawnOrc(INTRO_MS);
+    if (this.awaitingChest) this.spawnChest(INTRO_MS);
+    else if (this.run.killed < RUN_COMPLETE_AT) this.spawnOrc(INTRO_MS);
     this.hero.setX(-30);
     this.heroLockX = true;
     this.hero.play("hero-walk", true);
@@ -999,15 +1025,8 @@ class GameScene extends Phaser.Scene {
     // strike cadence self-schedules so Scout's Spurs can stretch the interval and
     // each foe's own tempo can quicken it (boars are fast); the dread telegraph
     // leads every blow.
-    const strikeLoop = () => {
-      this.strike();
-      const wait = this.strikeWait();
-      this.time.delayedCall(Math.max(120, wait - STRIKE_TELE_MS), () => this.strikeTelegraph());
-      this.time.delayedCall(wait, strikeLoop);
-    };
-    const first = this.strikeWait();
-    this.time.delayedCall(Math.max(120, first - STRIKE_TELE_MS), () => this.strikeTelegraph());
-    this.time.delayedCall(first, strikeLoop);
+    // The attack clock belongs to each encounter. New foes always give a full
+    // warning instead of inheriting the previous foe's nearly-finished timer.
     this.time.addEvent({ delay: 270, loop: true, callback: () => this.footstep() }); // hero jog cadence
 
     // the Peddler's goods: items bought at camp arrive already packed in slots
@@ -1044,7 +1063,7 @@ class GameScene extends Phaser.Scene {
       window.removeEventListener("pagehide", suspend);
     });
     if (this.recovered) this.time.delayedCall(0, () => {
-      if (this.run.killed >= RUN_COMPLETE_AT) this.showRunComplete();
+      if (this.run.killed >= RUN_COMPLETE_AT && !this.awaitingChest) this.showRunComplete();
       else { this.notice("Run restored. Resume when you're ready.", "#82efcd"); this.openMenu(); }
     });
 
@@ -1215,7 +1234,11 @@ class GameScene extends Phaser.Scene {
     const uw = Math.max(120, vw - ins.l - ins.r);
     const uh = Math.max(120, vh - ins.t - ins.b);
     const portrait = uh > uw;
+    this.syncBoardOrientation(!portrait);
     this.wideLayout = !portrait;
+    this.hero.setScale(HERO_SCALE / PLAYER_DENSITY * (this.arenaActive ? 1.2 : 1));
+    if (this.orc && this.run.enemy?.kind === "boss" && !this.orcDying)
+      this.orc.setScale(this.boss.scale * (this.arenaActive ? 1.08 : 1));
     if (this.wideLayout) {
       this.layoutWide(x0, y0, uw, uh);
       return;
@@ -1223,7 +1246,7 @@ class GameScene extends Phaser.Scene {
     // Size the square puzzle from the phone width. Crop excess sky in the
     // runner instead of shrinking both play surfaces to fit their total height.
     const topReserve = 64;
-    this.portraitFooterHeight = uh < 640 ? 120 : 140;
+    this.portraitFooterHeight = this.arenaActive ? 94 : 140;
     const progressGap = 16;
     const minLaneHeight = Math.max(80, Math.min(100, uh * .14));
     const roomHeight = uh - topReserve - this.portraitFooterHeight - minLaneHeight - progressGap;
@@ -1236,7 +1259,8 @@ class GameScene extends Phaser.Scene {
     const shellW = uw;
     const shellX = x0;
     const boardX = x0 + (uw - boardSize) / 2;
-    const laneHeight = Math.min(LANE_H * s, uh - topReserve - this.portraitFooterHeight - boardHeight - progressGap);
+    const laneHeight = uh - topReserve - this.portraitFooterHeight - boardHeight - progressGap;
+    this.layoutLaneBackdrop(Math.max(LANE_H, laneHeight / s));
     this.portraitLaneTop = y0 + topReserve;
     const cx = boardX - GRID_X * s;
     const cy = this.portraitLaneTop + laneHeight - (LANE_Y + LANE_H) * s;
@@ -1279,22 +1303,25 @@ class GameScene extends Phaser.Scene {
 
   /** Classic landscape composition: stats | fight above puzzle | inventory. */
   private layoutWide(x: number, y: number, w: number, h: number) {
+    this.layoutLaneBackdrop(LANE_H);
     const leftW = Phaser.Math.Clamp(w * .15, 160, 220);
     const rightW = Phaser.Math.Clamp(w * .075, 64, 112);
     const gap = 16;
     // Fit the 10×5 board and runner into the entire centre column with square tiles.
     const available = Math.max(100, w - leftW - rightW - 8);
     const aspect = this.boardHeight / this.boardWidth;
-    const boardSize = Math.min(available, (h - gap - 16) / (aspect + 180 / GRID_W), (h - gap - 100) / aspect);
+    // While a swap or challenge finishes, a deferred square board needs more cue room.
+    const cueHeader = this.boardCols === 7 ? 60 : 0;
+    const boardSize = Math.min(available, (h - gap - 16 - cueHeader) / (aspect + 180 / GRID_W), (h - gap - 100 - cueHeader) / aspect);
     const scale = boardSize / GRID_W;
     const puzzleScale = boardSize / this.boardWidth;
     const boardHeight = this.boardHeight * puzzleScale;
     const laneHeight = Math.max(84, 180 * scale);
-    const totalHeight = laneHeight + gap + boardHeight;
+    const totalHeight = cueHeader + laneHeight + gap + boardHeight;
     const shellWidth = leftW + boardSize + rightW + 8;
     const shellX = x + (w - shellWidth) / 2;
     const boardX = shellX + leftW + 4;
-    const laneTop = y + (h - totalHeight) / 2;
+    const laneTop = y + (h - totalHeight) / 2 + cueHeader;
     const laneX = boardX - GRID_X * scale;
     const laneY = laneTop + laneHeight - (LANE_Y + LANE_H) * scale;
     const boardTop = laneTop + laneHeight + gap;
@@ -1383,21 +1410,20 @@ class GameScene extends Phaser.Scene {
         this.resVals[i].setVisible(true).setPosition(x + 29, topY).setFontSize(21);
       }
       this.scoreText.setVisible(true).setPosition(x0 + uw / 2, y0 + 42).setFontSize(14);
-      this.questText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(this.portraitFooterHeight <= 120 ? 12 : 14).setLineSpacing(2)
-        .setWordWrapWidth(uw - 20).setPosition(x0 + 10, below + 6);
-      this.buffText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(14)
-        .setWordWrapWidth(uw - 122).setPosition(x0 + 110, y0 + uh - 32);
+      this.questText.setVisible(!this.arenaActive).setFontFamily(EMOJI_FONT).setFontSize(13).setLineSpacing(3)
+        .setWordWrapWidth(uw - 24).setPosition(x0 + 12, below + 8);
       this.menuBtn.setPosition(x0 + uw - 8, y0 + 6).setFontSize(22);
-      this.hintBtn.setText("💡 Hint").setPosition(x0 + 8, y0 + uh - 8).setFontSize(14);
       this.gearText.setPosition(x0 + uw - 8, y0 + uh - 8).setVisible(false);
 
-      // Inventory sits above the separate hint/effect row.
-      const gap = 5;
-      const slot = Math.max(38, Math.min(this.portraitFooterHeight <= 120 ? 40 : 48, (uw - 16 - (SLOT_N - 1) * gap) / SLOT_N));
-      const totalW = SLOT_N * slot + (SLOT_N - 1) * gap;
-      const rackY = y0 + uh - 46 - slot / 2;
+      // One bottom tray: quests, compact effects, then a full-width inventory.
+      const gap = 4;
+      const cellW = (uw - 24 - (SLOT_N - 1) * gap) / SLOT_N;
+      const slot = Math.min(56, cellW);
+      const rackBottom = y0 + uh - 10;
+      const rackY = rackBottom - slot / 2;
+      this.activeEffects?.place(x0 + 12, rackY - slot / 2 - 30, uw - 24, 26, false);
       for (let i = 0; i < SLOT_N; i++) {
-        const x = Math.round(x0 + (uw - totalW) / 2 + slot / 2 + i * (slot + gap));
+        const x = Math.round(x0 + 12 + cellW / 2 + i * (cellW + gap));
         const it = this.itemSlots[i];
         it.x = x; it.y = rackY; it.s = slot;
         it.bg.setPosition(x, rackY).setSize(slot, slot);
@@ -1415,7 +1441,6 @@ class GameScene extends Phaser.Scene {
     this.rightPanel.setDepth(0).setStrokeStyle(2, 0x526342);
     this.panelDecor.forEach(d => d.ts.setVisible(true).setDepth(0).setAlpha(d.ts.getData("landscapeAlpha") ?? d.ts.alpha));
     this.questText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(14).setLineSpacing(3);
-    this.buffText.setVisible(true).setFontSize(13);
     this.scoreText.setVisible(true).setFontSize(17);
     this.gearText.setVisible(false);
     this.resIcons.forEach((icon) => icon.setVisible(true));
@@ -1444,12 +1469,9 @@ class GameScene extends Phaser.Scene {
     this.questText.setWordWrapWidth(Math.max(80, lw - 24), true);
     const questY = Math.round(scoreY + this.scoreText.height + 12);
     this.questText.setPosition(padX, questY);
-    this.buffText.setWordWrapWidth(Math.max(80, lw - 24), true);
-    this.buffText.setPosition(padX, Math.round(questY + this.questText.height + (this.questText.text ? 12 : 0)));
+    const effectsY = Math.round(questY + this.questText.height + 10);
+    this.activeEffects?.place(padX, effectsY, Math.max(80, lw - 24), Math.max(36, y0 + uh - 56 - effectsY), true);
 
-    // Bottom controls own their own strip; active effects above can never share
-    // the hint button's baseline.
-    this.hintBtn.setText("💡 Hint").setFontSize(14).setPosition(padX, y0 + uh - 12);
     this.gearText.setPosition(lLeft + lw - 40, y0 + uh - 12);
     this.menuBtn.setPosition(x0 + uw - 10, y0 + 6);
 
@@ -1512,12 +1534,6 @@ class GameScene extends Phaser.Scene {
       .setDepth(80)
       .setInteractive({ useHandCursor: true })
       .on("pointerdown", () => this.openMenu());
-    this.hintBtn = this.add
-      .text(0, 0, "💡 Hint", { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: "16px", color: "#0a2426", backgroundColor: "#82efcd", padding: { x: 10, y: 12 } })
-      .setOrigin(0, 1)
-      .setDepth(50)
-      .setInteractive({ useHandCursor: true })
-      .on("pointerdown", () => this.showHint());
     this.gearText = this.add.text(0, 0, "⚙", { fontFamily: EMOJI_FONT, fontSize: "26px", color: "#c7ccd6" }).setOrigin(0, 1);
     // dev-only combo rig — in production an accidental tap here instantly rewrote
     // the whole board mid-run ("my board just reset?!"), so the gear ships hidden
@@ -1528,11 +1544,6 @@ class GameScene extends Phaser.Scene {
       .text(0, 0, "↻ rotate to landscape", { fontFamily: "monospace", fontSize: "16px", color: "#9aa0ab" })
       .setOrigin(0.5, 0)
       .setVisible(false);
-
-    // live item-buff readout (charges, timers, armed keys, the road forecast)
-    this.buffText = this.add
-      .text(0, 0, "", { fontFamily: EMOJI_FONT, fontSize: "14px", color: "#afd4f8", lineSpacing: 4 })
-      .setOrigin(0, 0);
 
     this.itemSlots = [];
     for (let i = 0; i < SLOT_N; i++) {
@@ -1647,8 +1658,18 @@ class GameScene extends Phaser.Scene {
   }
 
   // --- runner lane (all objects live in centerBox, design-local coords) ---
+  private layoutLaneBackdrop(height: number) {
+    const y = LANE_Y + LANE_H - height / 2;
+    for (const { sprite } of this.parallax) {
+      sprite.setPosition(CXC, y).setSize(UI_W, height).setTileScale(height / PARALLAX_SRC_H);
+    }
+    this.laneFrame?.setPosition(CXC, y).setSize(UI_W, height);
+    this.laneRainWash?.setPosition(CXC, y).setSize(UI_W, height);
+  }
+
   private buildLane() {
     this.laneMutes = [];
+    this.laneRainWash = undefined;
     // --- parallax world backdrop, back-to-front (each layer fills the lane) ---
     const pscale = LANE_H / PARALLAX_SRC_H; // fit the 216-tall layers into the lane
     this.parallax = [];
@@ -1661,9 +1682,9 @@ class GameScene extends Phaser.Scene {
     this.floor = this.inBox(this.add.tileSprite(CXC, GROUND_Y + FLOOR_H / 2, UI_W, FLOOR_H, this.world.groundKey)).setTileScale(FLOOR_SCALE);
 
     // wet runs read overcast: a cool wash over the backdrop, under the characters
-    if (this.rainy) this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x0a1626, 0.16));
+    if (this.rainy) this.laneRainWash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x0a1626, 0.16));
 
-    this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H).setStrokeStyle(2, 0x2a2d38)); // border
+    this.laneFrame = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H).setStrokeStyle(2, 0x2a2d38));
     this.inBox(this.add.text(SKULL_X, GROUND_Y + 4, "☠", { fontSize: "48px", color: "#c0424a" }).setOrigin(0.5, 1));
 
     // guard badge, top-left of the lane: the shield count lives IN the fight,
@@ -1785,8 +1806,30 @@ class GameScene extends Phaser.Scene {
   }
 
   // --- board ---
+  private syncBoardOrientation(wide: boolean) {
+    const cols = wide ? 10 : 7;
+    if (this.boardCols === cols || !this.boardFrame || !this.grid?.length ||
+        this.busy || this.chestActive || this.arenaActive || this.targeting ||
+        this.tutorial?.active || this.run.over || this.runCompleteShown) return;
+    if (this.grid.some(row => row.includes(EMPTY))) return;
+    const attempt = `${cols}:${JSON.stringify(this.grid)}`;
+    if (attempt === this.failedBoardReflow) return;
+    const next = reflowBoard(this.grid, wide, this.boardLayouts);
+    if (!next) { this.failedBoardReflow = attempt; return; }
+    this.down = null;
+    this.clearSelection();
+    this.clearHint();
+    for (const row of this.tiles) for (const tile of row) tile?.destroy();
+    this.grid = next.grid; this.boardLayouts = next.layouts;
+    this.boardCols = cols; this.boardRows = wide ? 5 : 7;
+    this.tiles = this.grid.map((row, r) => row.map((type, c) => this.makeTile(r, c, type)));
+    this.boardFrame.setPosition(this.boardCenter, GRID_Y + this.boardHeight / 2)
+      .setSize(this.boardWidth + 8, this.boardHeight + 8);
+    this.idleBoardTime = 0; this.idleHintShown = false;
+  }
+
   private buildBoard() {
-    this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth + 8, this.boardHeight + 8, 0x0e1015).setStrokeStyle(2, 0x2a2d38));
+    this.boardFrame = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth + 8, this.boardHeight + 8, 0x0e1015).setStrokeStyle(2, 0x2a2d38));
     this.grid = this.recovered ? structuredClone(this.recovered.grid) : makeInitialGrid(Math.random, this.boardCols, this.boardRows);
     this.tiles = Array.from({ length: this.boardRows }, () => Array<Phaser.GameObjects.Container | null>(this.boardCols).fill(null));
     for (let r = 0; r < this.boardRows; r++)
@@ -1867,8 +1910,29 @@ class GameScene extends Phaser.Scene {
 
   // --- per-frame: scroll pressure (only while engaged) + sprite placement ---
   update(_time: number, delta: number) {
+    // Resize immediately if safe; otherwise apply the latest orientation once the move ends.
+    const wantedCols = this.wideLayout ? 10 : 7;
+    if (this.boardCols !== wantedCols) {
+      this.syncBoardOrientation(this.wideLayout);
+      if (this.boardCols === wantedCols) this.layout();
+    }
     if (_time - this.checkpointAt > 1000) { this.checkpointAt = _time; this.writeCheckpoint(); }
     const dts = delta / 1000;
+    const fighting = this.phase === "fight" && !this.run.over && !this.orcDying && !this.tutorial?.active && !this.arenaActive;
+    if (fighting) {
+      this.attackClock += delta;
+      const wait = this.strikeWait();
+      if (!this.attackWarned && this.attackClock >= wait - STRIKE_TELE_MS) {
+        this.attackWarned = true; this.strikeTelegraph();
+      }
+      if (this.attackClock >= wait) { this.attackClock = 0; this.attackWarned = false; this.strike(); }
+    }
+    this.combatReadout?.update(this.run,
+      { x: this.runProgressRect.x, y: this.portraitLaneTop + (this.wideLayout && this.boardCols === 7 ? -60 : 3),
+        width: this.runProgressRect.width, floorY: this.toScreen(GRID_X, GROUND_Y).y,
+        header: this.wideLayout && this.boardCols === 7 },
+      fighting && !this.chestActive && !this.runCompleteShown);
+    this.activeEffects?.show(this.scene.isActive() && !this.scene.isActive("menu") && !this.run.over && !this.runCompleteShown && !this.chestActive && !this.tutorial?.active);
     this.tickItems(dts);
     const canAct = !this.busy && !this.run.over && !this.runCompleteShown && !this.chestActive &&
       !this.arenaActive && !this.tutorial?.active && !this.targeting && this.phase === "fight";
@@ -1884,7 +1948,7 @@ class GameScene extends Phaser.Scene {
     // Boss fights ease the scroll (BOSS_SCROLL_MULT): no intermediate kills = no relief.
     // The Waystone freezes the world's breath entirely.
     if (this.phase === "fight" && !this.run.over && !this.tutorial?.active && this.freezeLeft <= 0)
-      scroll(this.run, SCROLL_PER_SEC * (this.run.enemy?.kind === "boss" ? BOSS_SCROLL_MULT : 1) * dts);
+      scroll(this.run, roadScrollRate(this.run) * (this.run.enemy?.kind === "boss" ? BOSS_SCROLL_MULT : 1) * dts);
 
     // pan the world while the hero runs to the next foe; hold still in a fight
     const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
@@ -2026,7 +2090,7 @@ class GameScene extends Phaser.Scene {
     this.renderBuffs();
   }
 
-  /** The buff readout under the quests: charges, timers, armed keys, the road ahead. */
+  /** Item effects use named, screen-sized chips beside the inventory HUD. */
   private renderBuffs() {
     // lane guard badge: count + a bounce on gain / red flash on spend
     if (this.run.block !== this.laneGuardLast) {
@@ -2044,24 +2108,13 @@ class GameScene extends Phaser.Scene {
         }
       }
     }
-    const parts: string[] = [];
-    // (guard charges live on the in-lane badge now, not in this readout)
-    if (this.run.whetstone > 0) parts.push(`🗡️×${this.run.whetstone}`);
-    if (this.hornLeft > 0) parts.push(`📯${Math.ceil(this.hornLeft)}s`);
-    if (this.freezeLeft > 0) parts.push(`⏳${Math.ceil(this.freezeLeft)}s`);
-    if (this.ledgerLeft > 0) parts.push(`📒${Math.ceil(this.ledgerLeft)}s`);
-    if (this.burnLeft > 0) parts.push(`🔥${Math.ceil(this.burnLeft)}s`);
-    if (this.spursActive) parts.push("🕸️");
-    if (this.skeletonCharges > 0) parts.push(`🗝️×${this.skeletonCharges}`);
-    if (this.panCharges > 0) parts.push(`🎁×${this.panCharges}`);
-    const lines: string[] = [];
-    for (let i = 0; i < parts.length; i += 4) lines.push(parts.slice(i, i + 4).join(" "));
-    if (this.inkActive) lines.push(`ROAD ▸ ${this.roadAhead().join(" ")}`);
-    const str = lines.join("\n");
-    if (str !== this.buffStr) {
-      this.buffStr = str;
-      this.buffText.setText(str);
-    }
+    this.activeEffects?.update(activeItemEffects(this.run, {
+      freezeLeft: this.freezeLeft, hornLeft: this.hornLeft, ledgerLeft: this.ledgerLeft,
+      burnLeft: this.burnLeft, burnAcc: this.burnAcc, spursActive: this.spursActive,
+      skeletonCharges: this.skeletonCharges, panCharges: this.panCharges,
+      inkActive: this.inkActive, bossChestNext: this.bossChestNext,
+    }, this.itemSlots.map(slot => slot.item?.id ?? null), this.inkActive ? this.roadAhead() : [],
+    this.phase !== "fight" || this.orcDying || this.arenaActive || this.chestActive || !!this.tutorial?.active));
   }
 
   /** Cartographer's Ink: simulate the spawn chain to name the next three encounters. */
@@ -2183,6 +2236,7 @@ class GameScene extends Phaser.Scene {
       return;
     }
     this.phase = "fight";
+    this.attackClock = 0; this.attackWarned = false;
     this.orc.play(`${this.orcAnim}-idle`);
     this.hero.play("hero-idle", true);
   }
@@ -2406,7 +2460,9 @@ class GameScene extends Phaser.Scene {
       await Promise.all(fades);
 
       const scoreBefore = this.run.score;
+      const sporesBefore = this.run.enemy?.spores ?? 0;
       const outcome = applyMatches(this.run, counts);
+      if (sporesBefore > 0 && (counts[STAFF] ?? 0) >= 3) this.notice("Spores cleared", "#c4efab");
       const centroid = (cells: { x: number; y: number }[]) => ({
         x: cells.reduce((s, p) => s + p.x, 0) / cells.length,
         y: cells.reduce((s, p) => s + p.y, 0) / cells.length,
@@ -2777,7 +2833,7 @@ class GameScene extends Phaser.Scene {
   private teachDefense(mod: DamageMod) {
     if (mod === "none" || this.defenseTaught || !this.orc) return;
     this.defenseTaught = true;
-    const label = mod === "weak" ? "WEAK!" : this.orcDefense === "hide" ? "IRON HIDE!" : "SPELL WARD!";
+    const label = mod === "weak" ? "BONUS DAMAGE" : this.orcDefense === "hide" ? "USE STAVES" : "USE SWORDS";
     const color = mod === "weak" ? "#ffd24a" : this.orcDefense === "hide" ? "#c7ccd6" : "#c9a0ff";
     const t = this.inBox(
       this.add
@@ -2889,10 +2945,12 @@ class GameScene extends Phaser.Scene {
     m.stockedItems = [...this.meta.stockedItems];
     m.activeRun = {
       version: 1, savedAt: Date.now(), run: structuredClone(this.run), grid: this.grid.map(row => [...row]),
+      boardLayouts: structuredClone(this.boardLayouts),
       items: this.itemSlots.map(slot => slot.item?.id ?? null), chestsOpened: this.chestsOpened,
       sinceChest: this.sinceChest, bestCascade: this.bestCascade, rainy: this.rainy,
       arenaWard: this.arenaActive ? Math.min(2, this.arenaWard) : this.recovered?.arenaWard ?? 0,
       pendingChest: this.pendingChest ? structuredClone(this.pendingChest) : null,
+      awaitingChest: this.awaitingChest,
       buffs: { freezeLeft: this.freezeLeft, hornLeft: this.hornLeft, ledgerLeft: this.ledgerLeft,
         burnLeft: this.burnLeft, burnAcc: this.burnAcc, skeletonCharges: this.skeletonCharges,
         panCharges: this.panCharges, spursActive: this.spursActive, inkActive: this.inkActive,
@@ -2911,6 +2969,8 @@ class GameScene extends Phaser.Scene {
     this.down = null;
     this.clearSelection();
     if (this.scene.isActive("menu")) return;
+    if (this.combatReadout) this.combatReadout.root.hidden = true;
+    this.activeEffects?.show(false);
     const reward = document.querySelector<HTMLElement>(".chest-reward");
     if (reward) {
       reward.style.visibility = "hidden";
@@ -3024,8 +3084,7 @@ class GameScene extends Phaser.Scene {
 
   /** Milliseconds until the next strike: base cadence × the foe's own tempo (Spurs override). */
   private strikeWait(): number {
-    const base = this.spursActive ? SPURS_STRIKE_MS : STRIKE_MS;
-    return Math.round(base * (this.run.enemy?.strikeMult ?? 1));
+    return this.spursActive ? Math.round(SPURS_STRIKE_MS * (this.run.enemy?.strikeMult ?? 1)) : attackInterval(this.run);
   }
 
   private killOrc(afterMs = 760) {
@@ -3388,6 +3447,7 @@ class GameScene extends Phaser.Scene {
     const banner =
       this.boss.arena === "shells" ? "BOSS CHALLENGE" : this.boss.arena === "goring" ? "THE GORING RUN" : "THE THREE RIMES";
     this.notice(banner, this.boss.accent);
+    this.layout();
 
     if (this.boss.arena === "shells" && this.orc) {
       this.bossHold = true;
@@ -3460,7 +3520,7 @@ class GameScene extends Phaser.Scene {
     if(this.boss.arena !== "shells") this.notice(title, "#ffd24a");
     this.time.delayedCall(850, () => {
       if (gen !== this.arenaGen) return;
-      if(this.boss.arena !== "shells") this.notice(sub, "#ffd7a0");
+      if (this.boss.arena !== "shells") this.notice(sub, "#ffd7a0");
     });
     this.time.delayedCall(1700, () => {
       if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
@@ -4134,8 +4194,8 @@ class GameScene extends Phaser.Scene {
 
 
   // ---- WARD III: FIREBALL TENNIS — return his fire ---------------------------
-  // He serves from the far court; every ball carries a shrinking timing ring.
-  // Tap (anywhere — the screen is your racket) as the ball meets the guard ring
+  // He serves from the far court; the lower playfield carries the timing cue.
+  // Tap the playfield as the spell reaches its guard marker
   // to reflect it back into him. Whiffs lock the swing briefly, so mashing
   // loses; his wind-up sometimes throws NOTHING; and the RED ball is a lie that
   // only hurts you if you swing at it. Three returns break the last ward.
@@ -4173,14 +4233,10 @@ class GameScene extends Phaser.Scene {
       this.sfx("spell", 0.45, 0.85);
     }
 
-    // the guard ring: meet the ball HERE
-    const zone = reg(this.inBox(this.add.ellipse(this.hero.x + 64, GROUND_Y - 42, 66, 66).setStrokeStyle(4, G_GOLD_EDGE, 0.9).setDepth(43)));
-    this.tweens.add({ targets: zone, alpha: 0.45, duration: 480, yoyo: true, repeat: -1 });
-
     // the racket: a full-court tap catcher (timing is everything)
     const catcher = reg(this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth, this.boardHeight, 0xffffff, 0.001).setDepth(60).setInteractive()));
 
-    type Ball = { img: Phaser.GameObjects.Image; ring: Phaser.GameObjects.Ellipse; arrival: number; kind: "gold" | "red"; alive: boolean };
+    type Ball = { img: Phaser.GameObjects.Image; arrival: number; kind: "gold" | "red"; alive: boolean };
     let balls: Ball[] = [];
     let lockoutUntil = 0;
     let resolving = false; // true only BETWEEN volleys, so a rally can stay live
@@ -4209,9 +4265,7 @@ class GameScene extends Phaser.Scene {
     const clearBalls = () => {
       for (const b of balls) {
         this.tweens.killTweensOf(b.img);
-        this.tweens.killTweensOf(b.ring);
         b.img.destroy();
-        b.ring.destroy();
       }
       balls = [];
     };
@@ -4260,12 +4314,10 @@ class GameScene extends Phaser.Scene {
       b.alive = false;
       goldsLeft--;
       this.tweens.killTweensOf(b.img);
-      b.ring.destroy();
       balls = balls.filter((x) => x !== b);
       this.playCombo(["hero-attack2"], "hero-idle");
       this.sfx("swing2", 0.4);
       this.sfx(this.pick(["block1", "block2", "block3"]), 0.5);
-      this.tweens.add({ targets: zone, scaleX: 1.35, scaleY: 1.35, duration: 110, yoyo: true, ease: "Quad.easeOut" });
       buzz(22);
       b.img.setTint(0xffe0a0); // struck true — it flies back hot
       const last = goldsLeft <= 0;
@@ -4329,7 +4381,6 @@ class GameScene extends Phaser.Scene {
           // this volley are still yours to return
           inWin.alive = false;
           this.tweens.killTweensOf(inWin.img);
-          inWin.ring.destroy();
           inWin.img.destroy();
           balls = balls.filter((b) => b !== inWin);
           return;
@@ -4349,21 +4400,17 @@ class GameScene extends Phaser.Scene {
         const zy = GROUND_Y - 42;
         const color = kind === "gold" ? G_GOLD : G_RED;
         const img = reg(this.inBox(this.add.image(MX - 34, GROUND_Y - 54, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(color).setScale(1.5).setDepth(46)));
-        const ring = reg(this.inBox(this.add.ellipse(img.x, img.y, 130, 130).setStrokeStyle(3, color, 0.85).setDepth(46)));
-        const b: Ball = { img, ring, arrival: this.time.now + flightMs, kind, alive: true };
+        const b: Ball = { img, arrival: this.time.now + flightMs, kind, alive: true };
         balls.push(b);
         this.sfx(kind === "gold" ? "fireball2" : "fireball3", 0.4, kind === "red" ? 1.3 : 1);
         if (this.orc && !this.orcDying) this.bossSwing(); // a fresh cast per ball — the barrage is HIS effort
-        this.tweens.add({ targets: ring, scaleX: 0.42, scaleY: 0.42, duration: flightMs, ease: "Linear" }); // the timing ring closes at the guard
         this.tweens.add({
           targets: img,
           x: zx,
           y: zy,
           duration: flightMs,
           ease: "Linear",
-          onUpdate: () => ring.setPosition(img.x, img.y),
           onComplete: () => {
-            ring.destroy();
             if (!b.alive || gen !== this.arenaGen || !img.scene) return;
             // past the guard: the late window still lives while it closes the gap
             this.tweens.add({
@@ -4408,7 +4455,6 @@ class GameScene extends Phaser.Scene {
       const mine = ++token;
       const cfg = cfgNow();
       const n = cfg.balls ?? 1;
-      zone.setPosition(this.hero.x + 64, GROUND_Y - 42); // the guard follows the hero's ground
       const doFake = Math.random() < (cfg.fake ?? 0);
       if (cfg.call) this.notice(cfg.call, n >= 3 ? "#ff8a6a" : "#8ff4ff");
       if (n >= 3) this.cameras.main.shake(260, 0.005); // the crescendo announces itself
@@ -4448,6 +4494,7 @@ class GameScene extends Phaser.Scene {
     this.clearArenaObjs();
     this.arenaActive = false;
     this.bossHold = false;
+    this.layout();
     this.tweens.killTweensOf(this.hero);
     this.heroLockX = true;
     this.orc.setAlpha(1).clearTint();
@@ -5428,6 +5475,7 @@ class GameScene extends Phaser.Scene {
     this.arenaGen++;
     this.clearArenaObjs();
     this.arenaActive = false;
+    this.layout();
     if (this.orc) {
       this.tweens.killTweensOf(this.orc);
       this.orc.setAlpha(1);
@@ -5524,7 +5572,7 @@ class GameScene extends Phaser.Scene {
     // ---- THE BLOW LANDS ----
     this.time.delayedCall(contactMs, () => {
       // fell mid-swing? then it never connects
-      if (this.run.over || this.orcDying || !this.run.enemy) return;
+      if (this.run.over || this.orcDying || !this.run.enemy || this.orc !== attackingFoe) return;
       const saved = pierce ? this.run.block : null;
       if (pierce) this.run.block = 0;
       const blockBefore = this.run.block;
@@ -5739,8 +5787,19 @@ class GameScene extends Phaser.Scene {
     if (this.run.over || !this.chest) return;
     this.phase = "chest"; // pressure + strikes hold — a reward moment, not a fight
     this.hero.play("hero-idle", true);
-    if (this.skeletonCharges > 0 || this.run.resources.keys >= CHEST_KEY_COST) void this.openChest();
-    else this.chestLocked();
+    if (this.skeletonCharges <= 0 && this.run.resources.keys < CHEST_KEY_COST) {
+      this.awaitingChest = false;
+      this.chestActive = false;
+      this.chestLocked();
+      return;
+    }
+    this.awaitingChest = true;
+    this.chestActive = true; // wait safely: no matching, pressure or item timers
+    this.clearSelection();
+    this.down = null;
+    this.hideTip();
+    this.writeCheckpoint(true);
+    void this.openChest();
   }
 
   /** No key banked: the chest rattles shut and the road moves on. */
@@ -5767,6 +5826,7 @@ class GameScene extends Phaser.Scene {
 
   /** ===== THE BLAST ===== VS-style takeover: veil, rattle, god rays, erupting loot. */
   private async openChest() {
+    if (!this.chest || this.run.over) return;
     const cont = this.chest!;
     this.chestActive = true;
     this.runProgress.setVisible(false);
@@ -5784,6 +5844,38 @@ class GameScene extends Phaser.Scene {
     };
     layoutReveal();
     this.scale.on("resize", layoutReveal);
+    const stopRevealLayout = () => this.scale.off("resize", layoutReveal);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, stopRevealLayout);
+    this.chestFast = false;
+
+    // Bring the closed chest into the screen centre before accepting a tap.
+    // Nothing is spent or rolled until the player opens this enlarged chest.
+    const chestScreen = this.toScreen(cont.x, cont.y);
+    const chestAt = local(chestScreen.x, chestScreen.y);
+    this.tweens.add({ targets: veil, fillAlpha: 0.82, duration: 380 });
+    const big = add(this.add.image(chestAt.x, chestAt.y - 30, "chest-closed").setScale(2).setDepth(62));
+    cont.destroy();
+    this.chest = null;
+    await this.tweenP(big, { x: CX, y: CY, scale: 3.6, duration: 620, ease: "Cubic.easeInOut" });
+    const prompt = add(this.add.text(CX, CY + 130, "Tap to open", {
+      fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${Math.ceil(18 / overlay.scaleX)}px`,
+      color: "#fff2b0", backgroundColor: "#15251e", padding: { x: 14, y: 8 },
+    }).setOrigin(0.5));
+    const opened = await new Promise<boolean>(resolve => {
+      const cancel = () => resolve(false);
+      const finish = () => {
+        if (!this.awaitingChest || this.run.over) return;
+        this.awaitingChest = false;
+        big.disableInteractive();
+        prompt.destroy();
+        this.events.off(Phaser.Scenes.Events.SHUTDOWN, cancel);
+        resolve(true);
+      };
+      big.setInteractive({ useHandCursor: true }).once("pointerdown", finish);
+      prompt.setInteractive({ useHandCursor: true }).once("pointerdown", finish);
+      this.events.once(Phaser.Scenes.Events.SHUTDOWN, cancel);
+    });
+    if (!opened) return;
     this.chestsOpened++;
     this.chestFast = false;
     // a dedicated SKIP button (not "tap anywhere") — random taps during the
@@ -5817,20 +5909,11 @@ class GameScene extends Phaser.Scene {
         .setDepth(66)
         .setAlpha(freeOpen ? 0.8 : 1),
     );
-    const chestScreen = this.toScreen(cont.x, cont.y);
-    const chestAt = local(chestScreen.x, chestScreen.y);
-    await this.tweenP(key, { x: chestAt.x, y: chestAt.y - 40, scale: 0.8, angle: 90, duration: 480, ease: "Quad.easeIn" });
+    await this.tweenP(key, { x: CX, y: CY, scale: 0.8, angle: 90, duration: 480, ease: "Quad.easeIn" });
     key.destroy();
     this.sfx("chest_unlock", 0.6);
-    this.tweens.add({ targets: cont, angle: 3, duration: 60, yoyo: true, repeat: 3 });
+    this.tweens.add({ targets: big, angle: 3, duration: 60, yoyo: true, repeat: 3 });
     await this.cwait(500);
-
-    // takeover — the world dims, the chest takes centre stage
-    this.tweens.add({ targets: veil, fillAlpha: 0.82, duration: 380 });
-    const big = add(this.add.image(chestAt.x, chestAt.y - 30, "chest-closed").setScale(2).setDepth(62));
-    cont.destroy();
-    this.chest = null;
-    await this.tweenP(big, { x: CX, y: CY, scale: 3.6, duration: 620, ease: "Cubic.easeInOut" });
 
     // anticipation — three rattles, light bleeding from the seam... then a still beat
     const seam = add(this.add.rectangle(CX, CY - 26, 120, 5, 0xfff3c0, 0).setDepth(63).setBlendMode(Phaser.BlendModes.ADD));
@@ -5985,6 +6068,7 @@ class GameScene extends Phaser.Scene {
     this.scale.off("resize", repositionSkip);
     skipBtn.destroy();
     this.scale.off("resize", layoutReveal);
+    this.events.off(Phaser.Scenes.Events.SHUTDOWN, stopRevealLayout);
     overlay.destroy();
     veil.destroy();
     this.pendingChest = null;
@@ -6482,6 +6566,10 @@ class GameScene extends Phaser.Scene {
 
   /** Small floating notice over the board (item feedback, gentle refusals). */
   private notice(msg: string, color = "#ffe08a") {
+    if (this.activeNotice?.active) {
+      this.tweens.killTweensOf(this.activeNotice);
+      this.activeNotice.destroy();
+    }
     const inLane = this.arenaActive && this.boss.arena === "shells";
     const at = this.toScreen(inLane ? CXC : this.boardCenter, inLane ? this.laneRectD().y + 82 : GRID_Y + 24);
     const t = this.add.text(at.x, at.y, msg, {
@@ -6489,6 +6577,7 @@ class GameScene extends Phaser.Scene {
       backgroundColor: "#101b20", padding: { x: 12, y: 8 }, align: "center",
       wordWrap: { width: Math.max(180, GRID_W * this.centerBaseScale - 48) },
     }).setOrigin(0.5, 0).setDepth(85).setAlpha(0);
+    this.activeNotice = t;
     this.tweens.add({ targets: t, alpha: 1, duration: 120 });
     this.tweens.add({ targets: t, alpha: 0, duration: 250, delay: 1800, onComplete: () => t.destroy() });
   }

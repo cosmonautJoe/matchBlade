@@ -38,6 +38,7 @@ export interface Enemy {
   maxHp: number;
   power: number; // pressure a full strike adds, before block
   strikeMult: number; // <1 strikes FASTER, >1 slower (scene scales its cadence)
+  spores?: number; // forest mushrooms build up stronger hits; staff matches clear them
 }
 
 export interface Resources {
@@ -194,7 +195,10 @@ export function makeEnemy(killed: number, biome = "plains", rand: () => number =
   const boss = (killed + 1) % BOSS_EVERY === 0;
   const zp = ZONE_POOLS[biome] ?? DEFAULT_POOL;
   const tier = killed < 3 ? zp.early : killed < 8 ? zp.mid : zp.deep;
-  const variant: EnemyVariant = boss ? "boss" : tier[(rand() * tier.length) | 0];
+  // Predictable opening encounters teach each road before the roster mixes.
+  const opening: EnemyVariant[] = biome === "plains" ? ["green", "green", "boar"]
+    : biome === "forest" ? ["blue", "mushroom", "eye"] : [];
+  const variant: EnemyVariant = boss ? "boss" : opening[killed] ?? tier[(rand() * tier.length) | 0];
   const hpMult = boss ? BOSS_HP_MULT : VARIANT_HP_MULT[variant] ?? 1;
   const easeDeepPlains = biome === "plains" && killed >= PLAINS_DEEP_START && !boss;
   const plainsHpMult = easeDeepPlains ? PLAINS_DEEP_HP_MULT : 1;
@@ -206,8 +210,9 @@ export function makeEnemy(killed: number, biome = "plains", rand: () => number =
     defense: VARIANT_DEFENSE[variant],
     hp,
     maxHp: hp,
-    power: ENEMY_BASE_POWER + killed * (biome === "plains" ? PLAINS_POWER_GROWTH : ENEMY_POWER_GROWTH),
+    power: ENEMY_BASE_POWER + killed * (biome === "plains" ? PLAINS_POWER_GROWTH : biome === "forest" ? 0.007 : ENEMY_POWER_GROWTH),
     strikeMult: boss ? 1 : VARIANT_STRIKE_MULT[variant] ?? 1,
+    ...(biome === "forest" && variant === "mushroom" ? { spores: 0 } : {}),
   };
 }
 
@@ -337,6 +342,7 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
   const staves = n(STAFF);
   let spell: SpellOutcome | null = null;
   if (staves >= 3) {
+    if (s.enemy?.spores !== undefined) s.enemy.spores = 0;
     const tier: 3 | 4 | 5 = staves >= 5 ? 5 : staves === 4 ? 4 : 3;
     const raw = SPELL_DMG[tier] + Math.max(0, staves - 5) * SPELL_EXTRA + s.spellBonus; // Aldwin's study sharpens every cast
     const sM = spellMult(defense);
@@ -390,6 +396,20 @@ export function guardCost(killed: number): number {
   return 1 + Math.floor(killed / 8);
 }
 
+/** Give new players time to read the board; the full pace arrives gradually. */
+export function roadScrollRate(s: RunState): number {
+  return s.biome === "plains" ? 0.012 + Math.min(6, s.killed) * (0.005 / 6) : 0.017;
+}
+
+export function attackInterval(s: RunState): number {
+  const base = s.biome === "plains" && s.killed < 3 ? 6000 : 4800;
+  return Math.round(base * (s.enemy?.strikeMult ?? 1));
+}
+
+export function enemyHitPower(enemy: Enemy): number {
+  return enemy.power + (enemy.spores ?? 0) * 0.035;
+}
+
 /**
  * A boss's blow inside his own arena PIERCES the guard. Shields are for the
  * road; a warden's wards are not turned by a wooden board, so his power lands
@@ -424,7 +444,9 @@ export function enemyStrike(s: RunState): number {
   }
   const paid = s.block;
   s.block = 0;
-  const net = s.enemy.power * ((cost - paid) / cost); // what you can't pay for lands
+  const net = enemyHitPower(s.enemy) * ((cost - paid) / cost); // what you can't pay for lands
+  // A fully blocked hit cannot spread spores. Two stacks is the upper limit.
+  if (s.enemy.spores !== undefined) s.enemy.spores = Math.min(2, s.enemy.spores + 1);
   s.pressure += net;
   clampPressure(s);
   if (s.over) s.endReason = "enemy";

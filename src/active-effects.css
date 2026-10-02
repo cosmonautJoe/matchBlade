@@ -1,0 +1,5 @@
+.active-effects{position:absolute;z-index:4;display:flex;gap:4px;align-items:flex-start;overflow-x:auto;overflow-y:hidden;overscroll-behavior:contain;touch-action:pan-x;box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#729778 transparent;font:12px/1.2 system-ui,sans-serif;color:#eef3df}
+.active-effects[hidden]{display:none}.active-effects:focus-visible{outline:2px solid #c9df9a;outline-offset:2px}
+.active-effect{flex:0 0 auto;display:flex;align-items:center;gap:3px;height:22px;padding:1px 4px;border:1px solid #58765c;border-radius:4px;background:#1b2e24ed;box-sizing:border-box;white-space:nowrap}
+.effect-icon{font-size:16px}.effect-status{color:#d4e9a7;font-variant-numeric:tabular-nums}.active-effect.is-paused .effect-status{color:#aeb9b1}
+.active-effects.is-wide{flex-wrap:wrap;align-content:flex-start;overflow-x:hidden;overflow-y:auto;touch-action:pan-y}

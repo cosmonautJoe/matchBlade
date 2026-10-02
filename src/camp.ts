@@ -17,8 +17,10 @@
 import Phaser from "phaser";
 import { preloadPlayer, createPlayerAnimations, PLAYER_TEXTURE, PLAYER_DENSITY, PLAYER_ORIGIN } from "./player-art";
 import { openCampPanel, type PanelCard } from "./camp-ui";
+import type { CampNpc } from "./camp-npc-view";
 import { createVillageHub } from "./village-hub";
 import { createCaravan } from "./caravan";
+import { campReaction, SPEAKERS, type CampReaction } from "./camp-dialogue";
 import {
   type MetaState,
   loadMeta,
@@ -26,6 +28,7 @@ import {
   canAfford,
   spend,
   BLACKSMITH_COST,
+  unlockForge,
   forgeCost,
   forgeCap,
   WIZARD_COST,
@@ -65,7 +68,7 @@ const PEDDLER_SCALE = 1.25; // knight frames hold a 48px figure (vs the hero's 2
 // gets its own origin or she floats above the ground line.
 const PEDDLER_ORIGIN_IDLE = 63 / 80;
 const PEDDLER_ORIGIN_WALK = 66 / 80;
-const PEDDLER_PRICES: Record<ItemTier, number> = { common: 10, uncommon: 20, rare: 35 };
+const PEDDLER_PRICES: Record<ItemTier, number> = { common: 6, uncommon: 12, rare: 24 };
 const PEDDLER_REROLL = 5; // 💎 to spin fresh wares
 // Her barks. Most of them exist to teach ONE thing the game otherwise never
 // says out loud: a warden's blow goes straight through your guard, and she is
@@ -679,7 +682,10 @@ export class CampScene extends Phaser.Scene {
     // Peddler, who turns up the first time you come home with a diamond banked
     const replayIntro = new URLSearchParams(location.search).has("intro");
     if (this.villageHub && "announce" in this.villageHub) {
-      if (!this.meta.campIntroSeen) {
+      if ("startIntro" in this.villageHub && (!this.meta.caravanIntroSeen || replayIntro)) {
+        this.cutscene = true;
+        this.villageHub.startIntro();
+      } else if (!this.meta.campIntroSeen) {
         this.meta.campIntroSeen = true;
         this.villageHub.announce("Your caravan. Pick a quest, then head out to collect supplies.");
       }
@@ -1258,6 +1264,8 @@ export class CampScene extends Phaser.Scene {
     // boss aid first — the panel groups by section anyway, and this keeps the
     // stocked order matching the order she displays them in
     this.shopOffers = aids.length ? [aids[0], ...rest.slice(0, 2)] : rest.slice(0, 3);
+    // A new player can always buy something immediately useful after two gem matches.
+    if (this.meta.bestDepth < 10) this.shopOffers = [ITEMS.find(i => i.id === "bulwark")!, ITEMS.find(i => i.id === "wardbell")!, rest.find(i => i.id !== "bulwark")!];
   }
 
   /**
@@ -1400,16 +1408,16 @@ export class CampScene extends Phaser.Scene {
   }
 
   /** Her shop: three wares for diamonds, packed into your slots for the NEXT run. */
-  private peddlerTapped() {
+  private peddlerTapped(reply?: { speaker: string; text: string }) {
     if (!this.meta.peddlerArrived && this.villageHub && "announce" in this.villageHub) {
-      this.panel("Meet the merchant", ["Bring back your first gem from a run. The merchant will join your caravan and open the item shop."], [{label:"Got it"}]);
+      this.panel("Meet the merchant", ["Bring back your first gem from a run. The merchant will join your caravan and open the item shop."], [{label:"Got it"}], "shop");
       return;
     }
     if (this.editMode || this.panelOpen || this.cutscene) return;
     this.closePanel();
     this.panelOpen = true;
     const stocked = this.meta.stockedItems;
-    const refresh = () => { this.closePanel(); this.peddlerTapped(); };
+    const refresh = (reaction?: { speaker: string; text: string }) => { this.closePanel(); this.peddlerTapped(reaction); };
     const cards: PanelCard[] = [...this.shopOffers]
       .sort((a, b) => Number(!!b.bossAid) - Number(!!a.bossAid))
       .map((item) => {
@@ -1431,7 +1439,7 @@ export class CampScene extends Phaser.Scene {
               saveMeta(this.meta);
               this.refreshResources();
               this.sfx("coin3", 0.55);
-              refresh();
+              refresh(this.npcReaction("purchase", false));
             },
           },
         };
@@ -1440,10 +1448,11 @@ export class CampScene extends Phaser.Scene {
     const pack = stocked.map((id) => ITEMS.find((item) => item.id === id)?.name ?? id).join(", ");
     this.closeNativePanel = openCampPanel(this, {
       title: "Item shop", kind: "shop",
+      reply,
       subtitle: `💎 ${this.meta.treasure} gems · ${stocked.length}/${MAX_STOCKED} packed`,
       cards, footer: pack ? `Next run: ${pack}` : "Pack up to three items for your next run.",
       actions: [{
-        label: `Refresh stock · 💎 ${PEDDLER_REROLL}`, secondary: true,
+        label: `Refresh · 💎 ${PEDDLER_REROLL}`, secondary: true,
         enabled: this.meta.treasure >= PEDDLER_REROLL && this.shopOffers.length > 0,
         run: () => {
           if (!canAfford(this.meta, { treasure: PEDDLER_REROLL })) return;
@@ -1452,7 +1461,7 @@ export class CampScene extends Phaser.Scene {
           saveMeta(this.meta);
           this.refreshResources();
           this.sfx("pickup", 0.5);
-          refresh();
+          refresh(this.npcReaction("restock", false));
         },
       }],
       onClose: () => this.closePanel(),
@@ -1466,6 +1475,12 @@ export class CampScene extends Phaser.Scene {
     this.meta.campIntroSeen = true;
     saveMeta(this.meta);
     this.scene.restart();
+  }
+
+  private npcReaction(event: CampReaction, bubble = true) {
+    const line = campReaction(event);
+    if (bubble && this.villageHub && "say" in this.villageHub) this.villageHub.say(line);
+    return { speaker: SPEAKERS[line[0]], text: line[1] };
   }
 
   private toast(msg: string) {
@@ -1517,7 +1532,8 @@ export class CampScene extends Phaser.Scene {
 
   /** Pause the camp under the system menu (Esc / ☰). Held while a panel/cutscene runs. */
   private openMenu() {
-    if (this.scene.isActive("menu") || this.editMode || this.panelOpen || this.cutscene || this.departing) return;
+    const caravanIntro = this.villageHub?.root.classList.contains("is-intro");
+    if (this.scene.isActive("menu") || this.editMode || this.panelOpen || (this.cutscene && !caravanIntro) || this.departing) return;
     if (this.villageHub) {
       this.villageHub.root.style.visibility = "hidden";
       this.events.once(Phaser.Scenes.Events.RESUME, () => { if (this.villageHub) this.villageHub.root.style.visibility = ""; });
@@ -1536,7 +1552,7 @@ export class CampScene extends Phaser.Scene {
   }
 
   /** Simple modal panel: dim veil + title + lines + buttons. One at a time. */
-  private panel(title: string, lines: string[], buttons: { label: string; enabled?: boolean; cb?: () => void }[]) {
+  private panel(title: string, lines: string[], buttons: { label: string; enabled?: boolean; cb?: () => void }[], npc?: CampNpc) {
     this.closePanel();
     this.panelOpen = true;
     const costs: string[] = [];
@@ -1547,12 +1563,12 @@ export class CampScene extends Phaser.Scene {
     const cards: PanelCard[] = [{ title: "", lines: lines.filter((line) => !!line && (!costs.length || !line.startsWith("Resources:"))) }];
     if (costs.length) cards.push({ title: "Materials", tag: "You have / needed", lines: costs });
     this.closeNativePanel = openCampPanel(this, {
-      title, kind: "upgrade",
-      subtitle: "Permanent camp upgrades",
+      title, kind: "upgrade", npc,
+      subtitle: npc === "unknown" || npc === "shop" ? "Your growing caravan" : "Permanent camp upgrades",
       cards,
       actions: buttons.map((b) => ({
         label: b.cb ? b.label : "Back to camp", enabled: b.enabled,
-        secondary: !b.cb,
+        secondary: !b.cb, closeAfter: true,
         run: () => { this.closePanel(); b.cb?.(); },
       })),
       onClose: () => this.closePanel(),
@@ -1579,7 +1595,8 @@ export class CampScene extends Phaser.Scene {
     this.panel(
       "WREN · SWORD UPGRADES",
       [
-        `I can upgrade your sword. I just need materials to set up.`,
+        `Set up the forge and get sword level 1 straight away.`,
+        `A basic sword match will deal 10 damage instead of 5, before enemy defenses.`,
         `Bring 🪵 ${BLACKSMITH_COST.wood} and 🪨 ${BLACKSMITH_COST.ore} to unlock the forge.`,
         ``,
         `Resources:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}`,
@@ -1588,14 +1605,14 @@ export class CampScene extends Phaser.Scene {
         { label: `HIRE  🪵${BLACKSMITH_COST.wood} 🪨${BLACKSMITH_COST.ore}`, enabled: afford, cb: () => this.hireSmith() },
         { label: "maybe later" },
       ],
+      "forge",
     );
   }
 
   private hireSmith() {
-    spend(this.meta, BLACKSMITH_COST);
-    this.meta.blacksmithHired = true;
-    saveMeta(this.meta);
+    if (!unlockForge(this.meta)) return;
     this.refreshResources();
+    this.npcReaction("smith");
     this.sfx("pouch", 0.6);
     for (const m of this.tentMark) m.destroy(); // the "?" is answered
     this.tentMark = [];
@@ -1631,7 +1648,7 @@ export class CampScene extends Phaser.Scene {
   private mageTapped() {
     if (this.editMode || this.panelOpen || this.cutscene) return;
     if (!this.meta.wizardHired && !wizardAvailable(this.meta.biome)) {
-      this.panel("Unknown traveler", ["There's room for someone new. Keep exploring to discover who will join your caravan."], [{label:"Got it"}]);
+      this.panel("Unknown traveler", ["There's room for someone new. Keep exploring to discover who will join your caravan."], [{label:"Got it"}], "unknown");
       return;
     }
     if (!this.meta.wizardHired) {
@@ -1649,6 +1666,7 @@ export class CampScene extends Phaser.Scene {
           { label: `HIRE  🪵${WIZARD_COST.wood} 🪨${WIZARD_COST.ore} 💎${WIZARD_COST.treasure}`, enabled: afford, cb: () => this.hireWizard() },
           { label: "later" },
         ],
+        "magic",
       );
       return;
     }
@@ -1665,6 +1683,7 @@ export class CampScene extends Phaser.Scene {
           `More upgrades unlock in the next area.`,
         ],
         [{ label: "later" }],
+        "magic",
       );
       return;
     }
@@ -1682,6 +1701,7 @@ export class CampScene extends Phaser.Scene {
         { label: `STUDY  🪨${cost}`, enabled: afford, cb: () => this.studyUpgrade(cost) },
         { label: "not yet" },
       ],
+      "magic",
     );
   }
 
@@ -1690,6 +1710,7 @@ export class CampScene extends Phaser.Scene {
     this.meta.wizardHired = true;
     saveMeta(this.meta);
     this.refreshResources();
+    this.npcReaction("mage");
     this.sfx("pouch", 0.6);
     for (const m of this.mageMark) m.destroy(); // the "?" is answered
     this.mageMark = [];
@@ -1708,6 +1729,7 @@ export class CampScene extends Phaser.Scene {
     this.meta.staffLevel++;
     saveMeta(this.meta);
     this.refreshResources();
+    this.npcReaction("staff");
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.staffLevel >= studyCap(this.meta.biome);
     this.toast(atPeak ? `Staff maxed for this area · +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} spell damage` : `staff improved — level ${this.meta.staffLevel} 🪄`);
@@ -1736,6 +1758,7 @@ export class CampScene extends Phaser.Scene {
           `More upgrades unlock in the next area.`,
         ],
         [{ label: "later" }],
+        "forge",
       );
       return;
     }
@@ -1744,7 +1767,7 @@ export class CampScene extends Phaser.Scene {
     const nextNote =
       lvl + 1 >= cap
         ? `Level ${lvl + 1}: one sword match defeats regular enemies`
-        : `Level ${lvl} → ${lvl + 1}: +${(lvl + 1) * SWORD_BONUS_PER_LEVEL} first-hit bonus`;
+        : `Basic sword match: ${5 + lvl * SWORD_BONUS_PER_LEVEL} → ${5 + (lvl + 1) * SWORD_BONUS_PER_LEVEL} damage, before enemy defenses`;
     this.panel(
       "⚒ SWORD UPGRADES",
       [
@@ -1757,6 +1780,7 @@ export class CampScene extends Phaser.Scene {
         { label: `FORGE  🪨${cost}`, enabled: afford, cb: () => this.forgeUpgrade(cost) },
         { label: "not yet" },
       ],
+      "forge",
     );
   }
 
@@ -1765,6 +1789,7 @@ export class CampScene extends Phaser.Scene {
     this.meta.swordLevel++;
     saveMeta(this.meta);
     this.refreshResources();
+    this.npcReaction("sword");
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.swordLevel >= forgeCap(this.meta.biome);
     this.toast(atPeak ? "Sword maxed. One match defeats regular enemies in this area." : `blade sharpened — level ${this.meta.swordLevel} ⚔`);
@@ -1774,12 +1799,13 @@ export class CampScene extends Phaser.Scene {
   }
 
   /** The Wayfarer's quest board: accepted quests with progress + new offers to accept. */
-  private goddessTapped() {
+  private goddessTapped(reply?: { speaker: string; text: string }) {
     if (this.editMode || this.panelOpen || this.cutscene) return;
 
     // turn-ins happen HERE: she pays every kept oath the moment you see her
     const rewarded = collectQuestRewards(this.meta);
     if (rewarded.length) {
+      reply = this.npcReaction("reward", false);
       this.refreshResources();
       rewarded.forEach((q, i) =>
         this.time.delayedCall(250 + i * 1200, () => {
@@ -1806,7 +1832,7 @@ export class CampScene extends Phaser.Scene {
           if (!acceptQuest(this.meta, q.id)) return;
           this.sfx("pickup", 0.55);
           this.closePanel();
-          this.goddessTapped();
+          this.goddessTapped(this.npcReaction("quest", false));
         },
       },
     });
@@ -1816,12 +1842,13 @@ export class CampScene extends Phaser.Scene {
     });
     const ready = roadOpen(this.meta);
     this.closeNativePanel = openCampPanel(this, {
-      title: "Quests", kind: "quests",
+      title: "Quests", kind: "quests", npc: "quests",
+      reply,
       subtitle: `${this.meta.active.length}/${MAX_ACTIVE} active · 💎 ${this.meta.treasure} gems`,
       cards,
       footer: rewarded.length ? `Collected 💎 ${rewarded.reduce((sum, q) => sum + q.reward, 0)} in quest rewards.`
         : ready ? "The next area is ready." : "Defeat the final boss at depth 20 to unlock the next area. Quests give extra rewards.",
-      actions: ready ? [{ label: `Next area: ${nextBiome(this.meta)}`, run: () => { this.closePanel(); this.travelOnward(); } }] : [],
+      actions: ready ? [{ label: `Next area: ${nextBiome(this.meta)}`, closeAfter: true, run: () => { this.closePanel(); this.travelOnward(); } }] : [],
       onClose: () => this.closePanel(),
     });
   }
@@ -2349,6 +2376,8 @@ export class CampScene extends Phaser.Scene {
       quests: guarded(() => this.goddessTapped()),
       travel: guarded(() => this.travelOnward()),
       start: () => this.depart(), menu: () => this.openMenu(),
+      canTalk: () => !this.panelOpen && (!this.cutscene || !!this.villageHub?.root.classList.contains("is-intro")) && !this.departing && this.scene.isActive(),
+      introEnded: () => { this.cutscene = false; },
     };
     this.villageHub = import.meta.env.DEV && new URLSearchParams(location.search).has("village-preview")
       ? createVillageHub(this.meta, biomeDef(this.meta.biome).label, actions)

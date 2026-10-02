@@ -1,5 +1,80 @@
 # matchBlade — Game Design Document
 
+## Start run invitation — v0.0.32
+
+The Start run control uses a warm gold gradient, a gentle glow cycle, an occasional shimmer and a small arrow nudge. Pressing gives a subtle tactile offset without changing layout. Camp pause and reduced-motion preferences stop these animations.
+
+## Consistent camp services — v0.0.31
+
+Quests, sword upgrades, staff upgrades and locked workspaces share the merchant's gentle live NPC camera and smooth return. Each service frames its own station; undiscovered companions remain unnamed. Camp preparation and service panels share one fixed divider: the lower 55% in portrait, or the right 55% in landscape. Panels copy the preparation area's exact bounds, accounting for the header and safe areas, so opening or closing a service never changes the divider. Longer content scrolls inside the panel. Camp headers, preparation controls and service panels use the shop's charcoal gray palette with warm gold actions and accents. Preparation and service frames share rounded corners and a single thin border, without the heavy inset gold stripe.
+
+## Merchant close-up — v0.0.27
+
+v0.0.30 fixes the exit showing the normal camp underneath a second moving caravan. The exit now uses one fixed canvas covering the transition, hides only the underlying environment until handoff, and animates the camera and crop without repeatedly resizing the canvas. Camera motion targets 60 fps. The isolated flow preview includes an explicit shop-motion case for testing on hosts with reduced motion enabled; production continues respecting that preference.
+
+The shop camera now uses a wider crop and caps its push-in at 1.6× the normal camp scale. On exit, the shop panel follows the camera crop edge and fades near the end, avoiding an exposed blank band between the returning scenery and camp controls.
+
+As of v0.0.28, the camera is pulled back about 28% to show more of the caravan around the merchant while retaining the same shop split.
+
+As of v0.0.29, closing the shop fades the counter away while the merchant camera eases back to the original camp framing over 440 ms. Camp controls stay blocked until the transition finishes. Closing during the entrance reverses from the current camera position; purchase refreshes still skip the exit. Reduced-motion mode closes immediately.
+
+Opening the shop eases into a close-up of the animated merchant, shelves and counter. Portrait gives the merchant one-third of the screen and the shop two-thirds; landscape uses a roughly 38/62 side-by-side split. The close-up samples the live caravan canvas, with distinct framing for the starter and expanded wagon, while the underlying camp keeps its original geometry. Purchase/stock refresh responses keep the camera in place. Reduced-motion users get the close-up without the entrance zoom. The buy control sits toward the bottom of the available item area; compact screens scroll longer descriptions.
+
+## Rotation and fixed camp framing — v0.0.26
+
+The shop fits over the existing preparation area without changing camp dimensions, caravan scale or scenery framing. Portrait gameplay uses 7×7 and landscape uses 10×5, including after rotation and recovery. Board reflow waits for swaps, cascades, targeting, chests, tutorials and boss challenges to finish. It preserves the tile bag, retains the 50th tile in reserve in portrait, and creates no automatic matches or rewards. Both arrangements are cached in the checkpoint; rotating back without playing restores the exact previous cells. After a move, the alternate arrangement is rebuilt deterministically from the remaining tiles, without RNG. Legacy portrait saves receive one deterministic common reserve tile on their first expansion.
+
+## Compact camp shop — v0.0.25
+
+The item shop replaces the preparation area with a bottom counter in portrait and a narrow right-hand counter in landscape. Camp stays bright and animated. Players select an offer from the stock strip to read its effect and buy it; longer details scroll without enlarging the panel. Pack contents, gems, stock refresh and merchant responses remain available. Background controls are inactive while shopping. As of v0.0.26, opening and closing the counter leave camp framing unchanged.
+
+## NPC service responses — v0.0.24
+
+Successful purchases, paid stock refreshes, sword/staff upgrades, recruitment, quest acceptance and reward collection trigger short NPC responses with no immediate line repeats. Shops and quest panels display the response inline; recruitment and upgrades use camp speech bubbles once the scene is available. Bubbles now have rounded corners, retaining cream paper and bronze borders.
+
+## Dialogue appearance — v0.0.23
+
+Camp speech bubbles use cream paper, dark ink, a stepped bronze frame and a contrasting speaker nameplate. Intro controls use cream and plum. Intro and idle exchanges share the same styling and tap-to-advance behavior.
+
+## Boss framing — v0.0.22
+
+During boss challenges, portrait mode hides the quest line and compacts the footer to 94 px, moving the fight and arena 46 px lower while retaining the inventory and effect badges. The player is 20% larger and the boss 8% larger during challenges. Malgrim's return-fire timing cue lives in the lower playfield; duplicate guard and projectile circles have been removed from the runner scene. Normal framing returns after the challenge.
+
+## Chest interaction — v0.0.20
+
+An affordable chest automatically enlarges into the middle of the screen, then waits for the player to tap it, with a "Tap to open" prompt (v0.0.21). Combat, puzzle input and item timers pause while waiting. Keys (or Spare Key charges) are spent and loot is rolled only after the tap. Reloading restores the closed chest; locked chests still pass by when no key is available.
+
+## Active item effects — v0.0.16
+
+As of v0.0.19, the portrait footer groups quest progress, compact effect badges and a full-width inventory row in 140 px. The remaining height goes to the fight scene. The Hint button has been removed in both orientations; the keyboard shortcut and automatic idle hint remain.
+
+Compact icon badges sit above the inventory in portrait and below quests in the landscape sidebar. As of v0.0.17, badges show only the icon plus seconds, charge count, or an active checkmark; full names and descriptions remain in hover text and accessible labels. The portrait row scrolls when needed, while landscape badges wrap. Timed effects show remaining combat seconds (muted when paused); Boss Armor and Scout Map persist for the run. Revive readiness and the shared guard pool are also visible. The readout follows actual run/checkpoint state, clears spent effects, and hides during chest reveals, menus, tutorials and results.
+
+## Caravan story and idle dialogue — v0.0.13
+
+- First arrival: the original player sprite walks in from the left, stops beside the cart, and talks with the guide. The provisional story is a search for his abducted wife and son. Clearing the road earns a place with the caravan and help with the search. Eight short, manually advanced lines; always skippable. No run starts automatically.
+- Intro dialogue appears in speech bubbles above the speaker, with Continue/Skip controls in the preparation area. Idle chatter uses the same anchored bubbles. The new `caravanIntroSeen` save flag is independent of the retired camp intro; existing saves see the new scene once. Completing or skipping saves it; `?intro` replays it for development.
+- 37 idle conversations: solo remarks, two-person exchanges, and ensemble chats. The guide is practical and welcoming; the merchant is dry and careful with supplies; Wren is blunt and quietly caring; Aldwin is curious and absent-minded. The player is tired but willing to help.
+- Only recruited, visible crew can speak. Location-specific exchanges require the current biome. Chatter begins after 16–26 idle seconds, with 35–60 seconds of quiet after each exchange; interaction delays it, and shops, menus, departure and hidden tabs suppress it. Recent conversations are avoided. As of v0.0.14, clicking or tapping a speech bubble advances its next line (keyboard Enter/Space also works). Idle chatter still advances automatically if left alone; intro dialogue waits for input.
+
+## Camp interaction polish — v0.0.12
+
+Camp animations play on entry, with a pause/play control in the header. Hovering or keyboard-focusing an NPC area adds a soft warm glow and reveals its label; pressing the area gives the same feedback on touch screens.
+
+## Opening-loop tuning — v0.0.11
+
+This section supersedes the older tuning figures below.
+
+- The first three plains encounters are two slimes and a boar. Their base attack interval is 6 seconds; later encounters use 4.8 seconds, adjusted by creature type. Each new enemy gets a full interval. Plains scroll pressure ramps from 0.012/sec to 0.017/sec by depth 6.
+- Enemy names, HP and situational advice use screen-sized text. Ordinary enemies no longer show the generic swords/staves damage hint or its background strip; resistance, spores, higher guard costs and danger cues still appear when relevant. Attacks use animation cues without a countdown. Boss stages flow automatically with the existing arena cues and no instruction popup; regular shields do not prevent boss damage.
+- Forge setup costs **20 wood + 20 ore** and includes **sword level 1** (a basic sword match goes from 5 to 10 damage before defenses). Existing hired smiths with level 0 receive level 1. Later forge costs and zone caps are unchanged.
+- Wood and ore spawn weights are **12 each**, against sword 36 and staff/shield/key/gem 18 each; potion remains 1. Every chest guarantees a **6–8 wood or ore** pull, in addition to the existing item guarantee when inventory has room.
+- Shop prices are **6 / 12 / 24 gems** for common/uncommon/rare. Before reaching depth 10, stock includes a Shield Potion and Safety Bell. The camp displays the next upgrade, material shortfall, readiness and a direct link to the service.
+- Forest opens with ward slime → Sporecap → Watcher. An unblocked Sporecap attack adds one spore stack (maximum 2); each stack adds 0.035 pressure to its next hit. Staff matches clear all stacks. Full blocks prevent new stacks. Forest attack-power growth is 0.007 per depth.
+- The board remains 7×7 or 10×5 according to the orientation when the run starts. Rotation and recovery preserve its tiles and shape.
+
+Validation: `node tests/gameplay-balance.mjs` exercises actual board/combat rules with 60 seeds per configuration. A greedy bot taking 4 seconds per move reached the first boss in 21/60 portrait and 23/60 landscape runs at sword level 0, versus 54/60 and 53/60 at level 1. Mean material earnings were roughly 15 wood and 15 ore per attempt. These probes exclude boss performance and active item use; they are tuning evidence, **not human completion-rate or session-length estimates**. Human testing of the full opening 15–20 minutes remains the next balance check.
+
 **Version:** 1.0 (living document) · **Status:** playable core loop + meta progression shipped · **Engine:** Phaser 3 + TypeScript + Vite
 **Live build:** https://cosmonautjoe.github.io/matchBlade/ · **Repo:** github.com/cosmonautJoe/matchBlade
 

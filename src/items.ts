@@ -181,7 +181,10 @@ export function rollChestPulls(
   };
 
   const pulls: ChestPull[] = [];
-  for (let i = itemCount; i < total; i++) pulls.push(resourcePull());
+  // Every chest helps a permanent upgrade, even when the other pulls are gems.
+  const material = rand() < 0.5 ? "wood" : "ore";
+  pulls.push({ kind: material, n: 6 + Math.floor(rand() * 3), icon: material === "wood" ? "🪵" : "🪨" });
+  for (let i = itemCount + 1; i < total; i++) pulls.push(resourcePull());
   for (let i = 0; i < itemCount; i++) {
     const def = rollItem(bossHoard, rand);
     pulls.push({ kind: "item", n: 1, icon: def.glyph, item: def });

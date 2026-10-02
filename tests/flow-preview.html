@@ -4,6 +4,12 @@
 <button data-case="fight">Recover a 10×5 fight</button><button data-case="chest">Recover interrupted chest</button>
 <button data-case="boss">Recover boss stage 2</button><button data-case="victory">Finish road and unlock travel</button>
 <button data-case="tutorial">Fresh portrait tutorial</button><pre id="status"></pre>
+<button data-case="forge">Camp with forge materials</button><button data-case="forest">Forest spore encounter</button>
+<button data-case="crew">Camp with full crew</button>
+<button data-case="merchant-motion">Camp with shop camera motion enabled</button>
+<button data-case="effects">Portrait fight with active item effects</button>
+<button data-case="closed-chest">Closed chest awaiting a tap</button>
+<button data-case="boss-timing">Portrait boss return-fire stage</button>
 <script type="module">
 import {defaultMeta,saveMeta,loadMeta} from '/src/meta.ts';
 import {makeInitialGrid} from '/src/board.ts';
@@ -13,15 +19,27 @@ document.querySelector('#status').textContent=JSON.stringify(loadMeta(),null,2);
 for(const button of document.querySelectorAll('button'))button.onclick=()=>{
  if(location.port!=='5174')throw new Error('Use isolated port 5174');
  const kind=button.dataset.case,m=defaultMeta();
- m.campIntroSeen=true;m.peddlerArrived=true;m.tutorialSeen=kind!=='tutorial';m.wood=22;m.ore=18;
- if(kind!=='tutorial'){
- const run=newRun(0,3,'plains',0);run.killed=kind==='victory'?20:kind==='boss'?9:4;
- run.enemy=kind==='chest'||kind==='victory'?null:makeEnemy(run.killed,'plains',()=>0);
+ if(kind==='merchant-motion')sessionStorage.setItem('matchblade-preview-shop-motion','on');
+ else sessionStorage.removeItem('matchblade-preview-shop-motion');
+ if(kind!=='tutorial') { m.campIntroSeen=true;m.peddlerArrived=true;m.tutorialSeen=true;m.wood=22;m.ore=18; }
+ if(kind==='forge') { m.wood=20;m.ore=20;m.treasure=6; }
+ if(kind==='crew'||kind==='merchant-motion') { m.peddlerArrived=true;m.blacksmithHired=true;m.wizardHired=true;m.swordLevel=1;m.staffLevel=1;m.caravanIntroSeen=true; }
+ if(kind==='forest') { m.biome='forest';m.blacksmithHired=true;m.swordLevel=3; }
+ if(kind!=='tutorial'&&kind!=='forge'&&kind!=='crew'&&kind!=='merchant-motion'){
+ const run=newRun(m.swordLevel,kind==='forest'?6:3,m.biome,0);run.killed=kind==='victory'?20:['boss','boss-timing'].includes(kind)?9:kind==='forest'?1:4;
+ run.enemy=kind==='chest'||kind==='victory'?null:makeEnemy(run.killed,m.biome,()=>0);
+ if(kind==='forest')run.enemy.spores=1;
  run.pressure=.4;run.block=8;run.resources={wood:8,ore:6,treasure:3,keys:2};run.score=400;
- m.activeRun={version:1,savedAt:Date.now(),run,grid:makeInitialGrid(Math.random,10,5),items:['hearth',null,null,null,null,null],
+ m.activeRun={version:1,savedAt:Date.now(),run,grid:makeInitialGrid(Math.random,['forest','effects'].includes(kind)?7:10,['forest','effects'].includes(kind)?7:5),items:['hearth',null,null,null,null,null],
  chestsOpened:kind==='chest'||kind==='victory'?2:1,sinceChest:0,bestCascade:2,rainy:false,arenaWard:kind==='boss'?1:0,
  pendingChest:kind==='chest'||kind==='victory'?[{kind:'wood',n:8,icon:'🪵'},{kind:'item',n:1,icon:'🗺️',item:itemById('ink')}]:null,
  buffs:{freezeLeft:0,hornLeft:0,ledgerLeft:0,burnLeft:0,burnAcc:0,skeletonCharges:0,panCharges:0,spursActive:false,inkActive:false,bossChestNext:false}};
+ if(kind==='effects') { run.pierceMult=.5;run.bellCharges=2;run.whetstone=3;
+   m.activeRun.items=['waystone','ledger','wardbell','hearth',null,null];
+   Object.assign(m.activeRun.buffs,{skeletonCharges:1,panCharges:1,inkActive:true}); }
+ if(kind==='closed-chest') { run.enemy=null;run.resources.keys=2;m.activeRun.awaitingChest=true;
+   m.activeRun.grid=makeInitialGrid(Math.random,7,7); }
+ if(kind==='boss-timing') { m.activeRun.arenaWard=2;m.activeRun.grid=makeInitialGrid(Math.random,7,7); }
  }
  saveMeta(m);location.href='/';
 };
