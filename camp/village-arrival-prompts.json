@@ -1,0 +1,15 @@
+{
+  "tool": "Built-in image_gen",
+  "portrait": {
+    "file": "village-hub-arrival.png",
+    "prompt": "Precise local cleanup of this game environment. Remove ONLY the red-scarf swordsman player standing in the central dirt clearing below the campfire, around (520,902) on the 1024x1536 map. Restore the continuous warm dirt path and small natural ground texture behind his whole body, scarf, sword and shadow. Keep EVERYTHING else exactly unchanged: campfire, buildings, trees, signposted upper right exit, river, bridge, paths, colors and camera. No new characters. Portrait 2:3. This is a clean background for a separately animated player."
+  },
+  "landscape": {
+    "file": "village-hub-wide-arrival.png",
+    "prompt": "Precise local cleanup of this game environment. Remove ONLY the red-scarf swordsman player standing in the central dirt clearing below the campfire, around (770,610) on the1536x1024 map. Restore continuous warm dirt path and small natural ground texture behind his whole body, scarf, sword and shadow. Keep EVERYTHING else exactly unchanged: campfire, buildings, trees, signposted upper right exit, river, bridge, paths, colors and camera. No new characters. Landscape3:2. Clean background for separately animated player."
+  },
+  "player": {
+    "file": "village-player.png",
+    "prompt": "Use the small central red-scarf swordsman in this camp as CHARACTER REFERENCE ONLY. Generate a transparent pixel-art game sprite sheet of that same adventurer: short dark tousled hair, RED SCARF trailing to left, dark brown fitted tunic, dark trousers, boots, steel sword held downward in right hand. Slight overhead RPG camera, character seen from BEHIND facing NORTH away from viewer. Exact sheet 4 columns x3 rows, 12 equal square cells, no text, labels, borders or grid lines. Landscape4:3 total image. First TWO rows are one continuous EIGHT-FRAME north-facing walk cycle in row-major order, alternating feet, heel lift, passing poses, opposite arm swing, scarf flutter. Last row FOUR FRAMES north-facing idle breathing and scarf settling. Keep same body size and centered position throughout. Feet baseline at85% of each cell, top of hair at15%, generous transparent padding around all characters, sword and scarf remain inside each cell. Clear small pixel clusters and clean sprite silhouette matching camp NPCs, not photoreal. No scenery, floor, cast shadow, extra characters, hats or armor."
+  }
+}

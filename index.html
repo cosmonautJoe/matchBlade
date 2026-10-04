@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0b0f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/matchBlade/manifest.webmanifest" />
+    <title>matchBlade</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      /* expose the notch / home-indicator safe-area insets to JS (read in layout()). */
+      :root {
+        --sai-t: env(safe-area-inset-top, 0px);
+        --sai-r: env(safe-area-inset-right, 0px);
+        --sai-b: env(safe-area-inset-bottom, 0px);
+        --sai-l: env(safe-area-inset-left, 0px);
+      }
+      /* 100dvh tracks the *visible* viewport (excludes mobile browser chrome); 100vh is the fallback. */
+      html, body { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; background: #0a0b0f; }
+      #game { position: relative; width: 100vw; height: 100vh; height: 100dvh; display: flex; align-items: center; justify-content: center; }
+      canvas { image-rendering: pixelated; display: block; }
+      /* High-density screens (phones, retina laptops): the browser upscales the
+         canvas 2-3x — nearest-neighbour there turns TEXT to chunks. Let those
+         screens smooth the upscale; 1x desktops keep the crisp pixel look. */
+      @media (min-resolution: 1.5dppx) {
+        canvas { image-rendering: auto; }
+      }
+    </style>
+    <script type="module" crossorigin src="/matchBlade/assets/index-Be6j1a7I.js"></script>
+    <link rel="stylesheet" crossorigin href="/matchBlade/assets/index-F0ijY28C.css">
+  </head>
+  <body>
+    <div id="game"></div>
+  </body>
+</html>

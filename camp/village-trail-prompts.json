@@ -1,0 +1,11 @@
+{
+  "tool": "Built-in image_gen",
+  "portrait": {
+    "file": "village-hub-trail.png",
+    "prompt": "Precise local edit of this portrait 2:3 pixel art camp. Replace ONLY the purple portal in upper-right with a believable walking trail leading from its existing stone steps northward and out through the TOP EDGE of the image. Remove the entire portal arch, purple fire, runes and crystals. In their place put a warm ochre dirt trail between natural gray rocks and forest trees, with a small ordinary wooden arrow signpost beside the trail at x80% y15% pointing north. No text on sign. The trail must visibly connect the existing camp path and steps to the top edge, no dead end. No magical glow, no arch or gateway. Preserve every other pixel as closely as possible, especially all buildings, river bridge, foreground, campfire and central player. Do not add NPCs, labels or UI. Keep exact framing and dimensions, lighting and pixel art style."
+  },
+  "landscape": {
+    "file": "village-hub-wide-trail.png",
+    "prompt": "Precise local edit of this landscape 3:2 pixel art camp. Replace ONLY the purple portal in upper-right with a believable walking trail leading from its existing stone steps northward and out through the TOP EDGE of the image. Remove entire portal arch, purple fire, runes and crystals. In their place put a warm ochre dirt trail between natural gray rocks and forest trees, with a small ordinary wooden arrow signpost beside trail at x80% y12% pointing along the trail. No text on sign. Trail visibly connects existing camp path and steps to top edge, no dead end. No magical glow, arch or gateway. Preserve every other pixel as closely as possible, especially all buildings, river bridge, foreground, campfire and central player. Do not add NPCs, labels or UI. Keep exact framing, dimensions, lighting and pixel art style."
+  }
+}
