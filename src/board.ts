@@ -176,12 +176,13 @@ export function hasPossibleMove(g: number[][]): boolean {
 }
 
 /** The first adjacent swap that would create a match — the pair the Hint button lights up. */
-export function findHint(g: number[][]): { a: Coord; b: Coord } | null {
+export function findHint(g: number[][], blocked: (cell: Coord) => boolean = () => false): { a: Coord; b: Coord } | null {
   const H = g.length, W = g[0]?.length ?? 0;
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
-      if (c + 1 < W && swapMakesMatch(g, { r, c }, { r, c: c + 1 })) return { a: { r, c }, b: { r, c: c + 1 } };
-      if (r + 1 < H && swapMakesMatch(g, { r, c }, { r: r + 1, c })) return { a: { r, c }, b: { r: r + 1, c } };
+      if (blocked({ r, c })) continue;
+      if (c + 1 < W && !blocked({ r, c: c + 1 }) && swapMakesMatch(g, { r, c }, { r, c: c + 1 })) return { a: { r, c }, b: { r, c: c + 1 } };
+      if (r + 1 < H && !blocked({ r: r + 1, c }) && swapMakesMatch(g, { r, c }, { r: r + 1, c })) return { a: { r, c }, b: { r: r + 1, c } };
     }
   }
   return null;

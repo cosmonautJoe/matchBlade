@@ -19,6 +19,19 @@
  */
 
 import Phaser from "phaser";
+import { TILE_KEYS, TILE_TEXTURE_DENSITY, preloadTileArt, prepareTileArt } from "./tile-art";
+import { tileClearBurst, tileVisual, liftTile, settleTile, decoratePotion } from "./tile-feedback";
+import { TileShatter } from "./tile-shatter";
+import { tileEffectsEnabled, TILE_EFFECTS_CHANGED } from "./tile-effects";
+import { TileSwapPreview, dragSwapTarget } from "./tile-drag";
+import { newEmpowered, empoweredMatch, reflowEmpowered, type EmpoweredState } from "./empowered";
+import { decorateEmpowered, empoweredBurst } from "./empowered-art";
+import { newRescueState, rollRescue, companionById, companionKillRewards, rescueOptions, payForRescue, type RescueState } from "./companions";
+import { showCompanionRescue } from "./companion-view";
+import { offerRoadFork, chooseRoad, newRoadFork, roadOptions, ROAD_FORK_BONUS } from "./road-fork";
+import { showRoadFork } from "./road-fork-view";
+import { RoadScenery, preloadRoadScenery } from "./road-scenery";
+import { ForestAmbushBrush, ambushSplash } from "./forest-ambush-art";
 import { createCombatReadout } from "./combat-readout";
 import { createActiveEffects, activeItemEffects } from "./active-effects";
 import { preloadPlayer, createPlayerAnimations, PLAYER_TEXTURE, PLAYER_DENSITY, PLAYER_ORIGIN } from "./player-art";
@@ -37,6 +50,7 @@ import {
 } from "./board";
 import {
   type RunState,
+  type Enemy,
   type MatchOutcome,
   type SpellOutcome,
   type DamageMod,
@@ -53,8 +67,11 @@ import {
   applyMatches,
   dealDamage,
   castBlast,
+  ambushRear,
+  FOREST_AMBUSH_REWARD,
   drinkPotion,
   enemyStrike,
+  guardCost,
   pierceStrike,
   spawnNext,
   scroll,
@@ -75,6 +92,7 @@ import {
   rollChestPulls,
   TIER_COLORS,
   STORMCALL_DMG,
+  AMBUSH_FLASK_DMG,
   WARHORN_SECS,
   WAYSTONE_SECS,
   BULWARK_BLOCK,
@@ -93,12 +111,18 @@ import { CampScene } from "./camp";
 import { MenuScene } from "./menu";
 import { TitleScene } from "./title";
 import { sfxV, ambV, musicV, audioSettings, setAudioSettings, setSoundLevel } from "./audio";
-import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress, forgeCap } from "./meta";
+import { type MetaState, loadMeta, saveMeta, bankRun, questById, questProgress, currentQuests, forgeCap, prepareCampProgress, acknowledgeProgress, allQuestsDone } from "./meta";
 import { Tutorial } from "./tutorial";
 import { showResults } from "./results";
 import { readCheckpoint, type RunCheckpoint } from "./run-save";
 import { malgrimArena, malgrimToken } from "./malgrim-art";
+import { gorrachArena, gorrachToken, gorrachTimingFrame } from "./gorrach-art";
+import { bossArenaArt, frostCrystal, type BossTheme } from "./boss-arena-art";
+import { createBossFinale } from "./boss-finales";
+import { BOSS_FOR_BIOME, SLIME_SCALES, SLIME_GAPS, restoreSlimeProgress, slimeBeats, type SlimeProgress } from "./slime-boss";
+import { createSlimeBossArena } from "./slime-boss-arena";
 import { showChestReward } from "./chest-reward";
+import { restoreZoneFeatures, seedZonePatches, resolveZoneMatches, iceLocked, thawIfStuck, reflowIce, useZoneSupply } from "./zone-features";
 
 // ---- layout ---------------------------------------------------------------
 // The centre column (runner lane over the match board) is authored in these fixed
@@ -164,6 +188,8 @@ const BOSS_ORIGIN = 0.675;
 // killOrc". flat means "not a slime" (skip the squish-in sfx).
 /** `hitAt` is WHERE in the attack animation the blow connects (0..1 of its length). */
 type CreatureRig = { prefix: string; idleTex: string; scale: number; origin: number; faceLeft?: boolean; fakeDeath?: boolean; flat?: boolean; bob?: boolean; lunge?: boolean; hover?: number; barOff?: number; hitAt?: number };
+type AmbushActor = { sprite: Phaser.GameObjects.Sprite; enemy: Enemy; rig: CreatureRig;
+  hpBg: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle };
 const CREATURE_RIG: Record<string, CreatureRig> = {
   green: { prefix: "orc", idleTex: "slime-idle", scale: SLIME_SCALE, origin: SLIME_ORIGIN },
   blue: { prefix: "orc2", idleTex: "slime2-idle", scale: SLIME_SCALE, origin: SLIME_ORIGIN },
@@ -198,7 +224,7 @@ const BOSS_NAME = "MALGRIM";
 // =============================================================================
 // THE BOSS GRAMMAR — three colours, one rule: HOW LONG YOU TOUCH.
 // =============================================================================
-// Every warden speaks this, so what you learn fighting Malgrim in the plains
+// Every warden speaks this, so what you learn fighting Gorrach in the plains
 // still reads in the glacial pass. The fights differ in theme and staging, not
 // in vocabulary — the Undertale trick, where colour IS the rule.
 //
@@ -218,7 +244,6 @@ const BOSS_NAME = "MALGRIM";
 const G_GOLD = 0xffd24a;
 const G_GOLD_EDGE = 0xfff2b0;
 const G_BLUE = 0x3aa8ff;
-const G_BLUE_EDGE = 0xbfe8ff;
 const G_RED = 0xe03a2a;
 const G_RED_EDGE = 0xff9d6a;
 // What a mistake costs in an arena, in enemy strikes. A strike is turned by
@@ -301,7 +326,7 @@ const TENNIS_SHOTS: TennisShot[] = [
 const TENNIS_EARLY_MS = 140; // the tap window opens this early before the ball meets the guard
 const TENNIS_LATE_MS = 110; // ...and forgives this much lateness
 const TENNIS_WHIFF_LOCK_MS = 380; // a swing at nothing leaves you open — mashing loses
-// ---- GORRACH'S GORING RUN (forest boss arena) ------------------------------
+// ---- GORRACH'S GORING RUN (plains boss arena) ------------------------------
 // Three horns, three different games, then victory.
 //   HORN I   THE CHARGE    — three trampled paths. He paws, one path lights
 //                            RED, then he charges it. Tap another path to leap
@@ -311,7 +336,7 @@ const TENNIS_WHIFF_LOCK_MS = 380; // a swing at nothing leaves you open — mash
 //                            Repeat it. Round 3 must be repeated BACKWARDS.
 //   HORN III LOCK HORNS    — a sweeping marker over a shrinking purchase band.
 //                            Tap inside it to shove him back a notch; five
-//                            notches break him. Miss and he takes ground back.
+//                            notches break him. Earned shoves stay secured.
 const GORE_LANES = 3;
 const GORE_CHARGES: { tell: number; run: number; blind: number }[] = [
   { tell: 950, run: 520, blind: 1 }, // blind = how many paths light up
@@ -334,16 +359,16 @@ const PARRY_ROUNDS: { need: number; windup: number; window: number; reveal: numb
   { need: 5, windup: 1050, window: 360, reveal: 0.42, red: 0.3, prompts: 2, stagger: 520, rest: 500, roam: true },
 ];
 const HORNS_NOTCHES = 5; // shoves needed to break the lock
-const HORNS_MAX_REDS = 3;
-// One row per notch: the gold band narrows, the sweep quickens, RED stripes
-// multiply, the zones drift harder inside their slots, and the shove clock
-// tightens. Fractions are of the bar's width.
+const HORNS_MAX_REDS = 2;
+// A gentle ramp: broad gold windows, slow drift and time for several passes.
+// Five successful shoves are cumulative; a mistake never removes one.
+// Widths are fractions of the rail; sweep is milliseconds in one direction.
 const HORNS_STEPS: { gold: number; red: number; reds: number; sweep: number; drift: number; clock: number }[] = [
-  { gold: 0.19, red: 0.11, reds: 1, sweep: 1150, drift: 0, clock: 6500 },
-  { gold: 0.16, red: 0.12, reds: 1, sweep: 1000, drift: 0.9, clock: 6000 },
-  { gold: 0.13, red: 0.12, reds: 2, sweep: 880, drift: 1.4, clock: 5500 },
-  { gold: 0.105, red: 0.13, reds: 2, sweep: 760, drift: 1.9, clock: 5000 },
-  { gold: 0.08, red: 0.13, reds: 3, sweep: 640, drift: 2.4, clock: 4500 },
+  { gold: 0.28, red: 0.09, reds: 1, sweep: 1600, drift: 0, clock: 9000 },
+  { gold: 0.26, red: 0.09, reds: 1, sweep: 1500, drift: 0.2, clock: 8500 },
+  { gold: 0.24, red: 0.10, reds: 1, sweep: 1400, drift: 0.3, clock: 8000 },
+  { gold: 0.22, red: 0.10, reds: 2, sweep: 1350, drift: 0.4, clock: 8000 },
+  { gold: 0.20, red: 0.10, reds: 2, sweep: 1300, drift: 0.5, clock: 7500 },
 ];
 // ---- THE THREE RIMES (snow boss arena) -------------------------------------
 //   RIME I   BREAK THE ICE   — he seals you in. Frost plates crust the arena,
@@ -371,8 +396,9 @@ const HEART_LOCK_MS = 700; // Hit blocked · wait for the gap — you're open th
 // is a mode break, not a bigger slime. A def carries the lane dressing (sheet
 // prefix, scale, foot fraction, name banner) and how many minigame steps its
 // arena is worth (the boss bar drains against that total).
-//   plains / dungeon — MALGRIM : the Infernal Shell Game
-//   forest           — GORRACH     : the Goring Run (mino_v1.1_free)
+//   forest           — MOSS SLIME  : one giant, two halves, four little slimes
+//   dungeon          — MALGRIM     : the Infernal Shell Game
+//   plains           — GORRACH     : the Goring Run (mino_v1.1_free)
 //   snow             — FROST GUARDIAN   : the Three Rimes (Frost_Guardian)
 type BossDef = {
   key: string; // anim-key prefix — `${key}-{idle,walk,attack,hurt,death}`
@@ -390,9 +416,14 @@ type BossDef = {
   nameTint: [number, number, number, number];
   veil: number; // the colour the lane bleeds while he approaches
   accent: string; // notice colour for his lines
-  arena: "shells" | "goring" | "rimes";
+  arena: "shells" | "goring" | "rimes" | "slime";
 };
 const BOSS_DEFS: Record<string, BossDef> = {
+  slime: {
+    key: "slimeboss", name: "MOSS SLIME", scale: SLIME_SCALES[0], origin: .625, gap: SLIME_GAPS[0],
+    faceLeft: false, hasDeath: true, hasHurt: true, steps: 10, wardMark: "",
+    nameTint: [0xf2ecc0, 0xc4e99a, 0x8ac075, 0x518958], veil: 0x173523, accent: "#c8e69e", arena: "slime",
+  },
   malgrim: {
     key: "boss", name: BOSS_NAME, scale: BOSS_SCALE, origin: BOSS_ORIGIN, gap: BOSS_ENGAGE_GAP,
     faceLeft: true, hasDeath: true, hasHurt: true, steps: 11, wardMark: "🛡🪄",
@@ -400,9 +431,9 @@ const BOSS_DEFS: Record<string, BossDef> = {
   },
   gorrach: {
     // Minotaur — 288x160 frames, content 108px tall, feet at y144/160.
-    key: "mino", name: "GORRACH", scale: 1.05, origin: 0.9, gap: 250,
+    key: "mino", name: "GORRACH", scale: 1.05, origin: 0.9, gap: 215,
     faceLeft: false, hasDeath: false, hasHurt: false, steps: 11, wardMark: "🛡🪄",
-    nameTint: [0xffe8c8, 0xf0b070, 0xc2632c, 0x7a2f16], veil: 0x0d1a08, accent: "#ffb06a", arena: "goring",
+    nameTint: [0xffe8c8, 0xf0b070, 0xc2632c, 0x7a2f16], veil: 0x332312, accent: "#ffb06a", arena: "goring",
   },
   hoarfrost: {
     // Frost Guardian — 192x128 frames, content 92px tall, feet at y110/128.
@@ -412,7 +443,6 @@ const BOSS_DEFS: Record<string, BossDef> = {
   },
 };
 /** Which warden holds which road. Unlisted roads fall back to the Cindermage. */
-const BOSS_FOR_BIOME: Record<string, string> = { plains: "malgrim", forest: "gorrach", snow: "hoarfrost", dungeon: "malgrim" };
 const bossForBiome = (biome: string) => BOSS_DEFS[BOSS_FOR_BIOME[biome] ?? "malgrim"];
 const RAIN_CHANCE = 0.35; // some runs the sky weeps — ambience swaps + rain streaks
 const DEATH_BODY_LEFT = 27; // original sprite's sideways fall
@@ -427,13 +457,13 @@ const BOLT_FLIGHT_MS = 340;
 // ONTO the board — so the runner is felt even when the eye never leaves the puzzle
 const STRIKE_TELE_MS = 700; // dread creeps over the board this long before a strike
 const BLADE_FLIGHT_MS = 360; // spectral blades: matched sword tiles -> the foe
-const VIGNETTE_FROM = 0.45; // pressure where the red edge-glow starts bleeding in
-const VIGNETTE_MAX = 0.34; // its ceiling alpha at pressure 1 (heartbeat rides on top)
+const VIGNETTE_FROM = 0.5; // start warning halfway toward the skull
+const VIGNETTE_FULL = 0.8; // clearly warn while there is still room to recover
+const VIGNETTE_MAX = 0.36; // soft scene tint with stronger red edges
 const SPELL_BURN_SECS = 6; // a Pyroclasm (5-match) leaves the foe burning this long
 const WALK_IN_MS = 850; // time for a new enemy to march into range
 const TILE_SFX = 17; // number of tile-match sound variations (tile1..tileN)
-const FACE = TILE - 8; // 84px tile face — sliced into chaotic shards on a match
-const SHARD_PATTERNS = 3; // pre-baked crack patterns per tile type (variety)
+const FACE = TILE - 8; // 84px face with a small gap between neighboring tiles
 const WORLD_SCROLL = 170; // px/sec the world pans while the hero is running
 const FLOOR_SCALE = 1.9; // readable grass and terrain detail on phones
 const PARALLAX_SRC_H = 216; // source height of the parallax layers (both biome sets are 216 tall)
@@ -515,22 +545,7 @@ const RUN_BIOMES: Record<string, RunBiome> = {
   },
 };
 
-// ---- ironbound relic tiles (logical order mirrors board.ts / run.ts) -------
-// Each source is an exact 84×84 composite face. The same texture is rendered on
-// the board and copied into the crack canvases, so matched shards keep the art.
-const TILE_ART = [
-  { key: "tile-sword", file: "tiles/sword.png" },
-  { key: "tile-staff", file: "tiles/staff.png" },
-  { key: "tile-shield", file: "tiles/shield.png" },
-  { key: "tile-key", file: "tiles/key.png" },
-  { key: "tile-treasure", file: "tiles/treasure.png" },
-  { key: "tile-wood", file: "tiles/wood.png" },
-  { key: "tile-ore", file: "tiles/ore.png" },
-] as const;
-// The potion face is composited at runtime from the treasure tile's ironbound
-// frame (buildPotionArt) — swap for a real tiles/potion.png when one is drawn.
-const POTION_ART_KEY = "tile-potion";
-const tileArtKey = (type: number) => (type === POTION ? POTION_ART_KEY : TILE_ART[type].key);
+const tileArtKey = (type: number) => TILE_KEYS[type];
 const TILE_SHINE_KEY = "tile-shine";
 const TILE_SHINE_ANIM = "tile-shine-sweep";
 const TILE_SHINE_FRAMES = 11; // empty bookends + 9-frame diagonal glint
@@ -568,15 +583,23 @@ function buzz(ms = 14) {
 class GameScene extends Phaser.Scene {
   // board
   private recovered: RunCheckpoint | null = null;
+  private empowered: EmpoweredState = newEmpowered();
+  private empoweredTile: Phaser.GameObjects.Container | null = null;
+  private rescue: RescueState = newRescueState();
+  private rescueView: ReturnType<typeof showCompanionRescue> | null = null;
+  private forkView: ReturnType<typeof showRoadFork> | null = null;
   private pendingChest: ChestPull[] | null = null;
   private checkpointAt = 0;
   private saveWarningShown = false;
   private grid: number[][] = [];
+  private zoneArt!: Phaser.GameObjects.Graphics;
+  private zoneArtSignature = "";
   private tiles: (Phaser.GameObjects.Container | null)[][] = [];
-  private frags: { o: Phaser.GameObjects.Image; vx: number; vy: number; vr: number; life: number }[] = []; // falling tile pieces
-  private shardSets: Record<number, { key: string; cx: number; cy: number }[][]> = {}; // pre-baked crack shards per type
+  private pressedTile: Phaser.GameObjects.Container | null = null;
+  private swapPreview!: TileSwapPreview;
+  private tileShatter!: TileShatter;
   private busy = false;
-  private down: { coord: Coord; x: number; y: number } | null = null;
+  private down: { coord: Coord; x: number; y: number; pointerId: number; dragged: boolean } | null = null;
   private selected: Coord | null = null;
   private selection!: Phaser.GameObjects.Rectangle;
   private bestCascade = 0;
@@ -589,10 +612,15 @@ class GameScene extends Phaser.Scene {
   private parallax: { sprite: Phaser.GameObjects.TileSprite; scroll: number }[] = [];
   private laneFrame!: Phaser.GameObjects.Rectangle;
   private laneRainWash?: Phaser.GameObjects.Rectangle;
+  private roadScenery!: RoadScenery;
   private world: RunBiome = RUN_BIOMES.plains; // backdrop set for the current biome
   private floor!: Phaser.GameObjects.TileSprite;
   private hero!: Phaser.GameObjects.Sprite;
   private orc: Phaser.GameObjects.Sprite | null = null;
+  private orcEnemy: Enemy | null = null; // actor's model; may be the casualty until its impact plays
+  private rearFoe: AmbushActor | null = null;
+  private ambushBrush: ForestAmbushBrush | null = null;
+  private ambushResolving = false;
   private orcAnim = "orc"; // anim-key prefix of the current foe (orc / boar / goblin / boss …)
   private orcRig: CreatureRig | null = null; // how the current foe is dressed (null for the boss)
   private orcDefense: Defense = "none"; // the current foe's armor school (badge + callouts)
@@ -614,10 +642,12 @@ class GameScene extends Phaser.Scene {
   private trailPts: { x: number; y: number; t: number }[] = []; // recent drag points — the blade streak
   private trailGfx: Phaser.GameObjects.Graphics | null = null;
   private swipeFrom: { x: number; y: number } | null = null; // where the current drag began (design-local)
-  private arenaWard = 0; // which ward we're breaking (0..2)
+  private arenaWard = 0; // 0..2; 3 = core stages cleared (optional floor-20 finale)
   private arenaDealIdx = 0; // which deal within the ward
   private arenaDealsDone = 0; // drives the boss bar drain (out of ARENA_TOTAL_DEALS)
   private arenaWardMissed = false; // a flawless ward refunds a guard charge
+  private slimeProgress: SlimeProgress | null = null;
+  private slimeAdds: Phaser.GameObjects.Sprite[] = [];
   private orcGap = ENGAGE_GAP; // engage distance for the current foe (wider for the boss)
   private orcDying = false;
   private bossBar: { root: Phaser.GameObjects.Container; fill: Phaser.GameObjects.Rectangle } | null = null;
@@ -634,6 +664,7 @@ class GameScene extends Phaser.Scene {
   private scoreText!: Phaser.GameObjects.Text;
   private resIcons: Phaser.GameObjects.Text[] = []; // 🪵 🪨 💎 🔑 icons (left panel)
   private resVals: Phaser.GameObjects.Text[] = []; // matching counts, positioned tight to each icon
+  private resourceChrome!: Phaser.GameObjects.Graphics;
   private overShown = false;
   private runCompleteShown = false; // the second boss fell — victory banner up
   private lastScoreShown = 0; // pulse the SCORE readout only when it climbs
@@ -654,7 +685,7 @@ class GameScene extends Phaser.Scene {
   private get boardCenter() { return GRID_X + this.boardWidth / 2; }
   private portraitLaneTop = 0;
   private portraitBoardBottom = 0;
-  private portraitFooterHeight = 140;
+  private portraitFooterHeight = 160;
   private laneClip?: Phaser.GameObjects.Graphics;
   private runProgress!: Phaser.GameObjects.Graphics;
   private runProgressRect = new Phaser.Geom.Rectangle();
@@ -683,6 +714,7 @@ class GameScene extends Phaser.Scene {
   private chestsOpened = 0; // opened this run (banked into meta quest stats on death)
   private meta!: MetaState; // snapshot at run start — drives the in-run quest HUD
   private questText!: Phaser.GameObjects.Text;
+  private completedQuestCues = new Set<string>();
   private tutorial: Tutorial | null = null; // first-entry guided overlay (null once seen)
   private itemSlots: ItemSlotUI[] = [];
 
@@ -696,7 +728,6 @@ class GameScene extends Phaser.Scene {
   private spursActive = false; // Scout's Spurs: slowed strikes until the current foe falls
   private skeletonCharges = 0; // Skeleton Key: free chest openings armed
   private panCharges = 0; // Prospector's Pan: chests with bonus pulls armed
-  private inkActive = false; // Cartographer's Ink: road forecast on for the rest of the run
   private bossChestNext = false; // the chest rolling in is the boss hoard (richer item table)
   private targeting: { def: ItemDef; slot: ItemSlotUI } | null = null;
   private targetObjs: Phaser.GameObjects.GameObject[] = []; // banner + board ring while aiming
@@ -707,9 +738,8 @@ class GameScene extends Phaser.Scene {
   private activeEffects?: ReturnType<typeof createActiveEffects>;
 
   // ---- peril feedback: the fight reaching the player's peripheral vision ----
-  private vignette: Phaser.GameObjects.Image | null = null; // full-viewport red edge-glow
+  private vignette: Phaser.GameObjects.Image | null = null; // combat-panel danger wash
   private vignetteA = 0; // eased alpha (lerps toward the pressure-driven target)
-  private heartPhase = 0; // heartbeat accumulator — beats faster as the skull nears
   private laneGuard!: Phaser.GameObjects.Container; // in-lane 🛡️×N badge (top-left)
   private laneGuardText!: Phaser.GameObjects.Text;
   private laneGuardLast = -1; // last shown count — drives the gain-bounce / spend-flash
@@ -776,7 +806,7 @@ class GameScene extends Phaser.Scene {
     // ---- the zone's boss (only his sheets load — they're the biggest in the game)
     const bossKey = bossForBiome(loadMeta().biome).key;
     if (bossKey === "boss") {
-      // the Cindermage (Evil Wizard pack, CC0) — plains & the deep
+      // the Cindermage (Evil Wizard pack, CC0) — the dungeon
       sheet("boss-idle", "boss_idle.png", 150, 150);
       sheet("boss-move", "boss_move.png", 150, 150);
       sheet("boss-attack", "boss_attack.png", 150, 150);
@@ -787,7 +817,7 @@ class GameScene extends Phaser.Scene {
       sheet("mino-idle", "mino_idle.png", 288, 160);
       sheet("mino-walk", "mino_walk.png", 288, 160);
       sheet("mino-attack", "mino_attack.png", 288, 160);
-    } else {
+    } else if (bossKey === "frost") {
       // the Hoarfrost Warden (Frost_Guardian_FREE_v1.0) — a full set
       sheet("frost-idle", "frost_idle.png", 192, 128);
       sheet("frost-walk", "frost_walk.png", 192, 128);
@@ -800,7 +830,8 @@ class GameScene extends Phaser.Scene {
     const img = (key: string, file: string) => {
       if (!this.textures.exists(key)) this.load.image(key, file);
     };
-    for (const tile of TILE_ART) img(tile.key, tile.file);
+    preloadTileArt(this);
+    preloadRoadScenery(this);
     for (const l of this.world.parallax) img(l.key, l.file);
     img(this.world.floorKey, this.world.floorFile);
     // sfx — combat is dedicated WAVs; swap/gameover are the foley pack
@@ -832,6 +863,13 @@ class GameScene extends Phaser.Scene {
 
   create() {
     this.recovered = this.devJumpBoss ? null : readCheckpoint(loadMeta());
+    this.empowered = structuredClone(this.recovered?.empowered ?? newEmpowered());
+    this.empoweredTile = null;
+    this.rescue = structuredClone(this.recovered?.rescue ?? newRescueState());
+    this.rescueView = null;
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => { this.rescueView?.destroy(); this.rescueView = null; });
+    this.forkView = null;
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => { this.forkView?.destroy(); this.forkView = null; });
     this.pendingChest = null;
     this.checkpointAt = 0;
     this.saveWarningShown = false;
@@ -842,18 +880,35 @@ class GameScene extends Phaser.Scene {
     this.boardRows = this.boardCols === 10 ? 5 : 7;
     if (this.recovered) { this.boardRows = this.recovered.grid.length; this.boardCols = this.recovered.grid[0].length; }
     this.meta = loadMeta();
+    this.completedQuestCues.clear();
+    if (!this.recovered && !this.devJumpBoss) {
+      prepareCampProgress(this.meta);
+      acknowledgeProgress(this.meta);
+    }
     // forge + study bite all run; the zone fields its own bestiary
-    this.run = newRun(this.meta.swordLevel, forgeCap(this.meta.biome), this.meta.biome, this.meta.staffLevel);
+    this.run = newRun(this.meta.swordLevel, forgeCap(this.meta.biome), this.meta.biome, this.meta.staffLevel, this.meta.companions);
     if (this.recovered) this.run = structuredClone(this.recovered.run);
+    this.run.zone = restoreZoneFeatures(this.run.zone);
+    if (this.run.biome === "forest") {
+      this.run.zone.marks = [];
+      this.run.roadFork = newRoadFork();
+      if (this.run.enemy) delete this.run.enemy.spores;
+    }
     this.boss = bossForBiome(this.meta.biome); // each road has its own warden and its own game
     this.chestsOpened = 0;
     this.busy = false;
     this.down = null;
+    this.pressedTile = null;
+    this.swapPreview = new TileSwapPreview(this);
     this.selected = null;
     this.bestCascade = 0;
     this.idleBoardTime = 0;
     this.idleHintShown = false;
     this.orc = null;
+    this.orcEnemy = null;
+    this.rearFoe = null;
+    this.ambushBrush = null;
+    this.ambushResolving = false;
     this.orcDying = false;
     this.orcGap = ENGAGE_GAP;
     this.bossBar = null;
@@ -869,7 +924,6 @@ class GameScene extends Phaser.Scene {
     this.lastScoreShown = 0;
     this.phase = "advance";
     this.parallax = [];
-    this.frags = [];
     this.chest = null;
     this.chestActive = false;
     this.awaitingChest = false;
@@ -886,7 +940,6 @@ class GameScene extends Phaser.Scene {
     this.spursActive = false;
     this.skeletonCharges = 0;
     this.panCharges = 0;
-    this.inkActive = false;
     this.bossChestNext = false;
     this.targeting = null;
     this.targetObjs = [];
@@ -901,24 +954,20 @@ class GameScene extends Phaser.Scene {
     this.arenaDealIdx = 0;
     this.arenaDealsDone = 0;
     this.arenaWardMissed = false;
+    this.slimeProgress = null;
+    this.slimeAdds = [];
     this.tip = null;
     this.tipFor = -1;
     this.holdTimer = null;
     this.holdShown = false;
-    this.buildPotionArt(); // before the filter pass + shard baking so it's a full citizen
-    // The rest of the game keeps crisp nearest-neighbour sampling, but these
-    // detailed composite faces need linear minification when the responsive
-    // shell displays them below their native 84px size.
-    for (const tile of TILE_ART) this.textures.get(tile.key).setFilter(Phaser.Textures.FilterMode.LINEAR);
-    this.textures.get(POTION_ART_KEY).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    prepareTileArt(this);
+    this.tileShatter = new TileShatter(this);
     this.buildTilePolish();
-    this.buildTileFaces();
     this.buildChestArt();
     this.buildBladeArt();
     this.buildVignetteArt();
     this.vignette = null;
     this.vignetteA = 0;
-    this.heartPhase = 0;
 
     // (master volume is set once at boot, below the game config — setting it
     // here made the first camp visit of a session 43% louder than everything
@@ -931,6 +980,12 @@ class GameScene extends Phaser.Scene {
     this.puzzleBox = this.add.container(0, 0);
     this.buildLane();
     this.buildBoard();
+    const onTileEffects = () => {
+      for (const row of this.tiles) for (const tile of row) if (tile?.scene) this.syncTileShine(tile);
+      if (!tileEffectsEnabled()) this.tileShatter.clear();
+    };
+    this.game.events.on(TILE_EFFECTS_CHANGED, onTileEffects);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.game.events.off(TILE_EFFECTS_CHANGED, onTileEffects));
     this.attackClock = 0; this.attackWarned = false;
     this.combatReadout = createCombatReadout();
     this.activeEffects = createActiveEffects();
@@ -952,8 +1007,8 @@ class GameScene extends Phaser.Scene {
       if (c.pendingChest) for (const pull of c.pendingChest) this.applyPull(pull);
     }
     this.buildInput();
-    // danger vignette: screen-space (NOT the centre column) so it hugs the viewport edges
-    this.vignette = this.add.image(0, 0, "vignette").setDepth(76).setAlpha(0);
+    // Screen-space bounds follow the visible combat panel, including landscape's sky crop.
+    this.vignette = this.add.image(0, 0, "lane-peril").setDepth(76).setAlpha(0);
     this.layout();
     this.scale.off("resize", this.layout, this);
     this.scale.on("resize", this.layout, this);
@@ -1009,18 +1064,26 @@ class GameScene extends Phaser.Scene {
     // intro: the hero jogs in from off the left edge to meet the first foe.
     // Slow both approaches together so the hero's run reads at a natural pace.
     const INTRO_MS = this.recovered ? 500 : 1550;
-    if (this.awaitingChest) this.spawnChest(INTRO_MS);
+    if (this.run.roadFork?.pending) this.showFork();
+    else if (this.rescue.pending) this.showRescue();
+    else if (!this.run.enemy && this.recovered && !this.awaitingChest) this.advanceRoad(INTRO_MS);
+    else if (this.awaitingChest) this.spawnChest(INTRO_MS);
     else if (this.run.killed < RUN_COMPLETE_AT) this.spawnOrc(INTRO_MS);
-    this.hero.setX(-30);
-    this.heroLockX = true;
-    this.hero.play("hero-walk", true);
-    this.tweens.add({
-      targets: this.hero,
-      x: this.heroXForPressure(),
-      duration: INTRO_MS - 40, // arrive just before the slime, so enterFight's idle looks right
-      ease: "Sine.easeOut",
-      onComplete: () => (this.heroLockX = false),
-    });
+    if (this.forkView) {
+      this.hero.setX(this.heroXForPressure()); this.heroLockX = false;
+      this.hero.play("hero-idle", true);
+    } else {
+      this.hero.setX(-30);
+      this.heroLockX = true;
+      this.hero.play("hero-walk", true);
+      this.tweens.add({
+        targets: this.hero,
+        x: this.heroXForPressure(),
+        duration: INTRO_MS - 40, // arrive just before the slime, so enterFight's idle looks right
+        ease: "Sine.easeOut",
+        onComplete: () => (this.heroLockX = false),
+      });
+    }
 
     // strike cadence self-schedules so Scout's Spurs can stretch the interval and
     // each foe's own tempo can quicken it (boars are fast); the dread telegraph
@@ -1090,6 +1153,11 @@ class GameScene extends Phaser.Scene {
     mk("orc-hurt", "slime-hurt", 0, 4, 12, 0);
     mk("orc-death", "slime-death", 0, 9, 12, 0);
     mk("orc-attack", "slime-walk", 0, 7, 12, 0); // slime lunges (reuse run)
+    mk("slimeboss-idle", "slime-idle", 0, 5, 6, -1);
+    mk("slimeboss-walk", "slime-walk", 0, 7, 9, -1);
+    mk("slimeboss-hurt", "slime-hurt", 0, 4, 12, 0);
+    mk("slimeboss-death", "slime-death", 0, 9, 12, 0);
+    mk("slimeboss-attack", "slime-walk", 0, 7, 12, 0);
     // variant anims mirror the orc-* frame layout (orc2 = blue slime, orc3 = dark slime)
     for (const [p, n] of [["orc2", "2"], ["orc3", "3"]] as const) {
       mk(`${p}-idle`, `slime${n}-idle`, 0, 5, 6, -1);
@@ -1177,12 +1245,14 @@ class GameScene extends Phaser.Scene {
   private yFor(r: number) {
     return GRID_Y + r * TILE + TILE / 2;
   }
-  private cellAt(x: number, y: number): Coord | null {
-    const p = this.toLocal(x, y); // pointer is screen px; the board lives in the scaled centre column
-    const c = Math.floor((p.x - GRID_X) / TILE);
-    const r = Math.floor((p.y - GRID_Y) / TILE);
-    if (c < 0 || c >= this.boardCols || r < 0 || r >= this.boardRows) return null;
-    return { r, c };
+  private cellAt(x: number, y: number, edgeMargin = 0): Coord | null {
+    const bx = (x - this.puzzleBox.x) / this.puzzleScale - GRID_X;
+    const by = (y - this.puzzleBox.y) / this.puzzleScale - GRID_Y;
+    if (bx < -edgeMargin || bx >= this.boardCols * TILE + edgeMargin ||
+        by < -edgeMargin || by >= this.boardRows * TILE + edgeMargin) return null;
+    // Held drags can overshoot an edge slightly; taps still use the exact board bounds.
+    return { r: Math.max(0, Math.min(this.boardRows - 1, Math.floor(by / TILE))),
+      c: Math.max(0, Math.min(this.boardCols - 1, Math.floor(bx / TILE))) };
   }
   private heroXForPressure() {
     return lerp(SAFE_X, SKULL_X, this.run.pressure);
@@ -1226,6 +1296,7 @@ class GameScene extends Phaser.Scene {
 
   /** Fit a compact HUD + centre shell, keeping square tiles and a shallow runner. */
   private layout() {
+    if (this.down) this.clearSelection(true);
     const vw = this.scale.width;
     const vh = this.scale.height;
     const ins = this.safeInsets(); // stay clear of the notch + home indicator
@@ -1238,19 +1309,24 @@ class GameScene extends Phaser.Scene {
     this.wideLayout = !portrait;
     this.hero.setScale(HERO_SCALE / PLAYER_DENSITY * (this.arenaActive ? 1.2 : 1));
     if (this.orc && this.run.enemy?.kind === "boss" && !this.orcDying)
-      this.orc.setScale(this.boss.scale * (this.arenaActive ? 1.08 : 1));
+      this.orc.setScale(this.boss.arena === "slime" ? SLIME_SCALES[this.slimeProgress?.phase ?? 0] : this.boss.scale * (this.arenaActive ? 1.08 : 1));
     if (this.wideLayout) {
       this.layoutWide(x0, y0, uw, uh);
       return;
     }
-    // Size the square puzzle from the phone width. Crop excess sky in the
-    // runner instead of shrinking both play surfaces to fit their total height.
+    // Use the phone width when it fits, but reserve the fight's HUD and actor
+    // space before sizing the puzzle. A short portrait must not crop their heads.
     const topReserve = 64;
-    this.portraitFooterHeight = this.arenaActive ? 94 : 140;
+    const minFooterHeight = this.arenaActive ? 112 : 160;
     const progressGap = 16;
-    const minLaneHeight = Math.max(80, Math.min(100, uh * .14));
-    const roomHeight = uh - topReserve - this.portraitFooterHeight - minLaneHeight - progressGap;
-    const boardSize = Math.min(uw - 12, roomHeight * this.boardWidth / this.boardHeight);
+    const minLaneHeight = 130;
+    const laneHudHeight = 40; // fixed-size enemy label, guard and sound controls
+    const laneActionHeight = 160; // design pixels: actors, overhead HP bars and floor
+    const roomHeight = uh - topReserve - minFooterHeight - progressGap;
+    const boardAspect = this.boardHeight / this.boardWidth;
+    const boardSize = Math.max(1, Math.min(uw - 12,
+      (roomHeight - minLaneHeight) / boardAspect,
+      (roomHeight - laneHudHeight) / (boardAspect + laneActionHeight / GRID_W)));
     const puzzleScale = boardSize / this.boardWidth;
     const boardHeight = this.boardHeight * puzzleScale;
     const s = boardSize / GRID_W;
@@ -1259,7 +1335,10 @@ class GameScene extends Phaser.Scene {
     const shellW = uw;
     const shellX = x0;
     const boardX = x0 + (uw - boardSize) / 2;
-    const laneHeight = uh - topReserve - this.portraitFooterHeight - boardHeight - progressGap;
+    // Keep the lane sized for its contents. Tall phones give spare height to the
+    // item tray instead of stretching the battlefield into a wall of empty sky.
+    const laneHeight = Math.max(minLaneHeight, laneHudHeight + laneActionHeight * s);
+    this.portraitFooterHeight = uh - topReserve - boardHeight - progressGap - laneHeight;
     this.layoutLaneBackdrop(Math.max(LANE_H, laneHeight / s));
     this.portraitLaneTop = y0 + topReserve;
     const cx = boardX - GRID_X * s;
@@ -1297,7 +1376,8 @@ class GameScene extends Phaser.Scene {
       this.tutorialViewTweenDone = null;
       this.time.delayedCall(0, done);
     }
-    this.vignette?.setPosition(vw / 2, vh / 2).setDisplaySize(vw, vh);
+    this.vignette?.setPosition(boardX + boardSize / 2, this.portraitLaneTop + laneHeight / 2)
+      .setDisplaySize(boardSize, laneHeight);
     this.layoutPanels(shellX, y0, shellW, uh, cx, cw);
   }
 
@@ -1350,7 +1430,8 @@ class GameScene extends Phaser.Scene {
       const done = this.tutorialViewTweenDone; this.tutorialViewTweenDone = null;
       this.time.delayedCall(0, done);
     }
-    this.vignette?.setPosition(this.scale.width / 2, this.scale.height / 2).setDisplaySize(this.scale.width, this.scale.height);
+    this.vignette?.setPosition(boardX + boardSize / 2, laneTop + laneHeight / 2)
+      .setDisplaySize(boardSize, laneHeight);
     this.refreshHud();
     this.layoutPanels(shellX, y, shellWidth, h, boardX - 4, boardSize + 8);
   }
@@ -1358,6 +1439,7 @@ class GameScene extends Phaser.Scene {
   /** Left panel = resources / score / gear; right panel = the vertical item-slot rack. Always visible. */
   private layoutPanels(x0: number, y0: number, uw: number, uh: number, cx: number, cw: number) {
     const portrait = !this.wideLayout;
+    this.resourceChrome.clear().setVisible(portrait);
     const lLeft = x0;
     const lw = cx - x0; // left panel: usable-left -> centre-left
     const rLeft = cx + cw;
@@ -1400,30 +1482,47 @@ class GameScene extends Phaser.Scene {
         d.ts.setPosition(x0 + uw / 2, d.edge === "top" ? rect.y + d.h / 2 : rect.bottom - d.h / 2)
           .setSize(uw, d.h);
       }
-      // Compact top bar: resources remain visible without forcing four tiny
-      // rows into the decorative edge rail.
-      const topY = y0 + 19;
-      const itemW = (uw - 42) / this.resIcons.length;
+      // Four consistent resource pockets, with a separate 44px menu target.
+      const compact = uw < 360, pad = 8, resourceGap = compact ? 4 : 6, menuW = 44;
+      const topY = y0 + 23;
+      const itemW = (uw - pad * 2 - menuW - 6 - resourceGap * 3) / this.resIcons.length;
+      const chrome = this.resourceChrome;
+      chrome.fillStyle(0x171f25, .9).fillRoundedRect(x0 + 2, y0 + 2, uw - 4, 60, 10);
       for (let i = 0; i < this.resIcons.length; i++) {
-        const x = Math.round(x0 + itemW * i + 8);
-        this.resIcons[i].setVisible(true).setPosition(x, topY).setFontSize(26);
-        this.resVals[i].setVisible(true).setPosition(x + 29, topY).setFontSize(21);
+        const x = x0 + pad + (itemW + resourceGap) * i;
+        chrome.fillStyle(0x29343b, .95).fillRoundedRect(x, y0 + 5, itemW, 36, 7);
+        chrome.lineStyle(1, 0x53616a, .55).strokeRoundedRect(x, y0 + 5, itemW, 36, 7);
+        this.resIcons[i].setVisible(true).setOrigin(.5).setPosition(x + (compact ? 14 : 17), topY)
+          .setFontSize(compact ? 20 : 22);
+        this.resVals[i].setVisible(true).setOrigin(1, .5).setPosition(x + itemW - (compact ? 5 : 7), topY)
+          .setFontSize(20).setData("hudWidth", itemW - (compact ? 32 : 40));
       }
-      this.scoreText.setVisible(true).setPosition(x0 + uw / 2, y0 + 42).setFontSize(14);
+      const menuX = x0 + uw - pad - menuW;
+      chrome.fillStyle(0x29343b, .95).fillRoundedRect(menuX, y0 + 1, menuW, 44, 8);
+      chrome.lineStyle(1, 0x53616a, .55).strokeRoundedRect(menuX, y0 + 1, menuW, 44, 8);
+      this.scoreText.setVisible(true).setPosition(x0 + uw / 2, y0 + 46).setFontSize(13).setColor("#c7d0d4");
       this.questText.setVisible(!this.arenaActive).setFontFamily(EMOJI_FONT).setFontSize(13).setLineSpacing(3)
         .setWordWrapWidth(uw - 24).setPosition(x0 + 12, below + 8);
-      this.menuBtn.setPosition(x0 + uw - 8, y0 + 6).setFontSize(22);
+      this.menuBtn.setOrigin(.5).setPosition(menuX + menuW / 2, topY).setFontSize(22)
+        .setFixedSize(menuW, 44).setPadding(0, 8, 0, 0).setAlign("center").setStroke("#0a0b0f", 0);
       this.gearText.setPosition(x0 + uw - 8, y0 + uh - 8).setVisible(false);
 
-      // One bottom tray: quests, compact effects, then a full-width inventory.
-      const gap = 4;
-      const cellW = (uw - 24 - (SLOT_N - 1) * gap) / SLOT_N;
-      const slot = Math.min(56, cellW);
-      const rackBottom = y0 + uh - 10;
-      const rackY = rackBottom - slot / 2;
-      this.activeEffects?.place(x0 + 12, rackY - slot / 2 - 30, uw - 24, 26, false);
+      // Tall portrait screens use the freed height for larger, reachable items.
+      // Keep buff chips compact and leave room for two lines of quest progress.
+      const roomy = !this.arenaActive && this.portraitFooterHeight >= 228;
+      const rows = roomy ? 2 : 1, cols = SLOT_N / rows;
+      const gap = roomy ? 8 : 4;
+      const cellW = (uw - 24 - (cols - 1) * gap) / cols;
+      const slot = roomy
+        ? Math.min(72, cellW, (this.portraitFooterHeight - 104 - gap) / rows)
+        : Math.min(56, cellW);
+      const bottomPad = this.arenaActive ? 10 : 18;
+      const rackHeight = rows * slot + (rows - 1) * gap;
+      const rackTop = y0 + uh - bottomPad - rackHeight;
+      this.activeEffects?.place(x0 + 12, rackTop - 38, uw - 24, 26, false);
       for (let i = 0; i < SLOT_N; i++) {
-        const x = Math.round(x0 + 12 + cellW / 2 + i * (cellW + gap));
+        const x = Math.round(x0 + 12 + cellW / 2 + (i % cols) * (cellW + gap));
+        const rackY = Math.round(rackTop + slot / 2 + Math.floor(i / cols) * (slot + gap));
         const it = this.itemSlots[i];
         it.x = x; it.y = rackY; it.s = slot;
         it.bg.setPosition(x, rackY).setSize(slot, slot);
@@ -1441,10 +1540,10 @@ class GameScene extends Phaser.Scene {
     this.rightPanel.setDepth(0).setStrokeStyle(2, 0x526342);
     this.panelDecor.forEach(d => d.ts.setVisible(true).setDepth(0).setAlpha(d.ts.getData("landscapeAlpha") ?? d.ts.alpha));
     this.questText.setVisible(true).setFontFamily(EMOJI_FONT).setFontSize(14).setLineSpacing(3);
-    this.scoreText.setVisible(true).setFontSize(17);
+    this.scoreText.setVisible(true).setFontSize(17).setColor("#ffe08a");
     this.gearText.setVisible(false);
-    this.resIcons.forEach((icon) => icon.setVisible(true));
-    this.resVals.forEach((value) => value.setVisible(true));
+    this.resIcons.forEach((icon) => icon.setVisible(true).setOrigin(0, .5));
+    this.resVals.forEach((value) => value.setVisible(true).setOrigin(0, .5).setData("hudWidth", 0));
 
     // Resources use a 2×2 block on the narrow rail. Four vertical rows consumed
     // nearly half a phone screen and forced quests down into the hint button.
@@ -1473,7 +1572,8 @@ class GameScene extends Phaser.Scene {
     this.activeEffects?.place(padX, effectsY, Math.max(80, lw - 24), Math.max(36, y0 + uh - 56 - effectsY), true);
 
     this.gearText.setPosition(lLeft + lw - 40, y0 + uh - 12);
-    this.menuBtn.setPosition(x0 + uw - 10, y0 + 6);
+    this.menuBtn.setOrigin(1, 0).setPosition(x0 + uw - 10, y0 + 6).setFontSize(24)
+      .setFixedSize(0, 0).setPadding(0).setAlign("left").setStroke("#0a0b0f", 4);
 
     // right: item slots, vertical, centred
     const gap = 5;
@@ -1511,20 +1611,21 @@ class GameScene extends Phaser.Scene {
       }
     this.buildPanelLife(theme.kind); // created HERE so the critters render under the text/slots
     this.runProgress = this.add.graphics().setDepth(-0.5);
+    this.resourceChrome = this.add.graphics().setDepth(1);
 
     // resources: one icon + one number per row, positioned explicitly so spacing is exact
     const RES_GLYPHS = ["🪵", "🪨", "💎", "🔑"];
     this.resIcons = [];
     this.resVals = [];
     for (const g of RES_GLYPHS) {
-      this.resIcons.push(this.add.text(0, 0, g, { fontFamily: EMOJI_FONT, fontSize: "26px" }).setOrigin(0, 0.5));
+      this.resIcons.push(this.add.text(0, 0, g, { fontFamily: EMOJI_FONT, fontSize: "26px" }).setOrigin(0, 0.5).setDepth(2));
       this.resVals.push(
-        this.add.text(0, 0, "0", { fontFamily: "monospace", fontStyle: "bold", fontSize: "24px", color: "#dfe3ea" }).setOrigin(0, 0.5),
+        this.add.text(0, 0, "0", { fontFamily: "monospace", fontStyle: "bold", fontSize: "24px", color: "#dfe3ea" }).setOrigin(0, 0.5).setDepth(2),
       );
     }
     this.scoreText = this.add
       .text(0, 0, "", { fontFamily: "monospace", fontSize: "17px", color: "#ffe08a", lineSpacing: 2, align: "center" })
-      .setOrigin(0.5, 0); // centred in the rail (layoutPanels feeds it the panel centre)
+      .setOrigin(0.5, 0).setDepth(2); // centred in the rail (layoutPanels feeds it the panel centre)
     this.questText = this.add
       .text(0, 0, "", { fontFamily: "monospace", fontSize: "14px", color: "#b9d8b9", lineSpacing: 4 })
       .setOrigin(0, 0);
@@ -1604,7 +1705,16 @@ class GameScene extends Phaser.Scene {
     this.drawRunProgress();
     const r = this.run.resources;
     const vals = [r.wood, r.ore, r.treasure, r.keys];
-    for (let i = 0; i < this.resVals.length; i++) this.resVals[i].setText(`${vals[i]}`);
+    for (let i = 0; i < this.resVals.length; i++) {
+      const label = this.resVals[i], width = label.getData("hudWidth") as number | undefined;
+      label.setText(`${vals[i]}`);
+      if (width) {
+        // Keep growing counts inside their pocket; large totals use compact notation.
+        if (vals[i] >= 1000) label.setText(Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 0 }).format(vals[i]));
+        label.setFontSize(20);
+        if (label.width > width) label.setFontSize(Math.max(12, Math.floor(20 * width / label.width)));
+      }
+    }
     this.scoreText.setText(`DEPTH ${this.run.killed}/20${this.wideLayout ? "\n" : "   ·   "}SCORE ${this.run.score}`);
     if (this.run.score > this.lastScoreShown) {
       this.lastScoreShown = this.run.score;
@@ -1612,12 +1722,16 @@ class GameScene extends Phaser.Scene {
       this.scoreText.setScale(1);
       this.tweens.add({ targets: this.scoreText, scale: 1.09, duration: 90, yoyo: true }); // a little thump as it climbs
     }
-    // accepted quests, with progress counting this run's haul live
+    // Automatic objectives, with live progress and one quiet completion cue.
     const live = { kills: this.run.killed, chests: this.chestsOpened, wood: r.wood, ore: r.ore };
-    const lines = this.meta.active.map((aq) => {
+    let newlyComplete=false;
+    const lines = currentQuests(this.meta).map((aq) => {
       const q = questById(aq.id);
       if (!q) return "";
       const p = questProgress(this.meta, aq, live);
+      if (p.have >= p.need && !this.completedQuestCues.has(aq.id)) {
+        this.completedQuestCues.add(aq.id);newlyComplete=true;
+      }
       // The camp board keeps the full oath wording. The rail needs a compact
       // label so all three progress counters remain inside its narrow column.
       const short = q.shortLabel
@@ -1631,7 +1745,13 @@ class GameScene extends Phaser.Scene {
     });
     this.questText.setText(lines.length
       ? lines.filter(Boolean).join("  •  ")
-      : "No active quests · Pick one at camp");
+      : allQuestsDone(this.meta) ? "Area quests complete · Milestones at camp" : "Quests start automatically at camp");
+    if(newlyComplete && !this.run.over && !this.tutorial?.active) {
+      this.questText.setColor("#ffe0a0");
+      this.tweens.killTweensOf(this.questText);this.questText.setAlpha(1);
+      this.tweens.add({targets:this.questText,alpha:.6,duration:180,yoyo:true,repeat:1});
+      this.sfx("coin3",.22);
+    }
   }
 
   /** Run distance is earned by defeating enemies; bosses mark the milestones. */
@@ -1677,6 +1797,10 @@ class GameScene extends Phaser.Scene {
       const ts = this.inBox(this.add.tileSprite(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, key)).setTileScale(pscale);
       this.parallax.push({ sprite: ts, scroll: s });
     }
+
+    // The selected supply route is another scenery layer, below terrain and actors.
+    this.roadScenery = new RoadScenery(this, this.centerBox, this.run.biome, GRID_X, UI_W, GROUND_Y,
+      this.run.roadFork, this.run.killed);
 
     // ground band the hero runs along
     this.floor = this.inBox(this.add.tileSprite(CXC, GROUND_Y + FLOOR_H / 2, UI_W, FLOOR_H, this.world.groundKey)).setTileScale(FLOOR_SCALE);
@@ -1806,6 +1930,35 @@ class GameScene extends Phaser.Scene {
   }
 
   // --- board ---
+  private syncEmpoweredCell() {
+    if (!this.empoweredTile) return;
+    for (let r=0;r<this.tiles.length;r++) for(let c=0;c<this.tiles[r].length;c++)
+      if(this.tiles[r][c]===this.empoweredTile) {this.empowered.cell={r,c};return;}
+  }
+
+  private maybeEmpower() {
+    if(this.empowered.type>=0 || this.empowered.moves<this.empowered.nextAt) return;
+    const choices:Coord[]=[];
+    for(let r=0;r<this.boardRows;r++) for(let c=0;c<this.boardCols;c++)
+      if(this.grid[r][c]>=SWORD && this.grid[r][c]<=SHIELD && !this.isIceLocked({r,c})) choices.push({r,c});
+    if(!choices.length)return;
+    const cell=choices[Math.floor(Math.random()*choices.length)], tile=this.tiles[cell.r][cell.c];
+    if(!tile)return;
+    this.empowered.cell=cell;this.empowered.type=this.grid[cell.r][cell.c];this.empowered.layouts={};
+    this.empoweredTile=tile;decorateEmpowered(this,tile,this.empowered.type);
+    this.sfx("pickup",.28,1.3);
+    this.writeCheckpoint(true);
+  }
+
+  private consumeEmpowered() {
+    this.syncEmpoweredCell();
+    const cell=this.empowered.cell;
+    if(cell) empoweredBurst(this,this.puzzleBox,this.xFor(cell.c),this.yFor(cell.r),this.empowered.type);
+    this.empoweredTile=null;this.empowered.cell=null;this.empowered.type=-1;this.empowered.layouts={};
+    this.empowered.nextAt=this.empowered.moves+6+Math.floor(Math.random()*3);
+    this.sfx("spell",.35,1.2);buzz(22);
+  }
+
   private syncBoardOrientation(wide: boolean) {
     const cols = wide ? 10 : 7;
     if (this.boardCols === cols || !this.boardFrame || !this.grid?.length ||
@@ -1816,6 +1969,9 @@ class GameScene extends Phaser.Scene {
     if (attempt === this.failedBoardReflow) return;
     const next = reflowBoard(this.grid, wide, this.boardLayouts);
     if (!next) { this.failedBoardReflow = attempt; return; }
+    this.syncEmpoweredCell();
+    reflowEmpowered(this.empowered, this.grid, next.grid);
+    this.empoweredTile = null;
     this.down = null;
     this.clearSelection();
     this.clearHint();
@@ -1826,6 +1982,7 @@ class GameScene extends Phaser.Scene {
     this.boardFrame.setPosition(this.boardCenter, GRID_Y + this.boardHeight / 2)
       .setSize(this.boardWidth + 8, this.boardHeight + 8);
     this.idleBoardTime = 0; this.idleHintShown = false;
+    reflowIce(this.run.biome, this.run.zone!, this.grid);
   }
 
   private buildBoard() {
@@ -1834,16 +1991,38 @@ class GameScene extends Phaser.Scene {
     this.tiles = Array.from({ length: this.boardRows }, () => Array<Phaser.GameObjects.Container | null>(this.boardCols).fill(null));
     for (let r = 0; r < this.boardRows; r++)
       for (let c = 0; c < this.boardCols; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
-    this.selection = this.inBox(this.add.rectangle(0, 0, TILE - 3, TILE - 3)
-      .setStrokeStyle(3, 0x82efcd).setDepth(51).setVisible(false), true);
+    this.selection = this.inBox(this.add.rectangle(0, 0, FACE + 4, FACE + 4)
+      .setStrokeStyle(3, 0xffe6aa).setDepth(51).setVisible(false), true);
+    this.zoneArt = this.inBox(this.add.graphics().setDepth(48), true);
+    this.zoneArtSignature = "";
+    thawIfStuck(this.run.biome, this.run.zone!, this.grid);
   }
   private makeTile(r: number, c: number, type: number): Phaser.GameObjects.Container {
     const face = this.add.image(0, 0, tileArtKey(type)).setDisplaySize(FACE, FACE);
-    const shine = this.add
-      .sprite(0, 0, TILE_SHINE_KEY, 0)
-      .setDisplaySize(FACE, FACE)
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setAlpha(0.4);
+    const visual = this.add.container(0, 0, [face]);
+    const tile = this.inBox(this.add.container(this.xFor(c), this.yFor(r), [visual]).setData("type", type).setData("visual", visual), true);
+    this.syncTileShine(tile);
+    tile.once("destroy", () => this.tweens.killTweensOf([tile, visual]));
+    if (type === POTION) tile.setData("potionCue", decoratePotion(this, tile));
+    if (!this.empoweredTile && this.empowered.type === type && this.empowered.cell?.r === r && this.empowered.cell?.c === c) {
+      this.empoweredTile = tile; decorateEmpowered(this, tile, type);
+    }
+    return tile;
+  }
+
+  private syncTileShine(tile: Phaser.GameObjects.Container) {
+    const current = tile.getData("shine") as Phaser.GameObjects.Sprite | undefined;
+    if (!tileEffectsEnabled() || tile.getData("empowered")) {
+      current?.destroy();
+      tile.setData("shine", null);
+      return;
+    }
+    if (current?.scene) return;
+    const shine = this.add.sprite(0, 0, TILE_SHINE_KEY, 0).setDisplaySize(FACE, FACE)
+      .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.4);
+    // Keep potion action badges above the decorative glint when toggled mid-run.
+    tileVisual(tile).addAt(shine, tile.getData("potionSheen")?.scene ? 2 : 1);
+    tile.setData("shine", shine);
     shine.play({
       key: TILE_SHINE_ANIM,
       delay: Phaser.Math.Between(500, 7200),
@@ -1851,65 +2030,145 @@ class GameScene extends Phaser.Scene {
       repeatDelay: Phaser.Math.Between(6500, 9000),
       showBeforeDelay: true,
     });
-    return this.inBox(this.add.container(this.xFor(c), this.yFor(r), [face, shine]).setData("type", type));
   }
 
   // --- input ---
   private buildInput() {
-    const blocked = () => this.busy || this.run.over || this.runCompleteShown || this.chestActive || this.arenaActive || this.tutorial?.lockBoard;
+    const blocked = () => this.busy || this.run.over || this.runCompleteShown || this.chestActive || this.arenaActive || this.tutorial?.lockBoard || !!this.targeting;
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      if (this.down || (!p.wasTouch && !p.leftButtonDown())) return;
       if (this.targeting) {
         this.onTargetTap(p); // an armed item is waiting for its board tap
         return;
       }
       if (blocked()) return;
       const coord = this.cellAt(p.x, p.y);
-      if (coord) this.down = { coord, x: p.x, y: p.y };
+      if (coord) {
+        this.clearHint();
+        this.swapPreview.cancel(true);
+        this.down = { coord, x: p.x, y: p.y, pointerId: p.id, dragged: false };
+        this.releaseTilePress();
+        this.pressedTile = this.tiles[coord.r][coord.c];
+        if (this.pressedTile) liftTile(this, this.pressedTile, true);
+      }
       else this.clearSelection();
     });
-    this.input.on("pointerup", (p: Phaser.Input.Pointer) => {
-      if (!this.down || blocked()) {
-        this.down = null;
-        return;
-      }
-      const { coord, x, y } = this.down;
-      this.down = null;
-      const dx = p.x - x;
-      const dy = p.y - y;
-      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) {
-        if (this.grid[coord.r][coord.c] === POTION) {
-          this.clearSelection();
-          void this.drinkPotionAt(coord);
-        } else if (this.selected && Math.abs(this.selected.r - coord.r) + Math.abs(this.selected.c - coord.c) === 1) {
-          void this.trySwap(this.selected, coord);
-        } else if (this.selected?.r === coord.r && this.selected.c === coord.c) {
-          this.clearSelection();
-        } else {
-          this.selected = coord;
-          this.selection.setPosition(this.xFor(coord.c), this.yFor(coord.r)).setVisible(true);
-          this.sfx("swap", 0.12, 1.2);
-        }
-        return;
-      }
-      const target: Coord =
-        Math.abs(dx) > Math.abs(dy)
-          ? { r: coord.r, c: coord.c + (dx > 0 ? 1 : -1) }
-          : { r: coord.r + (dy > 0 ? 1 : -1), c: coord.c };
-      if (target.c < 0 || target.c >= this.boardCols || target.r < 0 || target.r >= this.boardRows) return;
-      void this.trySwap(coord, target);
+    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
+      if (!this.down || this.down.pointerId !== p.id) return;
+      if (!p.isDown || p.wasCanceled || blocked()) { this.clearSelection(); return; }
+      this.previewTileDrag(p);
     });
-    this.input.on("pointerupoutside", () => { this.down = null; this.clearSelection(); });
+    this.input.on("pointerup", (p: Phaser.Input.Pointer) => {
+      if (!this.down || this.down.pointerId !== p.id) return;
+      if (p.wasCanceled || blocked() || !this.cellAt(p.x, p.y, TILE * .35)) { this.clearSelection(); return; }
+      this.previewTileDrag(p);
+      const { coord, x, y, dragged } = this.down;
+      this.releaseTilePress();
+      this.down = null;
+      const target = dragSwapTarget(coord, (p.x - x) / this.puzzleScale, (p.y - y) / this.puzzleScale,
+        TILE, this.boardCols, this.boardRows);
+      if (dragged || target) {
+        if (target) void this.trySwap(coord, target);
+        else this.clearSelection();
+        return;
+      }
+      if (this.isIceLocked(coord)) { this.clearSelection(); this.notice("Match beside the ice to break it", "#b7e8ff"); return; }
+      if (this.grid[coord.r][coord.c] === POTION) {
+        this.clearSelection();
+        void this.drinkPotionAt(coord);
+      } else if (this.selected && Math.abs(this.selected.r - coord.r) + Math.abs(this.selected.c - coord.c) === 1) {
+        void this.trySwap(this.selected, coord);
+      } else if (this.selected?.r === coord.r && this.selected.c === coord.c) {
+        this.clearSelection();
+      } else {
+        this.selected = coord;
+        this.selection.setPosition(this.xFor(coord.c), this.yFor(coord.r)).setVisible(true);
+        this.sfx("swap", 0.12, 1.2);
+      }
+    });
+    this.input.on("pointerupoutside", (p: Phaser.Input.Pointer) => {
+      if (this.down?.pointerId === p.id) this.clearSelection();
+    });
+    this.input.on("gameout", () => this.clearSelection());
+    const cancel = () => this.clearSelection(true);
+    this.events.on(Phaser.Scenes.Events.PAUSE, cancel);
+    this.game.events.on(Phaser.Core.Events.BLUR, cancel);
+    for (const event of ["touchcancel", "pointercancel"]) this.game.canvas.addEventListener(event, cancel, true);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      cancel();
+      this.events.off(Phaser.Scenes.Events.PAUSE, cancel);
+      this.game.events.off(Phaser.Core.Events.BLUR, cancel);
+      for (const event of ["touchcancel", "pointercancel"]) this.game.canvas.removeEventListener(event, cancel, true);
+    });
     this.input.keyboard?.on("keydown-H", () => this.showHint());
     for (let i = 0; i < SLOT_N; i++) this.input.keyboard?.on(`keydown-${i + 1}`, () => this.useSlot(i));
   }
 
-  private clearSelection() {
+  private previewTileDrag(p: Phaser.Input.Pointer) {
+    if (!this.down) return;
+    const { coord, x, y } = this.down;
+    const dx = (p.x - x) / this.puzzleScale, dy = (p.y - y) / this.puzzleScale;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) >= TILE * .3) this.down.dragged = true;
+    const target = this.cellAt(p.x, p.y, TILE * .35) ? dragSwapTarget(coord, dx, dy, TILE, this.boardCols, this.boardRows) : null;
+    if (!target || this.isIceLocked(coord) || this.isIceLocked(target)) { this.swapPreview.cancel(); return; }
+    const a = this.tiles[coord.r][coord.c], b = this.tiles[target.r][target.c];
+    if (!a || !b) { this.swapPreview.cancel(); return; }
+    this.selected = null;
+    this.selection.setVisible(false);
+    this.swapPreview.show(a, b, { x: this.xFor(coord.c), y: this.yFor(coord.r) },
+      { x: this.xFor(target.c), y: this.yFor(target.r) });
+  }
+
+  private clearSelection(immediate = false) {
+    this.down = null;
+    this.swapPreview?.cancel(immediate);
+    this.releaseTilePress();
     this.selected = null;
     this.selection?.setVisible(false);
   }
 
+  private releaseTilePress() {
+    if (this.pressedTile?.scene) liftTile(this, this.pressedTile, false);
+    this.pressedTile = null;
+  }
+
+  private isIceLocked(cell: Coord) {
+    return iceLocked(this.run.biome, this.run.zone!, this.boardCols, cell);
+  }
+
+  private updatePotionCues() {
+    const available = !this.busy && !this.run.over && !this.runCompleteShown && !this.chestActive &&
+      !this.arenaActive && !this.tutorial?.lockBoard && !this.targeting && !this.down?.dragged;
+    for (let r = 0; r < this.boardRows; r++) for (let c = 0; c < this.boardCols; c++) {
+      if (this.grid[r]?.[c] !== POTION) continue;
+      const cue = this.tiles[r]?.[c]?.getData("potionCue") as ReturnType<typeof decoratePotion> | undefined;
+      cue?.setReady(available && !this.isIceLocked({ r, c }));
+    }
+  }
+
+  private drawZonePatches() {
+    this.zoneArt.setVisible(!this.chestActive && !this.arenaActive && !this.tutorial?.active && !this.run.over);
+    const state = this.run.zone!;
+    const signature = `${this.run.biome}:${this.boardCols}:${state.marks.join(",")}`;
+    if (signature === this.zoneArtSignature) return;
+    this.zoneArtSignature = signature;
+    const g = this.zoneArt.clear();
+    for (const i of state.marks) {
+      const x = this.xFor(i % this.boardCols), y = this.yFor(Math.floor(i / this.boardCols));
+      if (this.run.biome === "snow") {
+        g.fillStyle(0xb6e8ff,.18).fillRoundedRect(x-39,y-39,78,78,8);
+        g.lineStyle(3,0xb6e8ff,.95).strokeRoundedRect(x-39,y-39,78,78,8);
+        g.lineStyle(2,0xe4f7ff,.85).strokePoints([{x:x-36,y:y-18},{x:x-23,y:y-9},{x:x-29,y:y+8}],false);
+        g.fillStyle(0xe4f7ff,.8).fillTriangle(x+18,y-38,x+37,y-38,x+37,y-20);
+      }
+    }
+  }
+
   // --- per-frame: scroll pressure (only while engaged) + sprite placement ---
   update(_time: number, delta: number) {
+    this.tileShatter.update(delta);
+    if (this.down && (this.busy || this.run.over || this.runCompleteShown || this.chestActive ||
+        this.arenaActive || this.tutorial?.lockBoard || this.targeting)) this.clearSelection(true);
     // Resize immediately if safe; otherwise apply the latest orientation once the move ends.
     const wantedCols = this.wideLayout ? 10 : 7;
     if (this.boardCols !== wantedCols) {
@@ -1919,7 +2178,15 @@ class GameScene extends Phaser.Scene {
     if (_time - this.checkpointAt > 1000) { this.checkpointAt = _time; this.writeCheckpoint(); }
     const dts = delta / 1000;
     const fighting = this.phase === "fight" && !this.run.over && !this.orcDying && !this.tutorial?.active && !this.arenaActive;
-    if (fighting) {
+    if (fighting && !this.busy && !this.down && !this.chestActive && !this.targeting && this.run.enemy?.kind !== "boss") this.maybeEmpower();
+    if (fighting && !this.busy && !this.chestActive && !this.targeting && this.run.enemy?.kind !== "boss") {
+      if (seedZonePatches(this.run.biome, this.run.zone!, this.grid, this.run.killed)) {
+        this.clearHint();
+        this.refreshHud();
+      }
+    }
+    this.drawZonePatches();
+    if (fighting && !this.ambushResolving) {
       this.attackClock += delta;
       const wait = this.strikeWait();
       if (!this.attackWarned && this.attackClock >= wait - STRIKE_TELE_MS) {
@@ -1934,7 +2201,8 @@ class GameScene extends Phaser.Scene {
       fighting && !this.chestActive && !this.runCompleteShown);
     this.activeEffects?.show(this.scene.isActive() && !this.scene.isActive("menu") && !this.run.over && !this.runCompleteShown && !this.chestActive && !this.tutorial?.active);
     this.tickItems(dts);
-    const canAct = !this.busy && !this.run.over && !this.runCompleteShown && !this.chestActive &&
+    this.updatePotionCues();
+    const canAct = !this.busy && !this.down && !this.run.over && !this.runCompleteShown && !this.chestActive &&
       !this.arenaActive && !this.tutorial?.active && !this.targeting && this.phase === "fight";
     if (canAct) {
       this.idleBoardTime += dts;
@@ -1947,11 +2215,12 @@ class GameScene extends Phaser.Scene {
     // the tutorial holds the run harmless — no scroll pressure while it teaches.
     // Boss fights ease the scroll (BOSS_SCROLL_MULT): no intermediate kills = no relief.
     // The Waystone freezes the world's breath entirely.
-    if (this.phase === "fight" && !this.run.over && !this.tutorial?.active && this.freezeLeft <= 0)
+    if (this.phase === "fight" && !this.run.over && !(this.ambushResolving && !this.orcEnemy?.hp) && !this.tutorial?.active && this.freezeLeft <= 0)
       scroll(this.run, roadScrollRate(this.run) * (this.run.enemy?.kind === "boss" ? BOSS_SCROLL_MULT : 1) * dts);
 
     // pan the world while the hero runs to the next foe; hold still in a fight
     const worldSpeed = this.phase === "advance" && !this.run.over ? WORLD_SCROLL : 0;
+    this.roadScenery.update(delta, worldSpeed * dts, this.run.roadFork, this.run.killed);
     if (worldSpeed > 0) {
       const d = worldSpeed * (delta / 1000);
       // each layer moves at its depth factor; tilePositionX is texture-space (magnified by tileScale)
@@ -1970,7 +2239,7 @@ class GameScene extends Phaser.Scene {
     // blow drops pressure instantly, and chaining the corpse to the new heroX
     // would teleport it forward (visible during a spell kill's bolt flight) —
     // the dead stay where they fell; the hero surges up past them instead.
-    if (this.orc && this.phase === "fight" && !this.orcDying) this.orc.x = heroX + this.orcGap;
+    if (this.orc && this.phase === "fight" && !this.orcDying && !this.ambushResolving) this.orc.x = heroX + this.orcGap;
     // ...and in the ARENA the boss presses his advantage. Without this he stayed
     // planted while pressure dragged the hero leftwards, so the stance silently
     // stretched across the lane and the fight stopped reading as a fight. He
@@ -1979,47 +2248,36 @@ class GameScene extends Phaser.Scene {
       const want = this.hero.x + this.orcGap;
       this.orc.x = Phaser.Math.Linear(this.orc.x, want, Math.min(1, (delta / 1000) * BOSS_CLOSE_RATE));
     }
+    if (this.orc && this.boss.arena === "slime" && this.arenaActive) {
+      const spacing = this.slimeProgress?.phase === 1 ? 92 : 62;
+      this.slimeAdds.forEach((slime, i) => {
+        slime.x = Phaser.Math.Linear(slime.x, this.orc!.x + spacing * (i + 1), Math.min(1, delta / 150));
+      });
+    }
     if (this.orc) {
       const barY = GROUND_Y - (this.orcRig?.barOff ?? 56); // clear each creature's head
+      const barWidth = this.orcEnemy?.ambush ? 56 : HP_W;
       this.enemyHpBg.setPosition(this.orc.x, barY);
-      this.enemyHpBar.setPosition(this.orc.x - HP_W / 2, barY);
-      this.defBadge.setPosition(this.orc.x + HP_W / 2 + 6, barY);
-    }
-
-    // sliced tile pieces: gravity + tumble, fading out as they fall away
-    if (this.frags.length) {
-      const dt = Math.min(0.05, delta / 1000);
-      for (let i = this.frags.length - 1; i >= 0; i--) {
-        const f = this.frags[i];
-        f.vy += 1500 * dt; // gravity
-        f.o.x += f.vx * dt;
-        f.o.y += f.vy * dt;
-        f.o.rotation += f.vr * dt;
-        f.life -= dt;
-        if (f.life < 0.3) f.o.setAlpha(Math.max(0, f.life / 0.3));
-        if (f.life <= 0) {
-          f.o.destroy();
-          this.frags.splice(i, 1);
-        }
+      this.enemyHpBar.setPosition(this.orc.x - barWidth / 2, barY);
+      this.defBadge.setPosition(this.orc.x + barWidth / 2 + 6, barY);
+      if (this.ambushBrush && this.phase === "fight" && !this.ambushResolving) this.ambushBrush.root.x = heroX + 120;
+      const rear = this.rearFoe;
+      if (rear) {
+        if (this.phase === "fight" && !this.ambushResolving) rear.sprite.x = heroX + 230;
+        const y = GROUND_Y - (rear.rig.barOff ?? 56);
+        rear.hpBg.setPosition(rear.sprite.x, y);
+        rear.hpBar.setPosition(rear.sprite.x - 28, y);
       }
     }
 
-    // peril vignette: past VIGNETTE_FROM the skull's pull bleeds red in from the
-    // screen edges — felt in peripheral vision without ever looking up. Near the
-    // end a heartbeat rides on top, quickening as the ground runs out.
+    // Near-death feedback gently reddens the combat panel as the skull gets closer.
     if (this.vignette) {
       const p = this.run.pressure;
-      let target = 0;
-      if (!this.run.over && !this.overShown && !this.runCompleteShown && p > VIGNETTE_FROM) {
-        const t = Math.min(1, (p - VIGNETTE_FROM) / (1 - VIGNETTE_FROM));
-        target = t * t * VIGNETTE_MAX;
-        if (p > 0.7) {
-          this.heartPhase += dts * (1.2 + p * 1.8) * Math.PI * 2;
-          const thump = Math.pow(Math.max(0, Math.sin(this.heartPhase)), 3);
-          target += thump * 0.09 * ((p - 0.7) / 0.3);
-        }
-      }
-      this.vignetteA += (target - this.vignetteA) * Math.min(1, dts * 7);
+      const hidden = this.run.over || this.overShown || this.runCompleteShown || this.chestActive || this.tutorial?.active;
+      const t = Phaser.Math.Clamp((p - VIGNETTE_FROM) / (VIGNETTE_FULL - VIGNETTE_FROM), 0, 1);
+      // A direct ramp makes early danger visible; the time easing keeps it smooth.
+      const target = t * VIGNETTE_MAX;
+      this.vignetteA = hidden ? 0 : this.vignetteA + (target - this.vignetteA) * (1 - Math.exp(-dts * 6));
       this.vignette.setAlpha(Math.max(0, this.vignetteA));
     }
 
@@ -2034,7 +2292,7 @@ class GameScene extends Phaser.Scene {
   private tickItems(dts: number) {
     if (this.run.over) return;
     // Paid time is combat time; arrivals, loot reveals and boss arenas keep it.
-    const activeDt = this.phase === "fight" && !this.orcDying && !this.arenaActive && !this.chestActive && !this.tutorial?.active ? dts : 0;
+    const activeDt = this.phase === "fight" && !this.orcDying && !this.ambushResolving && !this.arenaActive && !this.chestActive && !this.tutorial?.active ? dts : 0;
 
     // Waystone: frozen scroll + a cool wash over the lane while it holds
     if (this.freezeLeft > 0) {
@@ -2067,7 +2325,7 @@ class GameScene extends Phaser.Scene {
           const burnDt = Math.min(this.burnLeft, activeDt);
           this.burnLeft = Math.max(0, this.burnLeft - burnDt);
           this.burnAcc += burnDt;
-        while (this.burnAcc >= 1 && this.run.enemy) {
+        while (this.burnAcc >= 1 && this.run.enemy && !this.ambushResolving) {
           this.burnAcc -= 1;
           const killed = dealDamage(this.run, BURN_DPS);
           this.floatDamage(BURN_DPS, false);
@@ -2078,6 +2336,11 @@ class GameScene extends Phaser.Scene {
             this.burnLeft = 0;
             this.killOrc(0); // burned to ash — no swing needed
             this.refreshHud();
+            break;
+          }
+          if (this.orcEnemy?.ambush && this.orcEnemy !== this.run.enemy) {
+            // A burning front enemy can fall without ending the ambush.
+            void this.finishAmbushHit(null, false, 0);
             break;
           }
         }
@@ -2112,35 +2375,9 @@ class GameScene extends Phaser.Scene {
       freezeLeft: this.freezeLeft, hornLeft: this.hornLeft, ledgerLeft: this.ledgerLeft,
       burnLeft: this.burnLeft, burnAcc: this.burnAcc, spursActive: this.spursActive,
       skeletonCharges: this.skeletonCharges, panCharges: this.panCharges,
-      inkActive: this.inkActive, bossChestNext: this.bossChestNext,
-    }, this.itemSlots.map(slot => slot.item?.id ?? null), this.inkActive ? this.roadAhead() : [],
+      bossChestNext: this.bossChestNext,
+    }, this.itemSlots.map(slot => slot.item?.id ?? null),
     this.phase !== "fight" || this.orcDying || this.arenaActive || this.chestActive || !!this.tutorial?.active));
-  }
-
-  /** Cartographer's Ink: simulate the spawn chain to name the next three encounters. */
-  private roadAhead(n = 3): string[] {
-    const out: string[] = [];
-    let k = this.run.killed; // kills banked so far
-    let sc = this.sinceChest;
-    const chestHasRoom = this.itemSlots.some((s) => !s.item);
-    // the current engagement resolves first and isn't part of the forecast
-    if (this.phase !== "chest" && !this.chest) {
-      k++;
-      sc++;
-      if (this.run.enemy?.kind === "boss" || (this.orcAnim === this.boss.key && this.orc)) sc = CHEST_EVERY; // his hoard follows him out
-    }
-    while (out.length < n) {
-      if (sc >= CHEST_EVERY && chestHasRoom) {
-        out.push("📦");
-        sc = 0;
-        continue;
-      }
-      const boss = (k + 1) % BOSS_EVERY === 0;
-      out.push(boss ? "☠" : "👾");
-      k++;
-      sc = boss ? CHEST_EVERY : sc + 1; // a boss kill always rolls his hoard in next
-    }
-    return out;
   }
 
   /** Hearth Charm: consumes itself at the moment of death and drags you back. */
@@ -2167,6 +2404,68 @@ class GameScene extends Phaser.Scene {
 
   // ================= combat / runner =================
 
+  private creatureRig(enemy: Enemy, small = false): CreatureRig {
+    const base = CREATURE_RIG[enemy.variant] ?? CREATURE_RIG.green;
+    const size = small ? .78 : 1;
+    return { ...base, scale: base.scale * (base.idleTex.startsWith("slime") ? 1 : 1.17) * size,
+      barOff: (base.barOff ?? 56) * size, hover: (base.hover ?? 0) * size };
+  }
+
+  /** Retire a member without advancing depth, paying loot or starting a new attack clock. */
+  private retireAmbusher(sprite: Phaser.GameObjects.Sprite, rig: CreatureRig) {
+    this.tweens.killTweensOf(sprite);
+    sprite.removeAllListeners("animationcomplete");
+    sprite.setTintFill(0xffe2ad).play(`${rig.prefix}-death`);
+    this.time.delayedCall(70, () => { if (sprite.active) sprite.clearTint(); });
+    sprite.once("animationcomplete", () => {
+      this.tweens.add({ targets: sprite, alpha: 0, duration: 200, onComplete: () => sprite.destroy() });
+    });
+  }
+
+  private async settleAmbushActors() {
+    const rear = this.rearFoe;
+    if (rear && rear.enemy.hp <= 0) {
+      rear.hpBg.destroy(); rear.hpBar.destroy();
+      this.retireAmbusher(rear.sprite, rear.rig);
+      this.rearFoe = null;
+    }
+    if (this.orcEnemy && this.orcEnemy.hp <= 0 && this.run.enemy && this.rearFoe) {
+      const survivor = this.rearFoe;
+      if (this.orc && this.orcRig) this.retireAmbusher(this.orc, this.orcRig);
+      survivor.hpBg.destroy(); survivor.hpBar.destroy();
+      this.orc = survivor.sprite; this.orcRig = survivor.rig;
+      this.orcAnim = survivor.rig.prefix; this.orcEnemy = survivor.enemy;
+      this.orcDefense = survivor.enemy.defense; this.defenseTaught = false;
+      this.rearFoe = null;
+      // Fire Bomb burns the enemy it struck; Slow Trap belongs to the shared encounter.
+      this.burnLeft = 0; this.burnAcc = 0;
+      this.defBadge.setText(this.orcDefense === "hide" ? "🛡⚔" : this.orcDefense === "ward" ? "🛡🪄" : "")
+        .setVisible(this.orcDefense !== "none");
+      this.orc.play(`${this.orcAnim}-walk`);
+      this.updateEnemyBar();
+      await this.tweenP(this.orc, { x: this.heroXForPressure() + this.orcGap, duration: 230, ease: "Sine.easeInOut" });
+      if (this.orc?.active) this.orc.play(`${this.orcAnim}-idle`);
+    }
+    this.updateEnemyBar();
+  }
+
+  /** Finish both impacts before the next cascade can target the surviving member. */
+  private async finishAmbushHit(spell: SpellOutcome | null, killed: boolean, meleeMs: number,
+    tint = 0xffa040, fromCells: { x: number; y: number }[] = []) {
+    this.ambushResolving = true;
+    if (killed) this.heroLockX = true;
+    await new Promise<void>(resolve => {
+      if (spell) this.performCast(spell, false, meleeMs, tint, fromCells, resolve);
+      else this.time.delayedCall(Math.max(100, meleeMs), resolve);
+    });
+    if (!this.run.over) {
+      if (killed) { this.killOrc(520); this.surgeAfterKill(0); }
+      else await this.settleAmbushActors();
+    }
+    this.ambushResolving = false;
+    this.refreshHud();
+  }
+
   private spawnOrc(walkMs = WALK_IN_MS) {
     if (this.run.over) return;
     if (!this.run.enemy) spawnNext(this.run);
@@ -2176,18 +2475,22 @@ class GameScene extends Phaser.Scene {
       return;
     }
     this.orcDying = false;
+    this.orcEnemy = this.run.enemy;
+    const ambush = !!this.run.enemy.ambush;
     this.phase = "advance";
-    this.orcGap = ENGAGE_GAP;
+    this.orcGap = ambush ? 120 : ENGAGE_GAP;
     this.hero.play("hero-walk", true); // stride forward while the foe approaches
 
     // the variant (and its defense) is rolled in run.ts makeEnemy — dress to match
-    const variant = this.run.enemy.variant;
-    const baseRig = CREATURE_RIG[variant] ?? CREATURE_RIG.green;
-    const rig = { ...baseRig, scale: baseRig.scale * (baseRig.idleTex.startsWith("slime") ? 1 : 1.17) };
+    const rig = this.creatureRig(this.run.enemy, ambush);
     this.orcAnim = rig.prefix;
     this.orcRig = rig;
     this.orcDefense = this.run.enemy.defense;
     this.defenseTaught = false;
+    if (ambush) {
+      this.ambushBrush = new ForestAmbushBrush(this, this.centerBox, GROUND_Y);
+      this.ambushBrush.root.x = this.heroXForPressure() + this.orcGap;
+    }
 
     // flyers hover off the ground (update() only drives x, so y stays put)
     const gy = GROUND_Y - (rig.hover ?? 0);
@@ -2203,8 +2506,10 @@ class GameScene extends Phaser.Scene {
     else this.sfx(this.pick(["squish1", "squish2"]), 0.32, 0.95 + Math.random() * 0.1);
     this.enemyHpBg.setVisible(true);
     this.enemyHpBar.setVisible(true);
+    this.enemyHpBg.setSize(ambush ? 56 : HP_W, ambush ? 7 : 10);
+    this.enemyHpBar.setSize(ambush ? 56 : HP_W, ambush ? 7 : 10);
     this.defBadge.setText(this.orcDefense === "hide" ? "🛡⚔" : this.orcDefense === "ward" ? "🛡🪄" : "").setVisible(this.orcDefense !== "none");
-    if (this.orcDefense !== "none") {
+    if (!ambush && this.orcDefense !== "none") {
       // a brief tinted shimmer as it bounces in — gray iron vs violet ward
       const aura = this.inBox(
         this.add
@@ -2219,6 +2524,41 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: aura, alpha: 0, scale: 2.4, duration: WALK_IN_MS + 200, onComplete: () => aura.destroy() });
     }
     this.updateEnemyBar();
+
+    if (ambush) {
+      this.ambushResolving = true;
+      const rear = ambushRear(this.run);
+      if (rear) {
+        const rearRig = this.creatureRig(rear, true);
+        const sprite = this.inBox(this.add.sprite(ENTER_X, GROUND_Y - (rearRig.hover ?? 0), rearRig.idleTex)
+          .setOrigin(.5, rearRig.origin).setScale(rearRig.scale).setFlipX(!!rearRig.faceLeft).play(`${rearRig.prefix}-walk`));
+        const hpBg = this.inBox(this.add.rectangle(0, 0, 56, 7, 0x10191b, .85));
+        const hpBar = this.inBox(this.add.rectangle(0, 0, 56, 7, 0xe05a5a).setOrigin(0, .5));
+        this.rearFoe = { sprite, enemy: rear, rig: rearRig, hpBg, hpBar };
+      }
+      // Both emerge from the undergrowth; a restored lone survivor just steps back in.
+      const enter = (sprite: Phaser.GameObjects.Sprite, actorRig: CreatureRig, index: number) => {
+        this.tweens.killTweensOf(sprite);
+        const x = this.heroXForPressure() + this.orcGap + index * 110;
+        const y = GROUND_Y - (actorRig.hover ?? 0);
+        sprite.setPosition(x + 26, y + 10).setAlpha(0);
+        const delay = 180 + index * 110;
+        this.time.delayedCall(delay, () => this.ambushBrush?.rustle(index));
+        this.tweens.add({ targets: sprite, x, y, alpha: 1, delay, duration: 330, ease: "Cubic.easeOut",
+          onComplete: () => {
+            if (!sprite.active) return;
+            sprite.play(`${actorRig.prefix}-idle`);
+            if (actorRig.hover) this.tweens.add({ targets: sprite, y: y - 6, duration: 1000, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+          } });
+      };
+      enter(orc, rig, 0);
+      if (this.rearFoe) enter(this.rearFoe.sprite, this.rearFoe.rig, 1);
+      this.centerBox.bringToTop(this.enemyHpBg); this.centerBox.bringToTop(this.enemyHpBar);
+      this.centerBox.bringToTop(this.defBadge);
+      this.updateEnemyBar();
+      this.time.delayedCall(680, () => this.enterFight());
+      return;
+    }
 
     this.tweens.add({
       targets: orc,
@@ -2236,6 +2576,7 @@ class GameScene extends Phaser.Scene {
       return;
     }
     this.phase = "fight";
+    this.ambushResolving = false;
     this.attackClock = 0; this.attackWarned = false;
     this.orc.play(`${this.orcAnim}-idle`);
     this.hero.play("hero-idle", true);
@@ -2245,7 +2586,12 @@ class GameScene extends Phaser.Scene {
   private spawnBoss() {
     if (this.run.over) return;
     const B = this.boss;
+    if (B.arena === "slime") {
+      const saved = this.recovered?.run.enemy?.kind === "boss" && this.recovered.run.killed === this.run.killed ? this.recovered : null;
+      this.slimeProgress = restoreSlimeProgress(saved?.slimeBoss, saved?.arenaWard);
+    }
     this.orcDying = false;
+    this.orcEnemy = this.run.enemy;
     this.phase = "advance";
     this.orcAnim = B.key;
     // Gorrach's pack ships no death frames — rig a fake topple for him; the
@@ -2266,7 +2612,7 @@ class GameScene extends Phaser.Scene {
 
     const orc = this.inBox(
       this.add
-        .sprite(ENTER_X, GROUND_Y, `${B.key}-idle`)
+        .sprite(ENTER_X, GROUND_Y, B.arena === "slime" ? "slime-idle" : `${B.key}-idle`)
         .setOrigin(0.5, B.origin)
         .setScale(B.scale)
         .setFlipX(B.faceLeft) // he walks in from the right and must glare left, at the hero
@@ -2317,26 +2663,40 @@ class GameScene extends Phaser.Scene {
     const BH = 13;
     const root = this.add.container(CXC, LANE_Y + (this.boss.arena === "shells" ? 52 : 30)).setDepth(31);
     const label = this.add
-      .text(0, -14, this.boss.arena === "shells" ? "MALGRIM" : `☠ ${this.boss.name} · ${this.boss.wardMark}`, { fontFamily: "system-ui, sans-serif", fontStyle: "bold", fontSize: "24px", color: "#ffe0b3",stroke:"#121923",strokeThickness:4 })
+      .text(0, -14, this.boss.arena === "goring" ? "GORRACH" : this.boss.arena === "shells" ? "MALGRIM" : this.boss.name, { fontFamily: "system-ui, sans-serif", fontStyle: "bold", fontSize: "24px", color: "#ffe0b3",stroke:"#121923",strokeThickness:4 })
       .setOrigin(0.5, 1);
     const bg = this.add.rectangle(0, 0, BW, BH, 0x000000, 0.6).setStrokeStyle(2, 0x8a2d2d);
     const fill = this.add.rectangle(-BW / 2 + 2, 0, BW - 4, BH - 4, 0xe05a5a).setOrigin(0, 0.5);
     root.add([bg, fill, label]);
     const dividers: Phaser.GameObjects.Rectangle[] = [];
+    if (this.boss.arena === "goring") {
+      bg.setFillStyle(0x191b16, .95).setStrokeStyle(2, 0xc6a56d);
+      fill.setFillStyle(0xd6a65e);
+    }
     if(this.boss.arena === "shells") {
       fill.setFillStyle(0xe6a953);
-      for(let i=1;i<3;i++) {
-        const divider = this.add.rectangle(-BW/2+BW*i/3,0,3,BH,0x151c26);
-        dividers.push(divider); root.add(divider);
-      }
-      const haze=this.add.rectangle(0,LANE_H/2-52,UI_W,LANE_H,0x231a30,.12);
+      const haze=this.add.rectangle(0,LANE_H/2-52,UI_W,LANE_H,this.run.biome === "forest" ? 0x17352a : 0x231a30,.12);
       root.addAt(haze,0);
       for(let i=0;i<10;i++) {
-        const ember=this.add.circle(-UI_W/2+20+i*(UI_W-40)/10,GROUND_Y-LANE_Y-52,2,0xffb467,.45);
+        const ember=this.add.circle(-UI_W/2+20+i*(UI_W-40)/10,GROUND_Y-LANE_Y-52,2,this.run.biome === "forest" ? 0xd9df98 : 0xb69cdd,.45);
         root.add(ember);
         const tween=this.tweens.add({targets:ember,y:80,alpha:0,duration:1800+i*170,delay:i*150,repeat:-1});
         ember.once("destroy",()=>tween.stop());
       }
+    }
+    if (this.boss.arena === "rimes") {
+      bg.setStrokeStyle(2, 0x88bfcd).setFillStyle(0x132635, .95);
+      fill.setFillStyle(0x99d6e7); label.setColor("#d6f5ff");
+    }
+    if (this.boss.arena === "slime") {
+      bg.setStrokeStyle(2, 0x9fb677).setFillStyle(0x14281d, .95);
+      fill.setFillStyle(0xa6cf7c); label.setColor("#e5eec5");
+    }
+    const total = this.boss.steps + (this.hasBossFinale() ? 3 : 0);
+    for (const cleared of [3, 6, ...(this.hasBossFinale() ? [this.boss.steps] : [])]) {
+      const fraction = 1 - cleared / total;
+      const divider = this.add.rectangle(-BW / 2 + BW * fraction, 0, 3, BH, 0x131d22).setData("fraction", fraction);
+      dividers.push(divider); root.add(divider);
     }
     this.inBox(root);
     root.setAlpha(0);
@@ -2360,7 +2720,7 @@ class GameScene extends Phaser.Scene {
     bg.setSize(width, 13);
     fill.setX(-width / 2 + 2).setSize(width - 4, 9);
     label.setFontSize(this.worldFont(24, 12)).setWordWrapWidth(width);
-    dividers.forEach((d, i) => d.setX(-width / 2 + width * (i + 1) / 3));
+    dividers.forEach((d, i) => d.setX(-width / 2 + width * (d.getData("fraction") ?? (i + 1) / 3)));
   }
 
   private hideBossBar() {
@@ -2369,9 +2729,10 @@ class GameScene extends Phaser.Scene {
   }
 
   private updateEnemyBar() {
-    const e = this.run.enemy;
+    const e = this.orcEnemy?.ambush ? this.orcEnemy : this.run.enemy;
     const frac = e && !this.orcDying ? Math.max(0, e.hp / e.maxHp) : 0;
     this.enemyHpBar.scaleX = frac;
+    if (this.rearFoe) this.rearFoe.hpBar.scaleX = Math.max(0, this.rearFoe.enemy.hp / this.rearFoe.enemy.maxHp);
     if (this.bossBar) {
       this.tweens.killTweensOf(this.bossBar.fill); // first hit cancels the intro fill-up
       this.bossBar.fill.scaleX = frac;
@@ -2379,16 +2740,22 @@ class GameScene extends Phaser.Scene {
   }
 
   private async trySwap(a: Coord, b: Coord) {
-    if (this.busy || this.run.over || this.runCompleteShown || this.arenaActive || this.chestActive) return;
-    this.busy = true;
-    this.clearSelection();
-    this.clearHint(); // a move settles the board — any hint is stale now
+    if (this.busy || this.ambushResolving || this.run.over || this.runCompleteShown || this.arenaActive || this.chestActive || this.targeting || this.tutorial?.lockBoard) {
+      this.clearSelection(); return;
+    }
+    if (this.isIceLocked(a) || this.isIceLocked(b)) {
+      this.clearSelection(); this.notice("Match beside the ice to break it", "#b7e8ff"); return;
+    }
     const ta = this.tiles[a.r][a.c];
     const tb = this.tiles[b.r][b.c];
     if (!ta || !tb) {
-      this.busy = false;
+      this.clearSelection();
       return;
     }
+    this.swapPreview.commit(ta, tb);
+    this.busy = true;
+    this.clearSelection();
+    this.clearHint(); // a move settles the board — any hint is stale now
     swap(this.grid, a, b);
     const makesMatch = findMatches(this.grid).length > 0;
     if (!makesMatch) this.sfx("swap", 0.4, 0.85); // "nope" only on an illegal swap
@@ -2408,6 +2775,7 @@ class GameScene extends Phaser.Scene {
     this.idleBoardTime = 0;
     this.idleHintShown = false;
     await this.resolve();
+    if (!this.tutorial?.active) this.empowered.moves++;
     if (!this.run.over && !hasPossibleMove(this.grid)) await this.animatedReshuffle("no moves left — fresh tiles");
     this.tutorial?.onBoardSettled();
     this.busy = false;
@@ -2432,6 +2800,12 @@ class GameScene extends Phaser.Scene {
           counts[this.grid[cell.r][cell.c]] = (counts[this.grid[cell.r][cell.c]] ?? 0) + 1;
         }
 
+      const zoneReward = resolveZoneMatches(this.run.biome, this.run.zone!, this.boardCols,
+        [...cleared].map(key => { const [r,c] = key.split(",").map(Number); return {r,c}; }), counts[KEY] ?? 0);
+      this.drawZonePatches();
+      this.syncEmpoweredCell();
+      const power = empoweredMatch(matches, this.empowered.cell);
+      if (power && this.empoweredTile) this.consumeEmpowered();
       buzz(depth > 1 ? 22 : 14); // haptic tick as the tiles shatter (deeper cascade = longer buzz on Android)
       const fades: Promise<void>[] = [];
       // every match pays out visibly WHERE it happened — group the cleared cells
@@ -2461,7 +2835,7 @@ class GameScene extends Phaser.Scene {
 
       const scoreBefore = this.run.score;
       const sporesBefore = this.run.enemy?.spores ?? 0;
-      const outcome = applyMatches(this.run, counts);
+      const outcome = applyMatches(this.run, counts, power);
       if (sporesBefore > 0 && (counts[STAFF] ?? 0) >= 3) this.notice("Spores cleared", "#c4efab");
       const centroid = (cells: { x: number; y: number }[]) => ({
         x: cells.reduce((s, p) => s + p.x, 0) / cells.length,
@@ -2488,12 +2862,21 @@ class GameScene extends Phaser.Scene {
       // keys bank per MATCH, not per tile — fly only as many chips as were kept
       if (resFly[KEY]) resFly[KEY] = resFly[KEY].slice(0, outcome.gained.keys);
       this.flyResources(resFly); // the goods themselves stream off the board into the rail
-      this.onCombat(outcome, outcome.swords, swordCells, staffCells); // effective count — Wren's Whetstone can upgrade the swing
+      await this.onCombat(outcome, outcome.swords, swordCells, staffCells); // wait for ambush casualties before the next cascade
       // non-combat clear — a random tile-match sound (1 of TILE_SFX), slight pitch variation
       if (outcome.damage <= 0) this.sfx(`tile${1 + ((Math.random() * TILE_SFX) | 0)}`, 0.4, 0.97 + Math.random() * 0.06);
+      if (zoneReward.gems) {
+        this.run.resources.treasure += zoneReward.gems;
+        this.run.score += zoneReward.gems * 2;
+        this.notice(`🔓 Cache opened · +${zoneReward.gems} gems`, "#ffe0a0");
+        this.sfx("pickup", .45);
+      } else if (zoneReward.removed.length) this.notice("Ice broken", "#b7e8ff");
       this.refreshHud();
 
       await this.collapse();
+    }
+    if (thawIfStuck(this.run.biome, this.run.zone!, this.grid)) {
+      this.drawZonePatches(); this.refreshHud();
     }
   }
 
@@ -2529,6 +2912,16 @@ class GameScene extends Phaser.Scene {
     }
     const meleeMs = hasMelee ? this.comboMs(combo, comboTempo) : 0;
     const spell = outcome.spell;
+
+    if (this.orcEnemy?.ambush) {
+      if (hasMelee) {
+        this.playCombo(combo, spell ? undefined : this.heroBaseAnim(), comboTempo);
+        const struck = this.orc;
+        struck.setTint(0xff8660);
+        this.time.delayedCall(140, () => { if (struck.active) struck.clearTint(); });
+      }
+      return this.finishAmbushHit(spell, outcome.killed, meleeMs, undefined, staffCells);
+    }
 
     if (outcome.killed) {
       // Everything plays IN PLACE (x frozen); the surge waits for the last act.
@@ -2573,19 +2966,19 @@ class GameScene extends Phaser.Scene {
    * (number, hurt, burn, even the death) lands ON IMPACT. Returns impact time.
    * `killed` holds the corpse until the bolt arrives instead of dying early.
    */
-  private performCast(spell: SpellOutcome, killed: boolean, delayMs: number, tint = 0xffa040, fromCells: { x: number; y: number }[] = []): number {
+  private performCast(spell: SpellOutcome, killed: boolean, delayMs: number, tint = 0xffa040, fromCells: { x: number; y: number }[] = [], onImpact?: () => void): number {
     if (killed) this.orcDying = true; // freeze hurt/strike reactions; killOrc re-affirms at impact
     this.time.delayedCall(delayMs, () => {
       this.playCombo(["hero-spell"], killed ? undefined : this.heroBaseAnim());
       this.sfx("spell", 0.55);
       if (fromCells.length) this.gatherSpell(fromCells, tint); // the matched tiles feed the staff
-      this.time.delayedCall(CAST_LEAD_MS, () => this.launchBolt(spell, killed, tint));
+      this.time.delayedCall(CAST_LEAD_MS, () => this.launchBolt(spell, killed, tint, onImpact));
     });
     return delayMs + CAST_LEAD_MS + BOLT_FLIGHT_MS;
   }
 
   /** The projectile itself — sized by tier, trailing sparks, bursting on arrival. */
-  private launchBolt(spell: SpellOutcome, killed: boolean, tint: number) {
+  private launchBolt(spell: SpellOutcome, killed: boolean, tint: number, onImpact?: () => void) {
     const sx = this.hero.x + 28;
     const sy = GROUND_Y - 44;
     const tx = (this.orc?.x ?? sx + 220) - 6;
@@ -2616,13 +3009,13 @@ class GameScene extends Phaser.Scene {
       onComplete: () => {
         trail.destroy();
         ball.destroy();
-        this.spellImpact(spell, killed, tint, tx, ty);
+        this.spellImpact(spell, killed, tint, tx, ty, onImpact);
       },
     });
   }
 
   /** Impact: burst + shake scaled by tier, the damage number, burn, hurt or death. */
-  private spellImpact(spell: SpellOutcome, killed: boolean, tint: number, x: number, y: number) {
+  private spellImpact(spell: SpellOutcome, killed: boolean, tint: number, x: number, y: number, onImpact?: () => void) {
     const t = spell.tier;
     const burst = this.inBox(
       this.add
@@ -2654,6 +3047,26 @@ class GameScene extends Phaser.Scene {
     if (spell.burn && this.run.enemy && !killed) {
       this.burnLeft = Math.max(this.burnLeft, SPELL_BURN_SECS); // Pyroclasm sticks
       this.burnAcc = 0;
+    }
+    if (spell.splash && this.rearFoe) {
+      const rear = this.rearFoe;
+      ambushSplash(this, this.centerBox, x, rear.sprite.x, y, tint);
+      this.floatDamage(spell.splash.dmg, t >= 4, spell.splash.mod, rear.sprite);
+      rear.sprite.setTint(tint);
+      this.time.delayedCall(150, () => { if (rear.sprite.active) rear.sprite.clearTint(); });
+      if (rear.enemy.hp > 0) rear.sprite.play(`${rear.rig.prefix}-hurt`).once("animationcomplete", () => {
+        if (this.rearFoe === rear && rear.enemy.hp > 0) rear.sprite.play(`${rear.rig.prefix}-idle`);
+      });
+    }
+    if (onImpact) {
+      const struck = this.orc, prefix = this.orcAnim;
+      if (struck && this.orcEnemy && this.orcEnemy.hp > 0) {
+        struck.setTint(tint).play(`${prefix}-hurt`).once("animationcomplete", () => {
+          if (this.orc === struck && !this.orcDying && this.orcEnemy!.hp > 0) struck.play(`${prefix}-idle`);
+        });
+        this.time.delayedCall(150, () => { if (struck.active) struck.clearTint(); });
+      }
+      onImpact(); return;
     }
     if (killed) {
       this.killOrc(520);
@@ -2761,12 +3174,13 @@ class GameScene extends Phaser.Scene {
         this.time.delayedCall(i * 60, () => {
           if (this.run.over) return;
           // target computed at launch, so a mid-cascade resize still lands on the row
-          const tgt = this.toLocal(icon.x + 14, icon.y);
-          const chip = this.inBox(this.add.image(cell.x, cell.y, tileArtKey(ty)).setDepth(66).setScale(0.34).setAngle(Math.random() * 20 - 10));
+          const center = icon.getCenter();
+          const tgt = this.toLocal(center.x, center.y);
+          const chip = this.inBox(this.add.image(cell.x, cell.y, tileArtKey(ty)).setDepth(66).setScale(0.34 / TILE_TEXTURE_DENSITY).setAngle(Math.random() * 20 - 10));
           // a quick lift first, then the swoop — reads as "plucked, then carried off"
           const mx = (cell.x + tgt.x) / 2 + (Math.random() * 50 - 25);
           const my = Math.min(cell.y, tgt.y) - 90 - Math.random() * 50;
-          this.tweens.add({ targets: chip, scale: 0.42, duration: 90, yoyo: true });
+          this.tweens.add({ targets: chip, scale: 0.42 / TILE_TEXTURE_DENSITY, duration: 90, yoyo: true });
           this.tweens.add({ targets: chip, angle: chip.angle + (Math.random() < 0.5 ? -1 : 1) * 140, duration: 460, ease: "Sine.easeIn" });
           this.tweens.addCounter({
             from: 0,
@@ -2777,7 +3191,7 @@ class GameScene extends Phaser.Scene {
               const u = tw.getValue() ?? 0;
               const a = 1 - u;
               chip.setPosition(a * a * cell.x + 2 * a * u * mx + u * u * tgt.x, a * a * cell.y + 2 * a * u * my + u * u * tgt.y);
-              if (u > 0.55) chip.setScale(0.42 - (u - 0.55) * 0.45); // shrink into the rail
+              if (u > 0.55) chip.setScale((0.42 - (u - 0.55) * 0.45) / TILE_TEXTURE_DENSITY); // shrink into the rail
             },
             onComplete: () => {
               chip.destroy();
@@ -2785,7 +3199,7 @@ class GameScene extends Phaser.Scene {
               for (const o of [icon, val]) {
                 this.tweens.killTweensOf(o);
                 o.setScale(1);
-                this.tweens.add({ targets: o, scale: 1.3, duration: 90, yoyo: true, ease: "Quad.easeOut" });
+                this.tweens.add({ targets: o, scale: this.wideLayout ? 1.3 : 1.08, duration: 90, yoyo: true, ease: "Quad.easeOut" });
               }
               if (i === 0) this.sfx(this.pick(["coin1", "coin3"]), 0.22, 1.15); // one soft thunk per group, not per chip
             },
@@ -2939,21 +3353,25 @@ class GameScene extends Phaser.Scene {
   /** Pause the run under the system menu (Esc / ☰). Everything holds its breath. */
   private writeCheckpoint(force = false) {
     if (this.devJumpBoss || this.run.over || this.overShown || this.runCompleteShown || !this.itemSlots.length) return;
-    if (!force && (this.busy || this.chestActive || this.orcDying || this.phase === "chest" || this.tutorial?.active)) return;
+    if (!force && (this.busy || this.ambushResolving || this.chestActive || this.orcDying || this.phase === "chest" || this.tutorial?.active)) return;
     if (this.grid.some(row => row.some(t => t === EMPTY))) return;
     const m = loadMeta();
+    this.syncEmpoweredCell();
     m.stockedItems = [...this.meta.stockedItems];
     m.activeRun = {
       version: 1, savedAt: Date.now(), run: structuredClone(this.run), grid: this.grid.map(row => [...row]),
       boardLayouts: structuredClone(this.boardLayouts),
+      empowered: structuredClone(this.empowered), rescue: structuredClone(this.rescue),
       items: this.itemSlots.map(slot => slot.item?.id ?? null), chestsOpened: this.chestsOpened,
       sinceChest: this.sinceChest, bestCascade: this.bestCascade, rainy: this.rainy,
-      arenaWard: this.arenaActive ? Math.min(2, this.arenaWard) : this.recovered?.arenaWard ?? 0,
+      arenaWard: this.arenaActive ? Math.min(3, this.arenaWard) : this.recovered?.arenaWard ?? 0,
+      slimeBoss: this.boss.arena === "slime" && this.run.enemy?.kind === "boss" && this.slimeProgress
+        ? { ...this.slimeProgress } : undefined,
       pendingChest: this.pendingChest ? structuredClone(this.pendingChest) : null,
       awaitingChest: this.awaitingChest,
       buffs: { freezeLeft: this.freezeLeft, hornLeft: this.hornLeft, ledgerLeft: this.ledgerLeft,
         burnLeft: this.burnLeft, burnAcc: this.burnAcc, skeletonCharges: this.skeletonCharges,
-        panCharges: this.panCharges, spursActive: this.spursActive, inkActive: this.inkActive,
+        panCharges: this.panCharges, spursActive: this.spursActive,
         bossChestNext: this.bossChestNext },
     };
     const saved = saveMeta(m);
@@ -2971,7 +3389,7 @@ class GameScene extends Phaser.Scene {
     if (this.scene.isActive("menu")) return;
     if (this.combatReadout) this.combatReadout.root.hidden = true;
     this.activeEffects?.show(false);
-    const reward = document.querySelector<HTMLElement>(".chest-reward");
+    const reward = document.querySelector<HTMLElement>(".chest-reward, .companion-rescue, .road-fork");
     if (reward) {
       reward.style.visibility = "hidden";
       this.events.once(Phaser.Scenes.Events.RESUME, () => { reward.style.visibility = ""; });
@@ -3010,7 +3428,9 @@ class GameScene extends Phaser.Scene {
     this.grid[cell.r][cell.c] = EMPTY;
 
     // ...and the tonic hits: pressure relief (hero strides right via update) + guard
+    const guardBeforePotion = this.run.block;
     drinkPotion(this.run);
+    const potionGuard = this.run.block - guardBeforePotion;
     this.refreshHud();
 
     // green surge on the hero: rising glow + a heal chip + guard chip
@@ -3034,8 +3454,8 @@ class GameScene extends Phaser.Scene {
       stroke: "#052a12",
       font: EMOJI_FONT,
     });
-    this.floatGuard(this.hero.x + 30, GROUND_Y - 76, 2, 220); // the tonic hardens the guard too
-    this.notice("Potion collected · back on your feet · +2 guard", "#a9f5c0");
+    this.floatGuard(this.hero.x + 30, GROUND_Y - 76, potionGuard, 220);
+    this.notice(`Potion collected · back on your feet · +${potionGuard} guard`, "#a9f5c0");
 
     await this.collapse();
     await this.resolve(); // the refill can cascade like any clear
@@ -3047,7 +3467,7 @@ class GameScene extends Phaser.Scene {
   private showHint(quiet = false) {
     if (this.busy || this.run.over || this.chestActive || this.arenaActive || this.tutorial?.active || this.targeting) return;
     this.clearHint();
-    const h = findHint(this.grid);
+    const h = findHint(this.grid, cell => this.isIceLocked(cell));
     if (!h) {
       this.notice("no moves — the board will refresh", "#9aa0ab");
       return;
@@ -3088,7 +3508,35 @@ class GameScene extends Phaser.Scene {
   }
 
   private killOrc(afterMs = 760) {
+    if (this.orcEnemy?.ambush) {
+      this.notice(`Ambush cleared · +${FOREST_AMBUSH_REWARD.wood} wood · +${FOREST_AMBUSH_REWARD.ore} stone`, "#dceba6");
+    }
+    if (this.rearFoe) {
+      this.rearFoe.hpBg.destroy(); this.rearFoe.hpBar.destroy();
+      this.retireAmbusher(this.rearFoe.sprite, this.rearFoe.rig);
+      this.rearFoe = null;
+    }
+    this.ambushBrush?.leave(); this.ambushBrush = null;
+    const detour = this.run.roadFork;
+    if (detour?.choice && detour.paidThrough === this.run.killed && this.run.killed > detour.startDepth) {
+      const option = roadOptions(this.run.biome).find(option => option.id === detour.choice)!;
+      this.floatChip(this.hero.x + 28, GROUND_Y - 82, `${option.icon} +${ROAD_FORK_BONUS}`, {
+        size: 24, font: EMOJI_FONT, tint: [0xffedb4, 0xe4c780, 0xd4b477, 0xba965b], stroke: "#1e292b", delay: 180,
+      });
+    }
+    const petRewards = companionKillRewards(this.run.companions, this.run.killed, guardCost(this.run.killed));
+    const finds = petRewards.filter(reward => reward.resource !== "guard").map(reward => {
+      const label = reward.resource === "ore" ? "stone" : reward.resource === "keys" && reward.amount === 1 ? "key" : reward.resource;
+      return `${companionById(reward.id)!.name}: +${reward.amount} ${label}`;
+    });
+    if (finds.length) this.notice(finds.join(" · "), "#ffe0a0");
+    const protection = petRewards.find(reward => reward.resource === "guard");
+    if (protection) {
+      this.floatGuard(this.hero.x, GROUND_Y - 76, protection.amount, 240);
+      if (!finds.length) this.notice(`Moss: +${protection.amount} guard`, "#a9d7c0");
+    }
     const wasBoss = this.orcAnim === this.boss.key;
+    if (wasBoss) this.clearSlimeAdds();
     if (!wasBoss) this.sfx("death", 0.16); // slime death — kept well in the background
     this.orcDying = true;
     this.spursActive = false; // per-foe item effects die with the foe
@@ -3161,13 +3609,72 @@ class GameScene extends Phaser.Scene {
 
   /** Next foe — unless this run's stretch of road is done (the second boss fell). */
   private advanceRoad(walkMs = WALK_IN_MS) {
-    if (this.run.over) return;
+    if (this.run.over || this.forkView || this.rescueView) return;
+    // A rescue checkpoint must contain a settled board, including its rewards.
+    if(this.busy) {this.time.delayedCall(100,()=>this.advanceRoad(walkMs));return;}
     if (this.run.killed >= RUN_COMPLETE_AT) {
       this.showRunComplete();
       return;
     }
+    const supplies = rescueOptions(this.run.resources, this.meta);
+    if (!this.tutorial?.active && rollRescue(this.rescue, this.run.biome, this.run.killed, this.meta.companions, Math.random, supplies.key || supplies.wood)) {
+      this.showRescue(); return;
+    }
+    // Avoid a second choice immediately after rescuing a pet at this depth.
+    const justRescued = this.rescue.encountered && this.rescue.rolledDepth === this.run.killed;
+    if (this.run.biome !== "forest" && !this.tutorial?.active && !this.devJumpBoss && !justRescued &&
+      offerRoadFork(this.run.roadFork ??= newRoadFork(), this.run.killed)) {
+      this.showFork(); return;
+    }
     spawnNext(this.run);
     this.spawnOrc(walkMs);
+  }
+
+  private showFork() {
+    const fork = this.run.roadFork;
+    if (!fork?.pending || this.forkView) return;
+    this.chestActive = true; this.phase = "chest";
+    this.hero.play("hero-idle", true);
+    this.clearSelection(); this.clearHint(); this.down = null; this.attackClock = 0;
+    this.combatReadout?.root.setAttribute("hidden", ""); this.activeEffects?.show(false);
+    this.writeCheckpoint(true);
+    this.forkView = showRoadFork(this.run.biome, choice => {
+      if (!chooseRoad(fork, choice)) return;
+      // Commit the choice before its short departure animation. Reload cannot reselect it.
+      this.writeCheckpoint(true); this.sfx("pickup", .5); buzz(16);
+      this.time.delayedCall(300, () => {
+        this.forkView?.destroy(); this.forkView = null;
+        this.chestActive = false; this.phase = "advance";
+        this.advanceRoad(); this.writeCheckpoint(true); this.refreshHud();
+        const option = roadOptions(this.run.biome).find(option => option.id === choice)!;
+        this.notice(`${option.name} · ${option.note}`, "#ffe0a0");
+      });
+    }, () => this.openMenu());
+  }
+
+  private showRescue() {
+    const id=this.rescue.pending;
+    if(!id || !companionById(id) || this.rescueView)return;
+    this.chestActive=true;this.phase="chest";this.hero.play("hero-idle",true);
+    this.clearSelection();this.clearHint();this.down=null;this.attackClock=0;
+    this.writeCheckpoint(true);
+    const view=showCompanionRescue(id,this.meta.companions.includes(id),
+      () => ({ keys: this.run.resources.keys, wood: this.run.resources.wood + loadMeta().wood }), payment=>{
+      const meta=loadMeta();
+      if(meta.companions.includes(id))return true;
+      if(!payForRescue(payment,this.run.resources,meta))return false;
+      meta.companions.push(id);
+      this.meta.companions=[...meta.companions];this.meta.wood=meta.wood;
+      // Save ownership and spent supplies together, including the suspended run.
+      if(meta.activeRun)meta.activeRun.run.resources={...this.run.resources};
+      saveMeta(meta);
+      this.writeCheckpoint(true);this.sfx("pickup",.55);buzz(25);
+      this.refreshHud();return true;
+    },()=>{
+      this.rescueView=null;this.rescue.pending=null;this.chestActive=false;
+      this.advanceRoad();this.writeCheckpoint(true);
+    });
+    this.rescueView=view;
   }
 
   /** Victory: the second boss is down, the hoard is looted — home to camp. */
@@ -3294,13 +3801,15 @@ class GameScene extends Phaser.Scene {
       });
       el.appendChild(b);
     };
-    mk("☠ MALGRIM", "#ffd280", () => this.debugBossIn("plains"));
-    mk("☠ GORRACH", "#f0b070", () => this.debugBossIn("forest"));
+    mk("☠ SLIME", "#c8e69e", () => this.debugBossIn("forest"));
+    mk("☠ MALGRIM", "#ffd280", () => this.debugBossIn("dungeon"));
+    mk("☠ GORRACH", "#f0b070", () => this.debugBossIn("plains"));
     mk("☠ WARDEN", "#bfe8ff", () => this.debugBossIn("snow"));
     mk("▸ I", "#9fe6a0", () => this.debugArenaStage(0));
     mk("▸ II", "#9fe6a0", () => this.debugArenaStage(1));
     mk("▸ III", "#9fe6a0", () => this.debugArenaStage(2));
-    mk("▸ FINISH", "#ff9d6a", () => this.debugArenaStage(3));
+    mk("▸ IV · 20", "#edcc87", () => { this.run.killed = RUN_COMPLETE_AT - 1; this.debugArenaStage(3); this.refreshHud(); });
+    mk("▸ FINISH", "#ff9d6a", () => this.debugArenaStage(4));
     mk("▣ CHEST", "#ffe08a", () => this.debugChest());
     mk("+9 guard", "#bfe0ff", () => {
       this.run.block += 9; // every stage punishes misses with a real strike — bank guard for a long study session
@@ -3334,7 +3843,7 @@ class GameScene extends Phaser.Scene {
 
   /**
    * DEV: skip to a beat of the CURRENT boss's arena (0/1/2 = his three stages,
-   * 3 = complete the challenge). Rigs the boss first if he isn't up.
+   * 3 = floor-20 finale, 4 = finish). Rigs the boss first if he isn't up.
    */
   public debugArenaStage(n: number) {
     this.restartArenaStage(n);
@@ -3355,10 +3864,19 @@ class GameScene extends Phaser.Scene {
     this.arenaWard = n;
     this.arenaDealIdx = 0;
     this.arenaWardMissed = false;
+    if (n === 3 && this.hasBossFinale()) {
+      this.arenaDealsDone = this.boss.steps;
+      this.startBossFinale(gen);
+      return;
+    }
     if (n >= 3) {
       this.arenaDealsDone = this.boss.steps;
       this.drainBossBar();
-      this.completeBossArena(gen);
+      this.completeBossArena(gen, true);
+      return;
+    }
+    if (this.boss.arena === "slime") {
+      this.slimeStage(gen, { phase: Math.max(0, n) as 0 | 1 | 2, cleared: 0 });
       return;
     }
     if (this.boss.arena === "goring") {
@@ -3385,7 +3903,7 @@ class GameScene extends Phaser.Scene {
 
   /** Dev: rig the next foe to be the boss (console: __mb.debugBoss()). */
   public debugBoss() {
-    this.run.killed = BOSS_EVERY - 1;
+    this.run.killed = this.run.killed >= RUN_COMPLETE_AT - 1 ? RUN_COMPLETE_AT - 1 : BOSS_EVERY - 1;
     this.sinceChest = -999; // skip the chest interlude for this test
     if (this.orc && !this.orcDying) {
       this.run.enemy = null;
@@ -3446,7 +3964,7 @@ class GameScene extends Phaser.Scene {
     this.hero.play("hero-idle", true);
     const banner =
       this.boss.arena === "shells" ? "BOSS CHALLENGE" : this.boss.arena === "goring" ? "THE GORING RUN" : "THE THREE RIMES";
-    this.notice(banner, this.boss.accent);
+    if (this.boss.arena !== "slime") this.notice(banner, this.boss.accent);
     this.layout();
 
     if (this.boss.arena === "shells" && this.orc) {
@@ -3460,6 +3978,12 @@ class GameScene extends Phaser.Scene {
       await this.hideBoard();
       await this.arenaWait(420);
       if (gen !== this.arenaGen || this.run.over) return;
+      if (this.boss.arena === "slime") {
+        const progress = this.slimeProgress ?? restoreSlimeProgress();
+        this.recovered = null;
+        this.slimeStage(gen, progress);
+        return;
+      }
       if (this.recovered && this.recovered.arenaWard > 0) {
         const ward = this.recovered.arenaWard; this.recovered = null;
         this.restartArenaStage(ward);
@@ -3468,6 +3992,87 @@ class GameScene extends Phaser.Scene {
       else if (this.boss.arena === "rimes") this.rimesIntro(gen);
       else this.malgrimIntro(gen);
     })();
+  }
+
+  private clearSlimeAdds() {
+    for (const slime of this.slimeAdds) { this.tweens.killTweensOf(slime); slime.destroy(); }
+    this.slimeAdds = [];
+  }
+
+  /** The upper lane mirrors the physical split; the normal boss actor owns the kill. */
+  private splitSlimeLane(progress: SlimeProgress) {
+    if (!this.orc) return;
+    const parentX = [this.orc.x, ...this.slimeAdds.map(s => s.x)];
+    this.clearSlimeAdds();
+    const { phase, cleared } = progress, size = SLIME_SCALES[phase];
+    const count = phase === 2 ? Math.max(1, 4 - cleared) : 2 ** phase;
+    this.orcGap = SLIME_GAPS[phase];
+    this.tweens.killTweensOf(this.orc);
+    this.orc.play("slimeboss-idle").clearTint();
+    this.tweens.add({ targets: this.orc, scaleX: size, scaleY: size, duration: 380, ease: "Back.easeOut" });
+    for (let i = 1; i < count; i++) {
+      const x = parentX[Math.min(parentX.length - 1, Math.floor(i / 2))];
+      const slime = this.inBox(this.add.sprite(x, GROUND_Y, "slime-idle").setOrigin(.52, .625)
+        .setScale(size * .6, size * 1.15).play("slimeboss-idle"));
+      this.slimeAdds.push(slime);
+      this.tweens.add({ targets: slime, scaleX: size, scaleY: size, duration: 450, ease: "Back.easeOut" });
+    }
+    if (phase > 0) {
+      const goo = this.aReg(this.inBox(this.add.particles(this.orc.x, GROUND_Y - 22, "spark", {
+        speedX: { min: -90, max: 150 }, speedY: { min: -90, max: -25 }, gravityY: 210,
+        lifespan: 600, scale: { start: .85, end: 0 }, tint: [0x9dce80, 0xcbe69d], emitting: false,
+      }).setDepth(29)));
+      goo.explode(16);
+      this.aTimer(this.time.delayedCall(700, () => goo.destroy()));
+    }
+  }
+
+  /** Moss Slime: dodge a slam, sever its stretched goo, then slash through the rushing swarm. */
+  private slimeStage(gen: number, progress: SlimeProgress) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    this.clearArenaObjs();
+    this.slimeProgress = { ...progress };
+    this.arenaWard = progress.phase;
+    this.arenaWardMissed = false;
+    this.arenaDealsDone = slimeBeats(progress);
+    this.splitSlimeLane(progress);
+    this.drainBossBar();
+    const arena = createSlimeBossArena({
+      scene: this, rect: this.arenaRect(), progress, final: this.run.killed + 1 >= RUN_COMPLETE_AT,
+      alive: () => gen === this.arenaGen && !this.run.over && this.arenaActive,
+      sound: key => this.sfx(key, .4),
+      hurt: () => {
+        if (this.bellForgives()) return;
+        this.arenaWardMissed = true; this.bossSwing(); this.arenaStrikeHero();
+        this.slimeAdds.forEach(s => s.play("slimeboss-attack").once("animationcomplete", () => {
+          if (s.active) s.play("slimeboss-idle");
+        }));
+        this.writeCheckpoint(true);
+      },
+      hit: cleared => {
+        this.slimeProgress = { phase: progress.phase, cleared };
+        this.arenaDealsDone = slimeBeats(this.slimeProgress);
+        this.drainBossBar(); this.bossReact(); this.playCombo(["hero-attack2"], "hero-idle");
+        if (progress.phase === 2) {
+          const caught = this.slimeAdds.pop();
+          if (caught) {
+            caught.play("slimeboss-death");
+            this.tweens.add({ targets: caught, alpha: 0, duration: 400, onComplete: () => caught.destroy() });
+          }
+        }
+        this.refreshHud(); this.writeCheckpoint(true);
+      },
+      cleared: () => {
+        if (!this.arenaWardMissed) {
+          this.run.block++; this.floatGuard(this.hero.x + 24, GROUND_Y - 90, 1); this.refreshHud();
+        }
+        this.sfx(`combo${3 + progress.phase}`, .45);
+        if (progress.phase === 2) this.completeBossArena(gen, true);
+        else this.slimeStage(gen, { phase: (progress.phase + 1) as 1 | 2, cleared: 0 });
+      },
+    });
+    this.aReg(this.inBox(arena, true));
+    this.writeCheckpoint(true);
   }
 
   /**
@@ -3493,11 +4098,19 @@ class GameScene extends Phaser.Scene {
     this.arenaWard++;
     this.arenaDealIdx = 0;
     this.arenaWardMissed = false;
+    if (this.boss.arena === "goring" && this.arenaWard < 3) {
+      this.gorrachSurface(msg, "", `${this.arenaWard} / 3`);
+      const R = this.arenaRect();
+      const emblem = this.aReg(this.inBox(this.add.image(R.cx, R.cy, gorrachToken(this, "gold")).setDisplaySize(130, 130), true));
+      this.tweens.add({ targets: emblem, angle: 12, duration: 250, yoyo: true, ease: "Sine.easeInOut" });
+    }
     if(this.boss.arena === "shells" && this.arenaWard < 3) {
       this.malgrimSurface("Defence broken","Get ready for the next attack.",`${Math.min(this.arenaWard,3)} / 3`);
       const R=this.arenaRect();
       this.aReg(this.inBox(this.add.text(R.cx,R.cy,"DEFENCE BROKEN",{fontFamily:"system-ui, sans-serif",fontSize:"32px",fontStyle:"bold",color:"#ffe0a3"}).setOrigin(.5).setDepth(52)));
     }
+    if (this.boss.arena === "rimes" && this.arenaWard < 3)
+      this.frostSurface("Ice broken", "", `${this.arenaWard} / 3`);
     if (taunt)
       this.time.delayedCall(950, () => {
         if (gen === this.arenaGen && this.arenaActive) this.notice(taunt, this.boss.accent);
@@ -3511,6 +4124,8 @@ class GameScene extends Phaser.Scene {
   /** Title card for a stage: name, then the rules, then the game starts. */
   private arenaStageIntro(gen: number, title: string, sub: string, start: () => void) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    // Gorrach teaches through his wind-up and arena cues, without a rules card.
+    if (this.boss.arena === "goring" || this.boss.arena === "rimes") { start(); return; }
     if(this.boss.arena === "shells") {
       this.clearArenaObjs();
       const names=["Find the openings","Break the falling spells","Return his fire"];
@@ -3548,6 +4163,14 @@ class GameScene extends Phaser.Scene {
   private bossSwing() {
     if (!this.orc || this.orcDying) return;
     const k = this.boss.key;
+    if (this.boss.arena === "goring") {
+      const dust = this.aReg(this.inBox(this.add.particles(this.orc.x, GROUND_Y - 3, "spark", {
+        speedX: { min: -85, max: 65 }, speedY: { min: -45, max: -12 }, gravityY: 100,
+        lifespan: 430, scale: { start: .65, end: 0 }, tint: [0xc09a64, 0xe2c393], emitting: false,
+      }).setDepth(29), false));
+      dust.explode(9);
+      this.aTimer(this.time.delayedCall(500, () => dust.destroy()));
+    }
     this.orc.play(`${k}-attack`).once("animationcomplete", () => {
       if (this.orc && this.orcAnim === k && !this.orcDying) this.orc.play(`${k}-idle`);
     });
@@ -3559,48 +4182,60 @@ class GameScene extends Phaser.Scene {
   }
 
   private malgrimSurface(title: string, instruction: string, progress: string) {
-    const art=malgrimArena(this,this.arenaRect(),Math.min(3,this.arenaWard+1),title,instruction,progress);
+    const art=malgrimArena(this,this.arenaRect(),Math.min(3,this.arenaWard+1),title,instruction,progress,this.run.biome === "forest");
     this.aReg(this.inBox(art.root));
     return art.tally;
   }
 
+  private frostSurface(title: string, cue: string, progress: string) {
+    const art = bossArenaArt(this, this.arenaRect(), "snow", title, cue, progress);
+    this.aReg(this.inBox(art.root, true));
+    return art.tally;
+  }
+
+  private gorrachSurface(title: string, subtitle: string, progress: string) {
+    const art = gorrachArena(this, this.arenaRect(), Math.min(3, this.arenaWard + 1), title, subtitle, progress);
+    this.aReg(this.inBox(art.root, true));
+    return art.tally;
+  }
+
+  private gorrachImpact(x: number, y: number, color: number) {
+    for (let i = 0; i < 8; i++) {
+      const angle = i * Math.PI / 4;
+      const chip = this.aReg(this.inBox(this.add.rectangle(x, y, 8, 4, color).setDepth(51), true));
+      this.tweens.add({ targets: chip, x: x + Math.cos(angle) * 65, y: y + Math.sin(angle) * 42,
+        alpha: 0, angle: i * 37, duration: 300, ease: "Quad.easeOut", onComplete: () => chip.destroy() });
+    }
+  }
+
+  /** Close enough to read as a duel, with feet grounded on one shared ledge. */
+  private gorrachDuel() {
+    const R = this.arenaRect(), y = R.y + Math.min(220, R.h * .43);
+    const floor = this.aReg(this.inBox(this.add.graphics().setDepth(41)));
+    floor.fillStyle(0x171d15, .65).fillEllipse(R.cx, y + 10, R.w * .64, 30);
+    floor.lineStyle(3, 0x908353, .6).lineBetween(R.cx - R.w * .28, y + 9, R.cx + R.w * .28, y + 9);
+    const bull = this.aReg(this.inBox(this.add.sprite(R.cx + 95, y, "mino-idle")
+      .setOrigin(.5, .9).setScale(.92).setFlipX(this.boss.faceLeft).setDepth(45).play("mino-idle")));
+    const you = this.aReg(this.inBox(this.add.sprite(R.cx - 105, y, PLAYER_TEXTURE)
+      .setOrigin(.5, HERO_ORIGIN).setScale(2.8 / PLAYER_DENSITY).setDepth(45).play("hero-idle")));
+    return { bull, you };
+  }
+
+  private gorrachPlate(x: number, y: number, r: number, kind: "gold" | "red" | "blue" | "hidden") {
+    const root = this.add.container(x, y).setDepth(44);
+    root.add(this.add.image(0, 0, gorrachToken(this, kind)).setDisplaySize(r * 2.35, r * 2.35));
+    return this.aReg(this.inBox(root, true));
+  }
+
   private spellToken(x:number,y:number,r:number,kind:"gold"|"red"|"blue") {
     const root=this.add.container(x,y).setDepth(44);
-    root.add(this.add.image(0,0,malgrimToken(this,kind)).setDisplaySize(r*2.5,r*2.5));
+    root.add(this.add.image(0,0,this.boss.arena === "rimes" ? frostCrystal(this,kind) : malgrimToken(this,kind)).setDisplaySize(r*2.5,r*2.5));
     return this.aReg(this.inBox(root));
   }
 
   // ---- the grammar's shared parts -------------------------------------------
   // Everything below is boss-agnostic on purpose: the wardens differ in theme
   // and staging, never in vocabulary. See the G_* colours up top.
-
-  /** The key, parked in a corner of the pit. Same three chips in every fight. */
-  private grammarLegend() {
-    const R = this.arenaRect();
-    const chips: [number, string, string][] = [
-      [G_GOLD, "●", "TAP"],
-      [G_BLUE, "╱", "CUT"],
-      [G_RED, "✖", "AVOID"],
-    ];
-    chips.forEach(([colour, glyph, word], i) => {
-      const x = R.x + 18 + i * 104;
-      const y = R.y + R.h - 20;
-      this.aReg(this.inBox(this.add.rectangle(x + 42, y, 96, 26, 0x0a0b0f, 0.75).setDepth(52)));
-      this.aReg(
-        this.inBox(
-          this.add
-            .text(x + 42, y, `${glyph} ${word}`, {
-              fontFamily: EMOJI_FONT,
-              fontStyle: "bold",
-              fontSize: "14px",
-              color: `#${colour.toString(16).padStart(6, "0")}`,
-            })
-            .setOrigin(0.5)
-            .setDepth(53),
-        ),
-      );
-    });
-  }
 
   /** Swung before the blow was there to meet: no damage, but you are committed. */
   private earlySwing(x: number, y: number) {
@@ -3718,9 +4353,7 @@ class GameScene extends Phaser.Scene {
    * time it out, or kill it. `onTap` fires at most once.
    */
   private goldNode(x: number, y: number, r: number, onTap: () => void, gate?: () => boolean) {
-    const g = this.boss.arena === "shells" ? this.spellToken(x,y,r,"gold").setInteractive(new Phaser.Geom.Circle(0,0,r),Phaser.Geom.Circle.Contains) : this.aReg(
-      this.inBox(this.add.circle(x, y, r, G_GOLD, 0.9).setStrokeStyle(4, G_GOLD_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
-    );
+    const g = (this.boss.arena === "goring" ? this.gorrachPlate(x,y,r,"gold") : this.spellToken(x,y,r,"gold")).setInteractive(new Phaser.Geom.Circle(0,0,r),Phaser.Geom.Circle.Contains);
     let spent = false;
     g.on("pointerdown", () => {
       if (spent) return;
@@ -3743,9 +4376,7 @@ class GameScene extends Phaser.Scene {
    * rewards, it only ever costs, and it looks nothing like gold.
    */
   private redNode(x: number, y: number, r: number, onTouched: () => void) {
-    const g = this.boss.arena === "shells" ? this.spellToken(x,y,r,"red").setInteractive(new Phaser.Geom.Circle(0,0,r),Phaser.Geom.Circle.Contains) : this.aReg(
-      this.inBox(this.add.circle(x, y, r, G_RED, 0.85).setStrokeStyle(4, G_RED_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
-    );
+    const g = (this.boss.arena === "goring" ? this.gorrachPlate(x,y,r,"red") : this.spellToken(x,y,r,"red")).setInteractive(new Phaser.Geom.Circle(0,0,r),Phaser.Geom.Circle.Contains);
     let spent = false;
     g.on("pointerdown", () => {
       if (spent) return;
@@ -3803,7 +4434,7 @@ class GameScene extends Phaser.Scene {
    * blue exists as a separate colour.
    */
   private swipeNode(x: number, y: number, r: number, dir: SwipeDir, onHit: () => void, onWrong?: () => void, gate?: () => boolean) {
-    const ring = this.boss.arena === "shells" ? this.spellToken(x,y,r,"blue") : this.aReg(this.inBox(this.add.circle(x, y, r, G_BLUE, 0.85).setStrokeStyle(4, G_BLUE_EDGE, 1).setDepth(44)));
+    const ring = this.boss.arena === "goring" ? this.gorrachPlate(x,y,r,"blue") : this.spellToken(x,y,r,"blue");
     const arrow = this.aReg(
       this.inBox(
         this.add
@@ -3935,7 +4566,7 @@ class GameScene extends Phaser.Scene {
     this.tweens.killTweensOf(this.bossBar.fill);
     this.tweens.add({
       targets: this.bossBar.fill,
-      scaleX: Math.max(0, 1 - this.arenaDealsDone / this.boss.steps),
+      scaleX: Math.max(0, 1 - this.arenaDealsDone / (this.boss.steps + (this.hasBossFinale() ? 3 : 0))),
       duration: 260,
       ease: "Quad.easeOut",
     });
@@ -4486,9 +5117,42 @@ class GameScene extends Phaser.Scene {
     throwShot();
   }
 
-  /** Clearing the third stage defeats the boss; no extra strike or tap. */
-  private completeBossArena(gen: number) {
+  private hasBossFinale() {
+    return (this.boss.arena === "shells" || this.boss.arena === "rimes") && this.run.killed + 1 >= RUN_COMPLETE_AT;
+  }
+
+  private startBossFinale(gen: number) {
+    if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
+    const kind = this.boss.arena;
+    if (kind === "goring" || kind === "slime") { this.completeBossArena(gen, true); return; }
+    this.clearArenaObjs();
+    this.arenaWard = 3;
+    this.arenaDealsDone = this.boss.steps;
+    this.bossHold = false;
+    this.orc?.setAlpha(1).play(`${this.boss.key}-idle`);
+    this.drainBossBar();
+    let progress = 0;
+    const finale = createBossFinale({
+      scene: this, rect: this.arenaRect(), kind, theme: this.run.biome as BossTheme,
+      bossKey: this.boss.key, bossOrigin: this.boss.origin, flip: this.boss.faceLeft,
+      alive: () => gen === this.arenaGen && !this.run.over && this.arenaActive,
+      hurt: () => { this.arenaWardMissed = true; this.bossSwing(); this.arenaStrikeHero(); },
+      hit: (fraction) => {
+        if (fraction <= progress) return;
+        progress = fraction; this.arenaDealsDone = this.boss.steps + 3 * fraction;
+        this.drainBossBar(); this.bossReact(); this.playCombo(["hero-attack2"], "hero-idle");
+      },
+      sound: (key) => this.sfx(key, .4),
+      win: () => this.completeBossArena(gen, true),
+    });
+    this.aReg(this.inBox(finale, true));
+    this.writeCheckpoint(true);
+  }
+
+  /** Gorrach and the slime end after three stages; wizard/ice add a floor-20 finale. */
+  private completeBossArena(gen: number, finaleCleared = false) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive || !this.orc || this.orcDying || this.run.enemy?.kind !== "boss") return;
+    if (this.hasBossFinale() && !finaleCleared) { this.startBossFinale(gen); return; }
     // Retire stage callbacks before awarding the kill, so it can only pay once.
     this.arenaGen++;
     this.clearArenaObjs();
@@ -4504,162 +5168,141 @@ class GameScene extends Phaser.Scene {
     this.showBoard();
   }
 
-  // ================= GORRACH'S GORING RUN (forest boss arena) =================
-  // The bull-warden of the wood never trades blows on the board. The board
+  // ================= GORRACH'S GORING RUN (plains boss arena) =================
+  // The plains warden never trades blows on the board. The board
   // retracts and he takes the pit it leaves behind for three horns, each its
   // own game: a dodge, a memory, and a shoving match.
-
-  /** Small caption anchored to a corner of the arena pit (round counters etc). */
-  private arenaLabel(x: number, y: number, text: string, colour = "#ffd7a0", size = 18) {
-    return this.aReg(
-      this.inBox(
-        this.add
-          .text(x, y, text, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: `${this.worldFont(size, 15)}px`, color: colour, stroke: "#0a0b0f", strokeThickness: 3,
-            wordWrap: { width: Math.max(130, GRID_X + this.boardWidth - x - 12) } })
-          .setDepth(50),
-      ),
-    );
-  }
 
   private goringIntro(gen: number) {
     const c = BOSS_STAGES.gorrach[0];
     this.arenaStageIntro(gen, c.title, c.sub, () => this.goringCharge(gen, 0));
   }
 
-  /** HORN I: three trampled paths, one (or two) lit, and a ton of bull down it. */
+  /** Three readable charges: choose a path, dodge, then punish the opening. */
   private goringCharge(gen: number, idx: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     this.clearArenaObjs();
-    const R = this.arenaRect();
-    const cfg = GORE_CHARGES[idx];
-    const laneH = R.h / GORE_LANES;
-    const laneY = (i: number) => R.y + laneH * (i + 0.5);
-    let heroLane = 1;
-    let settled = false;
+    const R = this.arenaRect(), cfg = GORE_CHARGES[idx];
+    this.gorrachSurface("Dodge the charge", "Tap a clear path", `${idx + 1} / ${GORE_CHARGES.length}`);
+    const laneTop = R.y + 108, laneH = (R.h - 160) / GORE_LANES;
+    const laneY = (i: number) => laneTop + laneH * (i + .72);
+    const heroX = R.x + R.w * .23, bullX = R.x + R.w - 108;
+    const heroScale = Math.min(2.6, laneH / 42) / PLAYER_DENSITY;
+    const bullScale = Math.min(.85, laneH / 130);
+    let heroLane = 1, settled = false;
+    this.bossHold = false;
+    this.orc?.setAlpha(1).play("mino-idle");
 
-    // he quits the lane above — down here the charge IS him
-    this.bossHold = true;
-    if (this.orc) this.tweens.add({ targets: this.orc, alpha: 0.1, duration: 300 });
-
-    const lanes = [];
+    const dressing = this.aReg(this.inBox(this.add.graphics().setDepth(41)));
+    const lanes: Phaser.GameObjects.Rectangle[] = [];
+    const warnings: Phaser.GameObjects.Graphics[] = [];
     for (let i = 0; i < GORE_LANES; i++) {
-      const r = this.aReg(
-        this.inBox(
-          this.add
-            .rectangle(R.cx, laneY(i), R.w - 16, laneH - 14, 0x2b2013, 0.62)
-            .setStrokeStyle(3, 0x715432, 0.9)
-            .setDepth(40)
-            .setInteractive({ useHandCursor: true }),
-        ),
-      );
-      lanes.push(r);
+      const top = laneTop + i * laneH;
+      dressing.fillStyle(0x655437, .55).fillRoundedRect(R.x + 24, top + 5, R.w - 48, laneH - 10, 12);
+      dressing.lineStyle(2, 0xae9260, .23).lineBetween(R.x + 36, top + 9, R.x + R.w - 36, top + 9);
+      for (let j = 0; j < 25; j++) {
+        const x = R.x + 38 + j * (R.w - 86) / 25;
+        dressing.fillStyle(j % 3 ? 0x302e20 : 0xb39866, .24);
+        dressing.fillRect(x, top + laneH * .76 + (j % 3) * 3, 8 + j % 7, 3);
+      }
+      lanes.push(this.aReg(this.inBox(this.add.rectangle(R.cx, top + laneH / 2, R.w - 48, laneH - 10, 0xe9c47c, .001)
+        .setDepth(42).setInteractive({ useHandCursor: true }))));
+      const warning = this.aReg(this.inBox(this.add.graphics().setDepth(43).setAlpha(0)));
+      warning.fillStyle(0xad382d, .33).fillRoundedRect(R.x + 26, top + 6, R.w - 52, laneH - 12, 10);
+      warning.lineStyle(3, 0xffb078, .9).lineBetween(R.x + 36, top + laneH - 10, R.x + R.w - 36, top + laneH - 10);
+      for (let x = R.x + 65; x < R.x + R.w - 45; x += 63) {
+        const y = top + laneH * .46;
+        warning.lineStyle(5, 0xffb078, .7).strokePoints([{ x: x + 12, y: y - 12 }, { x, y }, { x: x + 12, y: y + 12 }]);
+      }
+      warnings.push(warning);
     }
-    const tok = this.aReg(
-      this.inBox(this.add.sprite(R.x + 96, laneY(heroLane), PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.3 / PLAYER_DENSITY).setDepth(45).play("hero-idle")),
-    );
-    const leap = (i: number) => {
-      if (i === heroLane) return;
+    const selected = this.aReg(this.inBox(this.add.rectangle(R.x + 29, laneY(heroLane) - laneH * .22, 5, laneH - 24, 0xe9d19b).setDepth(44)));
+    const shadow = this.aReg(this.inBox(this.add.ellipse(heroX, laneY(heroLane) + 3, 65, 15, 0x11180e, .45).setDepth(44)));
+    const tok = this.aReg(this.inBox(this.add.sprite(heroX, laneY(heroLane), PLAYER_TEXTURE)
+      .setOrigin(.5, HERO_ORIGIN).setScale(heroScale).setDepth(45).play("hero-idle")));
+    const live = () => gen === this.arenaGen && !this.run.over && this.arenaActive && !!tok.scene;
+    lanes.forEach((lane, i) => lane.on("pointerdown", () => {
+      if (!live() || settled || i === heroLane) return;
       heroLane = i;
-      this.tweens.killTweensOf(tok);
-      this.sfx(this.pick(["step1", "step3"]), 0.35, 1.15);
-      this.tweens.add({ targets: tok, y: laneY(i), duration: 130, ease: "Quad.easeOut" });
-      this.tweens.add({ targets: tok, scaleY: 2.0, duration: 90, yoyo: true });
-    };
-    lanes.forEach((r, i) => r.on("pointerdown", () => leap(i)));
-    this.grammarLegend();
-    this.arenaLabel(R.x + 14, R.y + 12, `CHARGE ${idx + 1} / ${GORE_CHARGES.length}`);
-    this.arenaLabel(R.x + R.w - 220, R.y + 12, "tap a path to leap clear", "#9aa0ab", 14);
+      this.tweens.killTweensOf(tok); this.tweens.killTweensOf(shadow);
+      tok.play("hero-walk", true);
+      selected.y = laneY(i) - laneH * .22;
+      this.sfx("step3", .35, 1.15);
+      this.tweens.add({ targets: shadow, y: laneY(i) + 3, duration: 140, ease: "Sine.easeOut" });
+      this.tweens.add({ targets: tok, y: laneY(i), duration: 140, ease: "Sine.easeOut", onComplete: () => tok.play("hero-idle", true) });
+    }));
 
     void (async () => {
-      await this.arenaWait(520);
-      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-
-      // the paw: he scrapes the ground and the lit paths bloom red
-      this.sfx("step5", 0.5, 0.7);
-      this.sfx(this.pick(["squish1", "squish2"]), 0.25, 0.6);
+      await this.arenaWait(420);
+      if (!live()) return;
       const lit = Phaser.Utils.Array.Shuffle([0, 1, 2]).slice(0, cfg.blind);
-      for (const i of lit) {
-        lanes[i].setFillStyle(G_RED, 0.42).setStrokeStyle(4, G_RED_EDGE, 1); // RED = do not be here
-        this.tweens.add({ targets: lanes[i], alpha: 0.55, duration: 180, yoyo: true, repeat: -1 });
-      }
-      // the tell bar: when it fills, he comes
-      const tw = 300;
-      this.aReg(this.inBox(this.add.rectangle(R.cx, R.y + 6, tw + 6, 14, 0x0a0b0f, 0.85).setDepth(48)));
-      const fill = this.aReg(this.inBox(this.add.rectangle(R.cx - tw / 2, R.y + 6, tw, 9, G_RED).setOrigin(0, 0.5).setScale(0, 1).setDepth(49)));
-      this.tweens.add({ targets: fill, scaleX: 1, duration: cfg.tell, ease: "Linear" });
-      await this.arenaWait(cfg.tell);
-      if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-
-      // ...and only one of the lit paths is the true one
       const runLane = lit[(Math.random() * lit.length) | 0];
-      for (const i of lit)
-        if (i !== runLane) {
-          this.tweens.killTweensOf(lanes[i]);
-          lanes[i].setAlpha(1).setFillStyle(0x2b2013, 0.62).setStrokeStyle(3, 0x715432, 0.9);
-        }
-      const fromX = R.x + R.w + 130;
-      const toX = R.x - 190;
-      const bull = this.aReg(
-        this.inBox(this.add.sprite(fromX, laneY(runLane) + 30, "mino-idle").setOrigin(0.5, 0.9).setScale(0.66).setFlipX(this.boss.faceLeft).setDepth(46).play("mino-walk")),
-      );
-      const dust = this.aReg(
-        this.inBox(
-          this.add
-            .particles(0, 0, "spark", {
-              speed: { min: 40, max: 160 }, angle: { min: 200, max: 340 }, lifespan: { min: 200, max: 460 },
-              scale: { start: 0.9, end: 0 }, tint: 0xb08a5a, quantity: 2, frequency: 30,
-            })
-            .setDepth(45)
-            .startFollow(bull, 30, 24),
-        ),
-      );
-      this.sfx("swing3", 0.5, 0.6);
-      this.cameras.main.shake(cfg.run, 0.004);
-      const impactMs = cfg.run * ((fromX - tok.x) / (fromX - toX));
-      this.tweens.add({ targets: bull, x: toX, duration: cfg.run, ease: "Linear", onComplete: () => dust.stop() });
-
+      const bull = this.aReg(this.inBox(this.add.sprite(bullX, laneY(runLane), "mino-idle")
+        .setOrigin(.5, .9).setScale(bullScale).setFlipX(this.boss.faceLeft).setDepth(46).play("mino-walk")));
+      const hoofShadow = this.aReg(this.inBox(this.add.ellipse(bullX, laneY(runLane) + 4, 94, 20, 0x11180e, .45).setDepth(44)));
+      bull.setAlpha(0);
+      this.tweens.add({ targets: bull, alpha: 1, duration: 140 });
+      this.sfx("step5", .5, .7);
+      for (const i of lit) {
+        warnings[i].setAlpha(.7);
+        this.tweens.add({ targets: warnings[i], alpha: 1, duration: 170, yoyo: true, repeat: -1 });
+      }
+      // A planted silhouette, dust and backward lean sell the wind-up.
+      this.tweens.add({ targets: bull, x: bullX + 12, duration: cfg.tell, ease: "Quad.easeIn" });
+      const dust = this.aReg(this.inBox(this.add.particles(0, 0, "spark", {
+        speed: { min: 25, max: 90 }, angle: { min: 210, max: 320 }, lifespan: { min: 180, max: 360 },
+        scale: { start: .6, end: 0 }, tint: [0xb89561, 0xe0c18a], quantity: 1, frequency: 65,
+      }).setDepth(45).startFollow(bull, 22, 0), true));
+      await this.arenaWait(cfg.tell);
+      if (!live()) return;
+      for (const i of lit) {
+        this.tweens.killTweensOf(warnings[i]);
+        warnings[i].setAlpha(i === runLane ? 1 : 0);
+      }
+      this.bossSwing();
+      this.sfx("swing3", .5, .6);
+      const fromX = bull.x, toX = R.x + 76;
+      // Match the quadratic movement curve: a hit occurs when his body arrives.
+      const impactMs = cfg.run * Math.sqrt((fromX - heroX) / (fromX - toX));
+      this.tweens.add({ targets: [bull, hoofShadow], x: toX, duration: cfg.run, ease: "Quad.easeIn", onComplete: () => {
+        dust.stop();
+        this.tweens.add({ targets: [bull, hoofShadow], alpha: 0, duration: 180 });
+      } });
       await this.arenaWait(impactMs);
-      if (gen !== this.arenaGen || this.run.over || !this.arenaActive || settled) return;
+      if (!live() || settled) return;
       settled = true;
       if (heroLane === runLane) {
-        // gored — the horn goes in and the same charge comes round again
         this.arenaWardMissed = true;
-        tok.setTintFill(0xff5a3a);
-        this.tweens.add({ targets: tok, x: tok.x - 70, angle: -70, alpha: 0.2, duration: 320, ease: "Quad.easeOut" });
-        this.sfx("hit1", 0.6);
-        this.notice("gored", "#ff8a6a");
+        tok.setTintFill(0xff8060);
+        this.tweens.add({ targets: tok, x: tok.x - 36, angle: -25, alpha: .4, duration: 250, ease: "Quad.easeOut" });
+        this.notice("Caught by the charge", "#ffae88");
         this.arenaStrikeHero();
-        this.time.delayedCall(1100, () => this.goringCharge(gen, idx));
-      } else {
-        this.sfx("swing1", 0.35, 1.3);
-        this.floatChip(tok.x + 40, tok.y - 70, "CLEAR!", { size: 22, tint: [0xd8ffd0, 0xa9e6a9, 0x5aa85a, 0x2f6b2f] });
-        this.arenaDealsDone++;
-        this.drainBossBar();
-        // ...and his flank is open for a beat: a GOLD gore-point to punish
-        const gx = Phaser.Math.Clamp(bull.x + 90, R.x + 70, R.x + R.w - 70);
-        const punish = this.goldNode(gx, laneY(runLane), 40, () => {
-          this.playCombo(["hero-attack2"], "hero-idle");
-          this.bossReact();
-          this.floatChip(gx, laneY(runLane) - 60, "STRUCK!", { size: 20 });
-          this.run.block += 1; // a clean punish buys back a guard charge
-          this.refreshHud();
-        });
-        this.time.delayedCall(700, () => {
-          if (!punish.scene) return; // already taken
-          this.tweens.add({ targets: punish, alpha: 0, duration: 200, onComplete: () => punish.destroy() });
-        });
-        this.time.delayedCall(1000, () => {
-          if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
-          if (idx + 1 >= GORE_CHARGES.length) {
-            const c = BOSS_STAGES.gorrach[1];
-            this.arenaStageClear(gen, "A HORN CRACKS", BOSS_STAGES.gorrach[0].taunt, () =>
-              this.arenaStageIntro(gen, c.title, c.sub, () => this.goringParry(gen, 0)),
-            );
-          } else this.goringCharge(gen, idx + 1);
-        });
+        this.aTimer(this.time.delayedCall(1050, () => this.goringCharge(gen, idx)));
+        return;
       }
+      this.sfx("swing1", .3, 1.3);
+      selected.setFillStyle(0xafd298);
+      this.arenaDealsDone++;
+      this.drainBossBar();
+      this.gorrachImpact(tok.x, tok.y - 30, 0xbdd99c);
+      const gx = R.cx + R.w * .1;
+      this.goldNode(gx, laneY(runLane) - 22, 40, () => {
+        if (!live()) return;
+        this.playCombo(["hero-attack2"], "hero-idle");
+        tok.play("hero-attack2").once("animationcomplete", () => tok.scene && tok.play("hero-idle"));
+        this.bossReact();
+        this.gorrachImpact(gx, laneY(runLane) - 22, 0xffd88c);
+        this.run.block++;
+        this.refreshHud();
+      });
+      this.aTimer(this.time.delayedCall(950, () => {
+        if (!live()) return;
+        if (idx + 1 < GORE_CHARGES.length) this.goringCharge(gen, idx + 1);
+        else this.arenaStageClear(gen, "CHARGE BROKEN", "", () => this.goringParry(gen, 0), 800);
+      }));
     })();
   }
+
 
   /**
    * STAGE 2 · COUNTER (a real parry: read it late, commit on the beat)
@@ -4681,7 +5324,6 @@ class GameScene extends Phaser.Scene {
   private goringParry(gen: number, round: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     this.clearArenaObjs();
-    this.grammarLegend();
     const R = this.arenaRect();
     const cfg = PARRY_ROUNDS[round];
     let parried = 0;
@@ -4690,19 +5332,8 @@ class GameScene extends Phaser.Scene {
     this.bossHold = false;
     if (this.orc) this.tweens.add({ targets: this.orc, alpha: 1, duration: 300 });
 
-    this.arenaLabel(R.x + 14, R.y + 12, `TURN HIS AXE  ${round + 1} / ${PARRY_ROUNDS.length}`, "#ffd7a0", 17);
-    const tally = this.arenaLabel(R.x + R.w - 190, R.y + 12, `0 / ${cfg.need}`, "#ffd24a", 18);
-    this.arenaLabel(R.x + 14, R.y + 40, "strike as the ring closes — not before", "#9aa0ab", 14);
-
-    const strainY = R.y + R.h * 0.3;
-    const bull = this.aReg(
-      this.inBox(
-        this.add.sprite(R.cx + 200, strainY, "mino-idle").setOrigin(0.5, 0.9).setScale(0.78).setFlipX(this.boss.faceLeft).setDepth(45).play("mino-idle"),
-      ),
-    );
-    const you = this.aReg(
-      this.inBox(this.add.sprite(R.cx - 200, strainY, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.5 / PLAYER_DENSITY).setDepth(45).play("hero-idle")),
-    );
+    const tally = this.gorrachSurface("Turn his axe", "Gold: tap · Blue: swipe · Red: wait", `0 / ${cfg.need}`);
+    const { bull, you } = this.gorrachDuel();
 
     const finish = () => {
       done = true;
@@ -4711,10 +5342,7 @@ class GameScene extends Phaser.Scene {
       this.time.delayedCall(500, () => {
         if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
         if (round + 1 >= PARRY_ROUNDS.length) {
-          const c = BOSS_STAGES.gorrach[2];
-          this.arenaStageClear(gen, "TWO HORNS DOWN", BOSS_STAGES.gorrach[1].taunt, () =>
-            this.arenaStageIntro(gen, c.title, c.sub, () => this.goringHorns(gen)),
-          );
+          this.arenaStageClear(gen, "GUARD BROKEN", "", () => this.goringHorns(gen), 800);
         } else {
           this.notice("again, faster", "#8ff4ff");
           this.goringParry(gen, round + 1);
@@ -4731,8 +5359,10 @@ class GameScene extends Phaser.Scene {
       buzz(22);
       this.cameras.main.shake(150, 0.005);
       this.bossReact();
+      you.play("hero-attack2").once("animationcomplete", () => you.scene && you.play("hero-idle"));
+      this.gorrachImpact(R.cx, you.y - 45, 0xffdca0);
       this.tweens.add({ targets: bull, x: bull.x + 26, duration: 150, yoyo: true, ease: "Quad.easeOut" });
-      this.floatChip(R.cx, R.cy - 90, label, { size: 20, tint: [0xd8ffd0, 0xa9e6a9, 0x5aa85a, 0x2f6b2f] });
+      this.floatChip(R.cx, R.y + R.h * .5, label, { size: 24, tint: [0xd8ffd0, 0xa9e6a9, 0x5aa85a, 0x2f6b2f] });
       if (parried >= cfg.need) finish();
     };
 
@@ -4751,16 +5381,17 @@ class GameScene extends Phaser.Scene {
       this.time.delayedCall(delayMs, () => {
         if (done || gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
         const x = cfg.roam ? R.cx + (Math.random() * 2 - 1) * R.w * 0.26 : R.cx;
-        const y = cfg.roam ? R.cy + (Math.random() * 2 - 1) * R.h * 0.16 : R.cy + 20;
+        const y = R.y + R.h * .66 + (cfg.roam ? (Math.random() * 2 - 1) * R.h * .035 : 0);
         const kind: "blue" | "gold" | "red" = Math.random() < cfg.red ? "red" : Math.random() < 0.62 ? "blue" : "gold";
         this.bossSwing();
+        bull.play("mino-attack").once("animationcomplete", () => bull.scene && bull.play("mino-idle"));
         this.sfx("swing3", 0.4, 0.75);
 
         // the wind-up: a ring closing on the mark. It only ARMS at the end.
-        const ring = this.aReg(this.inBox(this.add.circle(x, y, 150, 0x000000, 0).setStrokeStyle(4, 0x9aa0ab, 0.85).setDepth(46)));
-        this.tweens.add({ targets: ring, scale: 0.36, duration: cfg.windup, ease: "Linear" });
+        const ring = this.aReg(this.inBox(this.add.circle(x, y, 98, 0x000000, 0).setStrokeStyle(5, 0xccb78f, .8).setDepth(46)));
+        this.tweens.add({ targets: ring, scale: .56, duration: cfg.windup, ease: "Linear" });
         // blank until he commits — no pre-reading the swing
-        const blank = this.aReg(this.inBox(this.add.circle(x, y, 50, 0x3a3f4b, 0.9).setStrokeStyle(4, 0x6a707c, 1).setDepth(44)));
+        const blank = this.gorrachPlate(x, y, 50, "hidden");
 
         // the only moment an answer counts: armed, not whiff-locked, not stunned
         const armAt = this.time.now + cfg.windup - cfg.window;
@@ -4841,25 +5472,19 @@ class GameScene extends Phaser.Scene {
   }
 
   /**
-   * STAGE 3 · TIMING (tap / avoid only, and it fights back)
+   * STAGE 3 · TIMING (tap gold / avoid red)
    *
    * Horns are locked and a mark sweeps the bar. Tap it on GOLD to shove him a
-   * notch; five notches break him. There is no BLUE here on purpose — this is
-   * the fight's last stage and it earns its difficulty from pressure inside two
-   * colours instead of a third verb:
-   *   - the gold band NARROWS and the sweep QUICKENS every notch
-   *   - RED stripes multiply as he tires (one, then two, then three)
-   *   - every zone DRIFTS inside its own slot, so you track rather than pre-aim
-   *   - a shove clock runs, so waiting for a clean alignment is itself a loss
-   * A whiff on bare bar only costs you a beat and the clock; touching RED costs
-   * a notch AND a strike. That split is deliberate — if a whiff hurt as much as
-   * red, red would mean nothing.
+   * notch; five successful shoves break him. The gold window narrows gently
+   * and the zones drift slowly within separate slots. A miss or timeout causes
+   * a strike; red causes a heavier strike. Earned pips and boss-bar progress
+   * always stay banked. Each attempt allows several passes of the needle.
    */
   private goringHorns(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     this.clearArenaObjs();
-    this.grammarLegend();
     const R = this.arenaRect();
+    const tally = this.gorrachSurface("Lock horns", "Tap on gold · Avoid red", `0 / ${HORNS_NOTCHES}`);
     this.bossHold = false;
     if (this.orc) {
       this.tweens.killTweensOf(this.orc);
@@ -4872,17 +5497,26 @@ class GameScene extends Phaser.Scene {
     const BW = R.w * 0.74;
     const BH = 54;
     const bx0 = R.cx - BW / 2;
-    const by = R.cy + 20;
-    this.aReg(this.inBox(this.add.rectangle(R.cx, by, BW + 10, BH + 10, 0x120e08, 0.9).setStrokeStyle(3, 0x7d6a4a, 1).setDepth(41)));
+    const by = R.y + R.h * .64;
+    this.aReg(this.inBox(gorrachTimingFrame(this, R.cx, by, BW, BH), true));
     const gold = this.aReg(this.inBox(this.add.rectangle(R.cx, by, 10, BH, G_GOLD, 0.9).setStrokeStyle(2, G_GOLD_EDGE, 1).setDepth(42)));
     const reds = Array.from({ length: HORNS_MAX_REDS }, () =>
       this.aReg(this.inBox(this.add.rectangle(R.cx, by, 10, BH, G_RED, 0.85).setStrokeStyle(2, G_RED_EDGE, 1).setDepth(42).setVisible(false))),
     );
-    const mark = this.aReg(this.inBox(this.add.rectangle(bx0, by, 10, BH + 18, 0xffffff).setDepth(44)));
-    this.arenaLabel(R.x + 14, R.y + 12, "LOCK HORNS", "#ffd7a0", 17);
-    this.arenaLabel(R.x + 14, R.y + 40, "● tap on gold  ✖ red costs you two  — and it all keeps moving", "#9aa0ab", 14);
+    const zoneMarks = this.aReg(this.inBox(this.add.graphics().setDepth(43)));
+    const paintZoneMarks = () => {
+      zoneMarks.clear().lineStyle(3, 0xffdfbe, .45);
+      for (const red of reds) if (red.visible) {
+        for (let x = red.x - red.width / 2 + 8; x < red.x + red.width / 2 - 8; x += 16)
+          zoneMarks.lineBetween(x, by + BH / 2 - 7, x + 8, by - BH / 2 + 7);
+      }
+      zoneMarks.lineStyle(3, 0xfff3bb, .9);
+      zoneMarks.strokePoints([{x:gold.x,y:by-12},{x:gold.x+8,y:by},{x:gold.x,y:by+12},{x:gold.x-8,y:by}],true);
+    };
+    const mark = this.aReg(this.inBox(this.add.rectangle(bx0, by, 8, BH + 22, 0xfff8de).setStrokeStyle(2, 0x302719).setDepth(44)));
+    const pointer = this.aReg(this.inBox(this.add.triangle(bx0, by - BH / 2 - 15, 0, 0, 20, 0, 10, 10, 0xfff1bf).setDepth(45)));
 
-    // the shove clock: stall and he takes the ground back
+    // The attempt clock: a timeout causes a strike, never a lost shove.
     const CW = BW;
     this.aReg(this.inBox(this.add.rectangle(R.cx, by - BH / 2 - 26, CW + 6, 14, 0x0a0b0f, 0.85).setDepth(43)));
     const clock = this.aReg(this.inBox(this.add.rectangle(bx0, by - BH / 2 - 26, CW, 9, 0xffd7a0).setOrigin(0, 0.5).setDepth(44)));
@@ -4891,15 +5525,11 @@ class GameScene extends Phaser.Scene {
     const pips: Phaser.GameObjects.Arc[] = [];
     for (let i = 0; i < HORNS_NOTCHES; i++)
       pips.push(this.aReg(this.inBox(this.add.circle(R.cx - (HORNS_NOTCHES - 1) * 20 + i * 40, by + 96, 12, 0x2a2118, 1).setStrokeStyle(3, 0x7d6a4a, 1).setDepth(43))));
-    const paintPips = () => pips.forEach((p, i) => p.setFillStyle(i < notch ? G_GOLD : 0x2a2118, 1));
-
-    const strainY = R.y + R.h * 0.32;
-    const bull = this.aReg(
-      this.inBox(this.add.sprite(R.cx + 190, strainY, "mino-idle").setOrigin(0.5, 0.9).setScale(0.72).setFlipX(this.boss.faceLeft).setDepth(45).play("mino-idle")),
-    );
-    const you = this.aReg(
-      this.inBox(this.add.sprite(R.cx - 190, strainY, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.4 / PLAYER_DENSITY).setDepth(45).play("hero-idle")),
-    );
+    const paintPips = () => {
+      pips.forEach((p, i) => p.setFillStyle(i < notch ? G_GOLD : 0x2a2118, 1).setStrokeStyle(3, i < notch ? 0xffe7af : 0x7d6a4a));
+      tally.setText(`${notch} / ${HORNS_NOTCHES}`);
+    };
+    const { bull, you } = this.gorrachDuel();
 
     let sweep: Phaser.Tweens.Tween | null = null;
     // every zone owns a SLOT and only drifts inside it, so they can never
@@ -4929,6 +5559,7 @@ class GameScene extends Phaser.Scene {
         return { obj: m.obj, home, slack, phase: Math.random() * Math.PI * 2 };
       });
       drift = step.drift;
+      paintZoneMarks();
 
       sweep?.stop();
       mark.x = bx0;
@@ -4961,6 +5592,8 @@ class GameScene extends Phaser.Scene {
       this.cameras.main.shake(160, 0.006);
       this.playCombo(["hero-attack2"], "hero-idle");
       this.bossReact();
+      you.play("hero-attack2").once("animationcomplete", () => you.scene && you.play("hero-idle"));
+      this.gorrachImpact(gold.x, by, 0xffdda0);
       this.tweens.add({ targets: bull, x: bull.x + 34, duration: 160, yoyo: true, ease: "Quad.easeOut" });
       this.tweens.add({ targets: you, x: you.x + 16, duration: 160, ease: "Quad.easeOut" });
       if (this.orc) this.tweens.add({ targets: this.orc, x: this.orc.x + 20, duration: 200, ease: "Quad.easeOut" });
@@ -4977,15 +5610,12 @@ class GameScene extends Phaser.Scene {
     const lose = (why: string, times = ARENA_MISS_STRIKES) => {
       lockedUntil = this.time.now + (times > 1 ? ARENA_RED_LOCK_MS : 420);
       this.arenaWardMissed = true;
-      notch = Math.max(0, notch - (times > 1 ? 2 : 1)); // red costs you two of the five
-      this.arenaDealsDone = baseDone + notch;
-      this.drainBossBar();
-      paintPips();
+      // Earned shoves, filled pips and drained boss health stay secured.
       this.sfx("swing1", 0.3);
       this.notice(why, "#ff8a6a");
       this.tweens.add({ targets: you, x: you.x - (times > 1 ? 40 : 22), duration: 200, yoyo: true, ease: "Quad.easeOut" });
       this.arenaStrikeHero(times);
-      restart();
+      if (gen === this.arenaGen && !this.run.over && this.arenaActive) restart();
     };
 
     restart();
@@ -4999,9 +5629,11 @@ class GameScene extends Phaser.Scene {
         loop: true,
         callback: () => {
           if (gen !== this.arenaGen || this.run.over || !this.arenaActive || notch >= HORNS_NOTCHES) return;
+          pointer.x = mark.x;
           if (drift <= 0) return;
           const t = this.time.now / 1000;
           for (const z of zones) z.obj.x = z.home + Math.sin(t * drift + z.phase) * z.slack;
+          paintZoneMarks();
         },
       }),
     );
@@ -5018,9 +5650,8 @@ class GameScene extends Phaser.Scene {
         shove();
         return;
       }
-      // a whiff costs a notch and a strike; RED costs TWO notches, a double
-      // strike and a long lockout. Both hurt — red simply hurts far more, which
-      // is what keeps the colour meaning something.
+      // A miss costs a strike; red adds a heavier strike and longer lockout.
+      // Neither changes the number of successful shoves already earned.
       lose("Missed the timing window");
     });
   }
@@ -5047,22 +5678,20 @@ class GameScene extends Phaser.Scene {
   private rimeIce(gen: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     this.clearArenaObjs();
-    this.grammarLegend();
     const R = this.arenaRect();
     let cleared = 0;
     let freeze = 0; // 0..1 — the seal closing
     let done = false;
-    type Plate = { kind: "gold" | "blue" | "red"; obj: Phaser.GameObjects.Rectangle; x: number; y: number; taps: number; cut?: { destroy: () => void } };
+    type Plate = { kind: "gold" | "blue" | "red"; obj: Phaser.GameObjects.Image; x: number; y: number; taps: number; cut?: { destroy: () => void } };
     const plates = new Set<Plate>();
 
-    this.aReg(this.inBox(this.add.rectangle(R.cx, R.cy, R.w, R.h, 0x0d2740, 0.35).setDepth(39)));
-    const label = this.arenaLabel(R.x + 14, R.y + 12, `PLATES  0 / ${RIME_PLATES_TO_CLEAR}`, "#bfe8ff", 17);
+    const label = this.frostSurface("Break the ice", "Gold: tap · Blue: swipe · Red: avoid", `0 / ${RIME_PLATES_TO_CLEAR}`);
     const MW = R.w - 60;
-    this.aReg(this.inBox(this.add.rectangle(R.cx, R.y + 44, MW + 6, 16, 0x0a0b0f, 0.85).setDepth(48)));
-    const meter = this.aReg(this.inBox(this.add.rectangle(R.cx - MW / 2, R.y + 44, MW, 11, G_BLUE).setOrigin(0, 0.5).setScale(0, 1).setDepth(49)));
-    this.arenaLabel(R.x + R.w - 150, R.y + 62, "THE SEAL", "#8ff4ff", 14);
+    this.aReg(this.inBox(this.add.rectangle(R.cx, R.y + 111, MW + 6, 12, 0x0a0b0f, 0.85).setDepth(48)));
+    const meter = this.aReg(this.inBox(this.add.rectangle(R.cx - MW / 2, R.y + 111, MW, 7, G_BLUE).setOrigin(0, 0.5).setScale(0, 1).setDepth(49)));
 
     const shatter = (pl: Plate) => {
+      if (done || !plates.has(pl)) return;
       const burst = this.inBox(
         this.add
           .particles(pl.x, pl.y, "spark", {
@@ -5078,7 +5707,7 @@ class GameScene extends Phaser.Scene {
       pl.obj.destroy();
       this.sfx("block2", 0.4, 1.3);
       cleared++;
-      label.setText(`PLATES  ${cleared} / ${RIME_PLATES_TO_CLEAR}`);
+      label.setText(`${cleared} / ${RIME_PLATES_TO_CLEAR}`);
       if (cleared % 4 === 0 && cleared < RIME_PLATES_TO_CLEAR) {
         this.arenaDealsDone++;
         this.drainBossBar();
@@ -5097,17 +5726,19 @@ class GameScene extends Phaser.Scene {
 
     const spawnPlate = () => {
       if (done || plates.size >= RIME_MAX_PLATES) return;
-      const x = R.x + 90 + Math.random() * (R.w - 180);
-      const y = R.y + 110 + Math.random() * (R.h - 220);
+      let x = 0, y = 0, room = false;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        x = R.x + 90 + Math.random() * (R.w - 180);
+        y = R.y + 171 + Math.random() * (R.h - 261);
+        if ([...plates].every(p => Math.hypot(p.x - x, p.y - y) > 105)) { room = true; break; }
+      }
+      if (!room) return;
       const roll = Math.random();
       const kind: Plate["kind"] = roll < 0.55 ? "gold" : roll < 0.8 ? "blue" : "red";
-      const colour = kind === "gold" ? G_GOLD : kind === "blue" ? G_BLUE : G_RED;
-      const edge = kind === "gold" ? G_GOLD_EDGE : kind === "blue" ? G_BLUE_EDGE : G_RED_EDGE;
       const obj = this.aReg(
         this.inBox(
           this.add
-            .rectangle(x, y, 88, 88, colour, 0.9)
-            .setStrokeStyle(4, edge, 1)
+            .image(x, y, frostCrystal(this,kind))
             .setAngle(Math.random() * 40 - 20)
             .setScale(0)
             .setDepth(43)
@@ -5121,11 +5752,12 @@ class GameScene extends Phaser.Scene {
         const dir = (["up", "down", "left", "right"] as SwipeDir[])[(Math.random() * 4) | 0];
         pl.cut = this.swipeNode(x, y, 40, dir, () => shatter(pl), () => {
           this.arenaWardMissed = true;
+          plates.delete(pl); pl.obj.destroy();
           this.notice("wrong way", "#ff8a6a");
           this.sfx("swing1", 0.3);
         });
       }
-      this.tweens.add({ targets: obj, scale: 1, duration: 220, ease: "Back.easeOut" });
+      this.tweens.add({ targets: obj, scale: .78, duration: 220, ease: "Back.easeOut" });
       this.sfx("swap", 0.22, 1.5);
       obj.on("pointerdown", () => {
         if (done || gen !== this.arenaGen) return;
@@ -5143,9 +5775,9 @@ class GameScene extends Phaser.Scene {
         if (pl.kind !== "gold") return; // blue is resolved by its cut node
         pl.taps--;
         this.sfx(this.pick(["hit1", "hit2"]), 0.35, 1.4 + (RIME_PLATE_TAPS - pl.taps) * 0.12);
-        this.tweens.add({ targets: obj, scaleX: 0.86, scaleY: 1.12, duration: 70, yoyo: true });
+        this.tweens.add({ targets: obj, scaleX: 0.67, scaleY: .88, duration: 70, yoyo: true });
         if (pl.taps > 0) {
-          obj.setFillStyle(pl.taps === 2 ? 0xe8b95a : 0xd9a23c, 0.9); // it crazes, then dulls
+          obj.setTint(pl.taps === 2 ? 0xc4ecff : 0x87bdd5);
           return;
         }
         shatter(pl);
@@ -5194,7 +5826,6 @@ class GameScene extends Phaser.Scene {
   private rimeWhiteout(gen: number, round: number) {
     if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
     this.clearArenaObjs();
-    this.grammarLegend();
     const R = this.arenaRect();
     const ROUNDS = [
       { motes: 4, dropMs: 1500, tellMs: 900, cols: 1 },
@@ -5205,16 +5836,18 @@ class GameScene extends Phaser.Scene {
     let caught = 0;
     let done = false;
 
-    this.aReg(this.inBox(this.add.rectangle(R.cx, R.cy, R.w, R.h, 0x0d2740, 0.3).setDepth(39)));
-    this.arenaLabel(R.x + 14, R.y + 12, `THE WHITEOUT  ${round + 1} / ${ROUNDS.length}`, "#bfe8ff", 17);
-    const tally = this.arenaLabel(R.x + R.w - 170, R.y + 12, `0 / ${cfg.motes}`, "#ffd24a", 18);
+    const tally = this.frostSurface("Weather the storm", "Drag to dodge · Tap gold warmth", `0 / ${cfg.motes}`);
 
     // your scout, dragged along the floor of the pit
     const floorY = R.y + R.h - 74;
+    const iceFloor = this.aReg(this.inBox(this.add.graphics().setDepth(41)));
+    iceFloor.fillStyle(0x7fb7ca,.4).fillRoundedRect(R.x+22,floorY+3,R.w-44,22,8);
+    iceFloor.lineStyle(3,0xe1f8ff,.7).lineBetween(R.x+30,floorY+3,R.x+R.w-30,floorY+3);
+    for(let x=R.x+50;x<R.x+R.w-40;x+=69)
+      iceFloor.lineStyle(2,0x204d68,.8).strokePoints([{x,y:floorY+6},{x:x+9,y:floorY+12},{x:x+5,y:floorY+20}]);
     const tok = this.aReg(
       this.inBox(this.add.sprite(R.cx, floorY, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.2 / PLAYER_DENSITY).setDepth(46).play("hero-idle")),
     );
-    this.arenaLabel(R.x + 14, R.y + 40, "drag low to run — tap the gold warmth", "#9aa0ab", 14);
 
 
     const fail = (why: string, times = ARENA_MISS_STRIKES) => {
@@ -5231,7 +5864,7 @@ class GameScene extends Phaser.Scene {
         loop: true,
         callback: () => {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
-          const y = R.y + 110 + Math.random() * (R.h - 260);
+          const y = R.y + 151 + Math.random() * (R.h - 301);
           const node = this.goldNode(R.x + R.w + 40, y, 30, () => {
             caught++;
             tally.setText(`${caught} / ${cfg.motes}`);
@@ -5275,14 +5908,14 @@ class GameScene extends Phaser.Scene {
           for (let c = 0; c < cfg.cols; c++) {
             const cx = R.x + 90 + Math.random() * (R.w - 180);
             const tell = this.aReg(
-              this.inBox(this.add.rectangle(cx, R.cy + 20, 78, R.h - 90, G_RED, 0.16).setStrokeStyle(2, G_RED_EDGE, 0.7).setDepth(41)),
+                this.inBox(this.add.rectangle(cx, R.y + (R.h + 105) / 2 - 20, 78, R.h - 145, G_RED, 0.16).setStrokeStyle(2, G_RED_EDGE, 0.7).setDepth(41)),
             );
             this.tweens.add({ targets: tell, alpha: 0.5, duration: cfg.tellMs / 3, yoyo: true, repeat: 1 });
             this.time.delayedCall(cfg.tellMs, () => {
               if (done || gen !== this.arenaGen || !this.arenaActive) return;
               tell.destroy();
               const spike = this.aReg(
-                this.inBox(this.add.rectangle(cx, R.y + 60, 64, 120, G_RED, 0.95).setStrokeStyle(3, G_RED_EDGE, 1).setDepth(47)),
+                this.inBox(this.add.image(cx, R.y + 157, frostCrystal(this,"red")).setDisplaySize(64, 112).setDepth(47)),
               );
               this.sfx("fireball1", 0.3, 1.5);
               this.tweens.add({
@@ -5313,7 +5946,13 @@ class GameScene extends Phaser.Scene {
           const p = this.input.activePointer;
           if (p.isDown) {
             const l = this.toLocal(p.x, p.y);
-            if (l.y > R.y + R.h * 0.4) tok.x = Phaser.Math.Clamp(l.x, R.x + 40, R.x + R.w - 40);
+            if (l.y > R.y + R.h * 0.4) {
+              const target = Phaser.Math.Clamp(l.x, R.x + 40, R.x + R.w - 40);
+              tok.setFlipX(target < tok.x).play(Math.abs(target-tok.x)>3 ? "hero-walk" : "hero-idle",true);
+              tok.x = Phaser.Math.Linear(tok.x,target,.45);
+            }
+          } else {
+            tok.play("hero-idle",true);
           }
         },
       }),
@@ -5327,8 +5966,8 @@ class GameScene extends Phaser.Scene {
     this.clearArenaObjs();
     const R = this.arenaRect();
     const CX = R.cx;
-    const CY = R.cy + 10;
-    const RAD = 150;
+    const CY = R.y + 104 + (R.h - 150) / 2;
+    const RAD = Math.min(150, (R.h - 220) / 2);
     const STRIKE = 180; // the blade comes in from the hero's side — always due left
     let hits = 0;
     let gapAngle = Math.random() * 360;
@@ -5336,24 +5975,21 @@ class GameScene extends Phaser.Scene {
     let lockedUntil = 0;
     let done = false;
 
-    this.aReg(this.inBox(this.add.rectangle(R.cx, R.cy, R.w, R.h, 0x0d2740, 0.3).setDepth(39)));
-    this.grammarLegend();
-    this.arenaLabel(R.x + 14, R.y + 12, "THE FROZEN HEART", "#8ff4ff", 18);
-    const tally = this.arenaLabel(R.x + R.w - 150, R.y + 12, `0 / ${HEART_HITS}`, "#bfe8ff", 18);
+    const tally = this.frostSurface("The frozen heart", "Strike when the gap faces the arrow", `0 / ${HEART_HITS}`);
     // the strike line: your blade comes from here, so the gap must be HERE
     this.aReg(this.inBox(this.add.rectangle(CX - RAD - 90, CY, 120, 5, G_GOLD, 0.5).setDepth(41)));
     this.aReg(this.inBox(this.add.text(CX - RAD - 152, CY, "▶", { fontFamily: EMOJI_FONT, fontSize: "34px", color: "#ffd24a" }).setOrigin(0.5).setDepth(42)));
 
     this.aReg(this.inBox(this.add.circle(CX, CY, RAD, 0x000000, 0).setStrokeStyle(2, 0x30538f, 0.7).setDepth(40)));
     const core = this.aReg(
-      this.inBox(this.add.circle(CX, CY, 50, G_GOLD, 0.95).setStrokeStyle(4, G_GOLD_EDGE, 1).setDepth(44).setInteractive({ useHandCursor: true })),
+      this.inBox(this.add.image(CX, CY, frostCrystal(this,"gold")).setDisplaySize(106,106).setDepth(44).setInteractive({ useHandCursor: true })),
     );
     const glow = this.aReg(this.inBox(this.add.image(CX, CY, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(G_GOLD).setScale(2.4).setAlpha(0.5).setDepth(43)));
     this.tweens.add({ targets: glow, scale: 3, alpha: 0.22, duration: 900, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
 
-    const shards: Phaser.GameObjects.Rectangle[] = [];
+    const shards: Phaser.GameObjects.Image[] = [];
     for (let i = 0; i < HEART_SHARDS; i++)
-      shards.push(this.aReg(this.inBox(this.add.rectangle(CX, CY, 30, 84, G_RED, 0.9).setStrokeStyle(3, G_RED_EDGE, 1).setDepth(45))));
+      shards.push(this.aReg(this.inBox(this.add.image(CX, CY, frostCrystal(this,"red")).setDisplaySize(30,64).setDepth(45))));
 
     const gapHalf = () => lerp(HEART_GAP_FROM, HEART_GAP_TO, hits / Math.max(1, HEART_HITS - 1));
     const spin = () => lerp(HEART_SPIN_FROM, HEART_SPIN_TO, Math.min(1, hits / 3));
@@ -5378,7 +6014,7 @@ class GameScene extends Phaser.Scene {
           place();
           // the core brightens as the opening swings past your blade
           const open = Math.abs(Phaser.Math.Angle.ShortestBetween(gapAngle, STRIKE)) <= gapHalf();
-          core.setFillStyle(open ? G_GOLD : 0x46505e, 0.95); // GOLD only while it is truly tappable
+          core.setTint(open ? 0xffffff : 0x596e85);
         },
       }),
     );
@@ -5475,6 +6111,7 @@ class GameScene extends Phaser.Scene {
     this.arenaGen++;
     this.clearArenaObjs();
     this.arenaActive = false;
+    this.slimeAdds.forEach(slime => slime.anims.pause());
     this.layout();
     if (this.orc) {
       this.tweens.killTweensOf(this.orc);
@@ -5523,7 +6160,7 @@ class GameScene extends Phaser.Scene {
    */
   private strike(force = false, pierce = false, slowMotion = false) {
     if (!force && this.tutorial?.active) return; // the tutorial scripts its own strikes
-    if (this.run.over || this.phase !== "fight" || this.orcDying || !this.orc || !this.run.enemy) return;
+    if (this.run.over || this.phase !== "fight" || this.orcDying || this.ambushResolving || !this.orc || !this.run.enemy) return;
     const isBoss = this.orcAnim === this.boss.key;
 
     // pick the attack: the goblin alternates a melee swing (steps in) and a
@@ -5547,6 +6184,11 @@ class GameScene extends Phaser.Scene {
     attackingFoe.play(attackKey).once("animationcomplete", () => {
       if (slowMotion && attackingFoe.active) attackingFoe.anims.timeScale = 1;
       if (this.orc === attackingFoe && !this.orcDying) this.orc.play(`${this.orcAnim}-idle`);
+    });
+    // One coordinated attack, with exactly one guard/pressure transaction below.
+    const rear = this.rearFoe;
+    if (rear) rear.sprite.play(`${rear.rig.prefix}-attack`).once("animationcomplete", () => {
+      if (this.rearFoe === rear && rear.enemy.hp > 0) rear.sprite.play(`${rear.rig.prefix}-idle`);
     });
 
     // when the blow actually connects
@@ -5572,7 +6214,7 @@ class GameScene extends Phaser.Scene {
     // ---- THE BLOW LANDS ----
     this.time.delayedCall(contactMs, () => {
       // fell mid-swing? then it never connects
-      if (this.run.over || this.orcDying || !this.run.enemy || this.orc !== attackingFoe) return;
+      if (this.run.over || this.orcDying || (this.ambushResolving && !this.orcEnemy?.hp) || !this.run.enemy || this.orc !== attackingFoe) return;
       const saved = pierce ? this.run.block : null;
       if (pierce) this.run.block = 0;
       const blockBefore = this.run.block;
@@ -6146,6 +6788,7 @@ class GameScene extends Phaser.Scene {
   /** Dev: rig a clean 2-step cascade (clear 3 -> a tile drops to make the next 3) to preview combo pacing. */
   public debugCombo() {
     if (this.busy || this.run.over || this.chestActive) return;
+    this.empowered = newEmpowered(); this.empoweredTile = null;
     this.busy = true;
     const P = SWORD; // 0
     const Q = 2; // shield
@@ -6181,7 +6824,7 @@ class GameScene extends Phaser.Scene {
     const slot = this.itemSlots[i];
     const def = slot.item;
     if (!def) return;
-    if (this.run.over || this.runCompleteShown || this.chestActive || this.tutorial?.active) return;
+    if (this.run.over || this.runCompleteShown || this.ambushResolving || this.chestActive || this.tutorial?.active) return;
     this.hideTip();
     if (this.targeting) {
       // tapping the armed slot again (or any slot) backs out of aiming
@@ -6209,6 +6852,25 @@ class GameScene extends Phaser.Scene {
     }
 
     switch (def.id) {
+      case "shears":
+        if (this.run.biome !== "forest" || !ambushRear(this.run)) {
+          this.notice("Save this for a forest ambush with two enemies. Item kept.", "#9aa0ab"); return;
+        }
+        this.castStorm(AMBUSH_FLASK_DMG, 0xffa040, "Ember flask!");
+        break;
+      case "thawflask":
+      case "lockpick": {
+        const reward = useZoneSupply(def.id, this.run.biome, this.run.zone!, this.run.killed);
+        if (reward.reason) { this.notice(reward.reason, "#9aa0ab"); return; }
+        this.run.resources.wood += reward.wood;
+        this.run.resources.treasure += reward.gems;
+        this.run.score += (reward.wood + reward.gems) * 2;
+        this.drawZonePatches();
+        this.notice(def.id === "thawflask" ? "Ice melted · protected for 3 encounters"
+          : `Cache opened · +${reward.gems} gems`, def.id === "thawflask" ? "#b7e8ff" : "#ffe0a0");
+        this.sfx(def.id === "lockpick" ? "chest_unlock" : "pickup", .45);
+        break;
+      }
       case "whetstone":
         this.run.whetstone += WHETSTONE_CHARGES;
         this.notice(`Sharpened · next ${WHETSTONE_CHARGES} sword matches have 5-tile power`, "#ffe08a");
@@ -6297,17 +6959,8 @@ class GameScene extends Phaser.Scene {
       case "ledger":
         this.ledgerLeft += LEDGER_SECS;
         this.run.resMult = 2;
-        this.notice("Double Resources active · wood, ore and gems ×2", "#ffe08a");
+        this.notice("Double Resources active · wood, stone and gems ×2", "#ffe08a");
         this.sfx("coin3", 0.5);
-        break;
-      case "ink":
-        if (this.inkActive) {
-          this.notice("Scout Map is already active. Item kept.", "#9aa0ab");
-          return; // not consumed
-        }
-        this.inkActive = true;
-        this.notice("Scout Map active · next encounters shown", "#8fd0ff");
-        this.sfx("pickup", 0.5, 1.1);
         break;
     }
     this.consumeSlot(slot);
@@ -6327,18 +6980,20 @@ class GameScene extends Phaser.Scene {
   }
 
   /** Stormcall Scroll: an instant spell blast through the normal combat pipeline. */
-  private castStorm() {
-    const res = castBlast(this.run, STORMCALL_DMG); // storm magic minds the ward like any spell
-    const spell: SpellOutcome = { dmg: res.dmg, tier: 4, mod: res.mod, burn: false };
+  private castStorm(raw = STORMCALL_DMG, tint = 0x8fd0ff, message = "LIGHTNING!") {
+    const res = castBlast(this.run, raw);
+    const spell: SpellOutcome = { dmg: res.dmg, tier: 4, mod: res.mod, burn: false, splash: res.splash };
     this.updateEnemyBar();
-    if (res.killed) {
+    if (this.orcEnemy?.ambush) {
+      void this.finishAmbushHit(spell, res.killed, 0, tint);
+    } else if (res.killed) {
       this.heroLockX = true;
-      const impactAt = this.performCast(spell, true, 0, 0x8fd0ff); // storm-blue bolt
+      const impactAt = this.performCast(spell, true, 0, tint);
       this.surgeAfterKill(impactAt + 120);
     } else {
-      this.performCast(spell, false, 0, 0x8fd0ff);
+      this.performCast(spell, false, 0, tint);
     }
-    this.notice("LIGHTNING!", "#bfe6ff");
+    this.notice(message, "#bfe6ff");
     this.refreshHud();
   }
 
@@ -6392,7 +7047,7 @@ class GameScene extends Phaser.Scene {
         if (this.grid[r][c] === WOOD || this.grid[r][c] === ORE) cells.push({ r, c });
     if (!cells.length) {
       this.busy = false;
-      this.notice("no wood or ore on the board", "#9aa0ab");
+      this.notice("no wood or stone on the board", "#9aa0ab");
       return;
     }
     this.sfx("coin_pour", 0.5);
@@ -6463,6 +7118,11 @@ class GameScene extends Phaser.Scene {
   /** Sapper's Charge: 3×3 blast — every destroyed tile counts as matched. */
   private async detonate(center: Coord) {
     this.busy = true;
+    this.syncEmpoweredCell();
+    const charged=this.empowered.cell;
+    const detonatesPower=!!charged && Math.abs(charged.r-center.r)<=SAPPER_RADIUS && Math.abs(charged.c-center.c)<=SAPPER_RADIUS;
+    const poweredType=detonatesPower?this.empowered.type:-1;
+    if(detonatesPower)this.consumeEmpowered();
     const counts: Record<number, number> = {};
     const fades: Promise<void>[] = [];
     this.sfx("fireball1", 0.6, 0.9);
@@ -6483,10 +7143,10 @@ class GameScene extends Phaser.Scene {
         this.grid[r][c] = EMPTY;
       }
     await Promise.all(fades);
-    const outcome = applyMatches(this.run, counts);
+    const outcome = applyMatches(this.run, counts, poweredType>=0?{type:poweredType,count:counts[poweredType]??0}:undefined);
     await this.tutorial?.onCascade(counts);
     for (let i = 0; i < (counts[POTION] ?? 0); i++) drinkPotion(this.run);
-    if (outcome.damage > 0) this.onCombat(outcome, outcome.swords); // swings and/or a cast, as the blast decided
+    if (outcome.damage > 0) await this.onCombat(outcome, outcome.swords);
     this.refreshHud();
     await this.collapse();
     await this.resolve();
@@ -6497,6 +7157,8 @@ class GameScene extends Phaser.Scene {
   /** Chromatic Prism: every tile of the picked kind transmutes into swords. */
   private async prismConvert(srcType: number) {
     this.busy = true;
+    this.syncEmpoweredCell();
+    if(this.empowered.type===srcType)this.empowered.type=SWORD;
     this.sfx("spell", 0.6);
     this.boardFlash(0.22);
     const converts: Coord[] = [];
@@ -6504,6 +7166,7 @@ class GameScene extends Phaser.Scene {
       for (let c = 0; c < this.boardCols; c++) if (this.grid[r][c] === srcType) converts.push({ r, c });
     for (const { r, c } of converts) {
       this.grid[r][c] = SWORD;
+      if(this.tiles[r][c]===this.empoweredTile)this.empoweredTile=null;
       this.tiles[r][c]?.destroy();
       const t = this.makeTile(r, c, SWORD);
       this.tiles[r][c] = t;
@@ -6891,8 +7554,8 @@ class GameScene extends Phaser.Scene {
     });
   }
 
-  private floatDamage(n: number, big = true, mod: DamageMod = "none") {
-    const x = (this.orc?.x ?? SAFE_X) + (Math.random() * 26 - 13);
+  private floatDamage(n: number, big = true, mod: DamageMod = "none", target = this.orc) {
+    const x = (target?.x ?? SAFE_X) + (Math.random() * 26 - 13);
     const y = GROUND_Y - 64 - (big ? 0 : 8);
     // the defense speaks through the number: gray = soaked, hot gold = tore through
     const size = (big ? 28 : 18) + (mod === "weak" ? 6 : mod === "resist" ? -3 : 0);
@@ -6960,6 +7623,7 @@ class GameScene extends Phaser.Scene {
     this.overShown = true;
     this.fadeOutMusic(900); // the song dies with him
     this.orc?.stop();
+    this.rearFoe?.sprite.stop();
     this.tweens.killTweensOf(this.hero);
     this.hero.anims.nextAnim = null;
     this.hero.anims.nextAnimsQueue.length = 0;
@@ -6991,8 +7655,12 @@ class GameScene extends Phaser.Scene {
 
   // --- tile tweens (shared by swap / collapse) ---
   private moveTo(t: Phaser.GameObjects.Container, r: number, c: number): Promise<void> {
+    this.tweens.killTweensOf(t);
     return new Promise((res) => {
-      this.tweens.add({ targets: t, x: this.xFor(c), y: this.yFor(r), duration: 105, ease: "Quad.easeOut", onComplete: () => res() });
+      this.tweens.add({ targets: t, x: this.xFor(c), y: this.yFor(r), duration: 105, ease: "Quad.easeOut", onComplete: () => {
+        if (t.scene) settleTile(this, t);
+        res();
+      } });
     });
   }
   /** Shared, low-cost metallic glint: staggered per tile so the board never strobes in unison. */
@@ -7058,40 +7726,6 @@ class GameScene extends Phaser.Scene {
       });
     }
   }
-  /** Copy one composite tile face to an offscreen canvas for crack slicing. */
-  /**
-   * Composite the potion tile face: the treasure tile's ironbound frame with
-   * its inset repainted dark and a glowing flask stamped in. Placeholder until
-   * a real tiles/potion.png is drawn — keeps the shared frame silhouette.
-   */
-  private buildPotionArt() {
-    if (this.textures.exists(POTION_ART_KEY)) return;
-    const src = this.textures.get("tile-treasure").getSourceImage() as HTMLImageElement;
-    const cv = document.createElement("canvas");
-    cv.width = cv.height = 84;
-    const g = cv.getContext("2d")!;
-    g.drawImage(src, 0, 0, 84, 84);
-    // repaint the inset so the treasure icon vanishes beneath a dark apothecary green
-    g.beginPath();
-    g.roundRect(15, 15, 54, 54, 9);
-    g.fillStyle = "#101712";
-    g.fill();
-    g.strokeStyle = "rgba(140,220,170,0.14)";
-    g.lineWidth = 2;
-    g.stroke();
-    // a soft green glow behind the flask so it reads as the special tile it is
-    const gr = g.createRadialGradient(42, 44, 2, 42, 44, 27);
-    gr.addColorStop(0, "rgba(120,255,170,0.55)");
-    gr.addColorStop(1, "rgba(120,255,170,0)");
-    g.fillStyle = gr;
-    g.fillRect(15, 15, 54, 54);
-    g.font = '34px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
-    g.textAlign = "center";
-    g.textBaseline = "middle";
-    g.fillText("🧪", 42, 46);
-    this.textures.addCanvas(POTION_ART_KEY, cv);
-  }
-
   // ---- zone-dressed HUD rails: per-biome panel tint + baked fringe art -------
 
   /**
@@ -7896,32 +8530,21 @@ class GameScene extends Phaser.Scene {
     this.textures.addCanvas("blade-spect", cv);
   }
 
-  /** Radial red edge-glow, stretched to the viewport — the peril vignette. */
+  /** A light red wash with stronger edges, fitted only to the visible combat panel. */
   private buildVignetteArt() {
-    if (this.textures.exists("vignette")) return;
+    if (this.textures.exists("lane-peril")) return;
     const S = 256;
     const cv = document.createElement("canvas");
     cv.width = cv.height = S;
     const g = cv.getContext("2d")!;
-    const gr = g.createRadialGradient(S / 2, S / 2, S * 0.3, S / 2, S / 2, S * 0.66);
-    gr.addColorStop(0, "rgba(200,36,48,0)");
-    gr.addColorStop(0.7, "rgba(200,36,48,0.5)");
-    gr.addColorStop(1, "rgba(140,16,28,1)");
+    const gr = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S * 0.62);
+    gr.addColorStop(0, "rgba(230,48,58,0.18)");
+    gr.addColorStop(0.55, "rgba(230,48,58,0.3)");
+    gr.addColorStop(0.85, "rgba(211,34,46,0.72)");
+    gr.addColorStop(1, "rgba(170,22,36,0.95)");
     g.fillStyle = gr;
     g.fillRect(0, 0, S, S);
-    this.textures.addCanvas("vignette", cv);
-  }
-
-  private faceCanvas(type: number, S: number): HTMLCanvasElement {
-    const cv = document.createElement("canvas");
-    cv.width = S;
-    cv.height = S;
-    const cx = cv.getContext("2d")!;
-    cx.imageSmoothingEnabled = true;
-    cx.imageSmoothingQuality = "high";
-    const src = this.textures.get(tileArtKey(type)).getSourceImage() as CanvasImageSource;
-    cx.drawImage(src, 0, 0, S, S);
-    return cv;
+    this.textures.addCanvas("lane-peril", cv)?.setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
   /** Bake the chest + blast textures once: pixel chest (closed/open), god rays, coin, spark, orb. */
@@ -8039,116 +8662,72 @@ class GameScene extends Phaser.Scene {
     });
   }
 
-  /** Irregular crack pattern: a jittered impact point fanned out to random boundary points. */
-  private crackTriangles(S: number): { x: number; y: number }[][] {
-    const cx = S / 2 + (Math.random() * 2 - 1) * S * 0.22;
-    const cy = S / 2 + (Math.random() * 2 - 1) * S * 0.22;
-    const bp: { x: number; y: number }[] = [];
-    const stepFrac = () => 0.38 + Math.random() * 0.32; // random spacing along each edge
-    bp.push({ x: 0, y: 0 });
-    let x = 0;
-    while (x < S) { x = Math.min(S, x + S * stepFrac()); if (x < S - 1) bp.push({ x, y: 0 }); }
-    bp.push({ x: S, y: 0 });
-    let y = 0;
-    while (y < S) { y = Math.min(S, y + S * stepFrac()); if (y < S - 1) bp.push({ x: S, y }); }
-    bp.push({ x: S, y: S });
-    x = S;
-    while (x > 0) { x = Math.max(0, x - S * stepFrac()); if (x > 1) bp.push({ x, y: S }); }
-    bp.push({ x: 0, y: S });
-    y = S;
-    while (y > 0) { y = Math.max(0, y - S * stepFrac()); if (y > 1) bp.push({ x: 0, y }); }
-    return bp.map((a, i) => [{ x: cx, y: cy }, a, bp[(i + 1) % bp.length]]);
-  }
-
-  /** Pre-bake a few crack patterns per tile type; each shard is the face clipped to a triangle. */
-  private buildTileFaces() {
-    if (Object.keys(this.shardSets).length) return; // build once (survives scene restarts)
-    const S = FACE;
-    for (let type = 0; type < TYPES; type++) {
-      const face = this.faceCanvas(type, S);
-      const patterns: { key: string; cx: number; cy: number }[][] = [];
-      for (let p = 0; p < SHARD_PATTERNS; p++) {
-        patterns.push(
-          this.crackTriangles(S).map((tri, i) => {
-            const key = `sh${type}_${p}_${i}`;
-            const cv = document.createElement("canvas");
-            cv.width = S;
-            cv.height = S;
-            const ctx = cv.getContext("2d")!;
-            ctx.beginPath();
-            ctx.moveTo(tri[0].x, tri[0].y);
-            ctx.lineTo(tri[1].x, tri[1].y);
-            ctx.lineTo(tri[2].x, tri[2].y);
-            ctx.closePath();
-            ctx.clip();
-            ctx.drawImage(face, 0, 0);
-            this.textures.addCanvas(key, cv);
-            return { key, cx: (tri[0].x + tri[1].x + tri[2].x) / 3, cy: (tri[0].y + tri[1].y + tri[2].y) / 3 };
-          }),
-        );
-      }
-      this.shardSets[type] = patterns;
-    }
-  }
-
-  /** Shatter the tile into irregular shards that fly apart, tumble, and fall. */
+  /** Break the complete tile face apart, with its short material accent on top. */
   private shatter(t: Phaser.GameObjects.Container, type: number): Promise<void> {
-    const S = FACE;
-    const patterns = this.shardSets[type];
-    const shards = patterns[(Math.random() * patterns.length) | 0];
-    for (const sh of shards) {
-      const ox = sh.cx - S / 2; // shard centroid offset from the tile centre
-      const oy = sh.cy - S / 2;
-      const img = this.inBox(this.add.image(t.x + ox, t.y + oy, sh.key).setOrigin(sh.cx / S, sh.cy / S).setDepth(41));
-      this.frags.push({
-        o: img,
-        vx: ox * 5 + (Math.random() * 2 - 1) * 40, // burst outward from the impact...
-        vy: oy * 3 - 90 - Math.random() * 130, //      ...with an upward pop
-        vr: (Math.random() * 2 - 1) * 8,
-        life: 0.8 + Math.random() * 0.4,
-      });
+    this.tweens.killTweensOf(tileVisual(t));
+    if (tileEffectsEnabled()) {
+      this.tileShatter.burst(this.puzzleBox, t.x, t.y, type);
+      tileClearBurst(this, this.puzzleBox, t.x, t.y, type);
+      t.destroy();
+      return new Promise((res) => this.time.delayedCall(90, res));
     }
-    t.destroy();
-    return new Promise((res) => this.time.delayedCall(90, res));
+    return new Promise((res) => this.tweens.add({ targets: t, alpha: 0,
+      duration: 90, ease: "Quad.easeOut",
+      onComplete: () => { t.destroy(); res(); } }));
   }
   private async collapse() {
     const anims: Promise<void>[] = [];
     for (let c = 0; c < this.boardCols; c++) {
-      let write = this.boardRows - 1;
-      for (let r = this.boardRows - 1; r >= 0; r--) {
-        const t = this.tiles[r][c];
-        if (!t) continue;
-        if (write !== r) {
-          this.grid[write][c] = this.grid[r][c];
-          this.grid[r][c] = EMPTY;
-          this.tiles[write][c] = t;
-          this.tiles[r][c] = null;
-          anims.push(this.moveTo(t, write, c));
+      // Ice holds its tile until thawed. Refill each side of it independently.
+      const barriers = [-1, ...Array.from({length:this.boardRows},(_,r)=>r)
+        .filter(r => this.grid[r][c] !== EMPTY && this.isIceLocked({r,c})), this.boardRows];
+      for (let part = 0; part < barriers.length - 1; part++) {
+        const top = barriers[part] + 1, bottom = barriers[part+1] - 1;
+        let write = bottom;
+        for (let r = bottom; r >= top; r--) {
+          const t = this.tiles[r][c];
+          if (!t) continue;
+          if (write !== r) {
+            this.grid[write][c] = this.grid[r][c];
+            this.grid[r][c] = EMPTY;
+            this.tiles[write][c] = t;
+            this.tiles[r][c] = null;
+            anims.push(this.moveTo(t, write, c));
+          }
+          write--;
         }
-        write--;
-      }
-      const spawned = write + 1;
-      for (let r = write; r >= 0; r--) {
-        const type = randomType();
-        this.grid[r][c] = type;
-        const t = this.makeTile(r, c, type);
-        t.y = this.yFor(r - spawned);
-        this.tiles[r][c] = t;
-        anims.push(this.moveTo(t, r, c));
+        const spawned = write - top + 1;
+        for (let r = write; r >= top; r--) {
+          const type = randomType();
+          this.grid[r][c] = type;
+          const t = this.makeTile(r, c, type);
+          t.y = this.yFor(top === 0 ? r - spawned : top);
+          if (top > 0) {
+            t.setAlpha(0);
+            this.tweens.add({targets:t,alpha:1,duration:150});
+          }
+          this.tiles[r][c] = t;
+          anims.push(this.moveTo(t, r, c));
+        }
       }
     }
     await Promise.all(anims);
   }
   private rebuildBoard() {
     this.clearSelection();
+    this.syncEmpoweredCell();
+    const oldGrid=this.grid;
+    this.empoweredTile=null;
     for (let r = 0; r < this.boardRows; r++)
       for (let c = 0; c < this.boardCols; c++) {
         this.tiles[r][c]?.destroy();
         this.tiles[r][c] = null;
       }
     this.grid = makeInitialGrid(Math.random, this.boardCols, this.boardRows);
+    reflowEmpowered(this.empowered,oldGrid,this.grid);
     for (let r = 0; r < this.boardRows; r++)
       for (let c = 0; c < this.boardCols; c++) this.tiles[r][c] = this.makeTile(r, c, this.grid[r][c]);
+    reflowIce(this.run.biome, this.run.zone!, this.grid);
   }
 }
 

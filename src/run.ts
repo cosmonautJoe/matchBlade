@@ -11,6 +11,9 @@
  */
 
 // Tile-type ids — mirror src/board.ts / DESIGN.md §3.
+import { restoreZoneFeatures, type ZoneFeatureState } from "./zone-features";
+import { newRoadFork, claimRoadBonus, type RoadForkState } from "./road-fork";
+import { cleanCompanions, companionKillRewards, COMPANION_BALANCE as PET } from "./companions";
 export const SWORD = 0;
 export const STAFF = 1;
 export const SHIELD = 2;
@@ -39,7 +42,14 @@ export interface Enemy {
   power: number; // pressure a full strike adds, before block
   strikeMult: number; // <1 strikes FASTER, >1 slower (scene scales its cadence)
   spores?: number; // forest mushrooms build up stronger hits; staff matches clear them
+  ambush?: { rear: Enemy | null }; // one encounter/attack clock; retained until the whole pair falls
 }
+
+export const FOREST_AMBUSH_REWARD = { wood: 4, ore: 2 } as const;
+export const ambushRear = (s: RunState): Enemy | null => {
+  const rear = s.enemy?.ambush?.rear;
+  return rear && rear.hp > 0 ? rear : null;
+};
 
 export interface Resources {
   wood: number;
@@ -49,8 +59,11 @@ export interface Resources {
 }
 
 export interface RunState {
+  companions?: string[];
+  zone?: ZoneFeatureState;
+  roadFork?: RoadForkState;
   pressure: number; // 0 safe .. 1 dead
-  block: number; // shield CHARGES banked — each one fully turns one enemy strike
+  block: number; // guard charges banked; stronger enemies spend more per strike
   enemy: Enemy | null;
   killed: number; // enemies defeated this run
   score: number;
@@ -88,10 +101,7 @@ export const SPELL_BURN_TIER = 5; // a Pyroclasm leaves the foe burning (scene a
 // Defense multipliers — resisted hits still land SOMETHING (min 1 per swing).
 export const RESIST_MULT = 0.5;
 export const WEAK_MULT = 1.5;
-// Blocking is CHARGES, not a pressure pool: every shield tile banks one charge,
-// and one charge fully turns one strike no matter how hard it lands — so guard
-// grows MORE valuable as foes grow stronger, never less. (The old pool model
-// silently ate 3-4 shields per mid-run strike, which read as a bug.)
+// Blocking spends banked guard charges: 1 per hit early, rising with depth.
 // A block also shoves the foe back — shields win ground, not just hold it.
 export const BLOCK_PUSHBACK = 0.05;
 // The potion tile, drunk on tap: a stride of ground regained + a swig of guard.
@@ -204,7 +214,7 @@ export function makeEnemy(killed: number, biome = "plains", rand: () => number =
   const plainsHpMult = easeDeepPlains ? PLAINS_DEEP_HP_MULT : 1;
   const growth = biome === "plains" ? PLAINS_HP_GROWTH : ENEMY_HP_GROWTH;
   const hp = Math.max(1, Math.round((ENEMY_BASE_HP + killed * growth) * hpMult * plainsHpMult));
-  return {
+  const enemy: Enemy = {
     kind: boss ? "boss" : "orc",
     variant,
     defense: VARIANT_DEFENSE[variant],
@@ -212,20 +222,36 @@ export function makeEnemy(killed: number, biome = "plains", rand: () => number =
     maxHp: hp,
     power: ENEMY_BASE_POWER + killed * (biome === "plains" ? PLAINS_POWER_GROWTH : biome === "forest" ? 0.007 : ENEMY_POWER_GROWTH),
     strikeMult: boss ? 1 : VARIANT_STRIKE_MULT[variant] ?? 1,
-    ...(biome === "forest" && variant === "mushroom" ? { spores: 0 } : {}),
   };
+  // Two short ambushes punctuate the forest. Fixed encounter slots survive
+  // refresh/rotation and leave the opening, both bosses and their lead-ins alone.
+  if (biome === "forest" && (killed === 4 || killed === 14)) {
+    const ambusher = (type: EnemyVariant): Enemy => {
+      const health = Math.max(1, Math.round((ENEMY_BASE_HP + killed * growth) * .55));
+      return { ...enemy, variant: type, defense: VARIANT_DEFENSE[type], hp: health,
+        maxHp: health, strikeMult: 1.1 };
+    };
+    const front = ambusher("mushroom");
+    front.ambush = { rear: ambusher("eye") };
+    return front;
+  }
+  return enemy;
 }
 
-export function newRun(swordLevel = 0, forgeCapLevel = Number.POSITIVE_INFINITY, biome = "plains", staffLevel = 0): RunState {
+export function newRun(swordLevel = 0, forgeCapLevel = Number.POSITIVE_INFINITY, biome = "plains", staffLevel = 0, owned: readonly string[] = []): RunState {
+  const companions = cleanCompanions(owned);
   return {
+    companions,
     pressure: 0,
-    block: 0,
+    block: companions.includes("moss") ? PET.moss.startGuard : 0,
     enemy: makeEnemy(0, biome),
     killed: 0,
     score: 0,
     resources: { wood: 0, ore: 0, treasure: 0, keys: 0 },
     over: false,
     biome,
+    zone: restoreZoneFeatures(),
+    roadFork: newRoadFork(),
     swordBonus: swordLevel * SWORD_BONUS_PER_LEVEL,
     spellBonus: staffLevel * SPELL_BONUS_PER_LEVEL,
     sunderEdge: swordLevel >= forgeCapLevel,
@@ -245,6 +271,7 @@ export interface SpellOutcome {
   tier: 3 | 4 | 5; // Firebolt / Fireball / Pyroclasm — drives the projectile's size
   mod: DamageMod;
   burn: boolean; // Pyroclasm leaves the foe burning (scene applies the DoT)
+  splash?: { dmg: number; mod: DamageMod }; // the second ambusher, using its own defense
 }
 
 export interface MatchOutcome {
@@ -283,14 +310,38 @@ function clampPressure(s: RunState) {
  * walk-in — before the arena takes over — left him damageable, and a banked
  * sword match could chip or even kill him as he strode in.
  */
-export function dealDamage(s: RunState, damage: number, force = false): boolean {
-  if (!s.enemy || damage <= 0) return false;
+export function dealDamage(s: RunState, damage: number, force = false, splashDamage = 0): boolean {
+  if (!s.enemy || (damage <= 0 && splashDamage <= 0)) return false;
   if (s.enemy.kind === "boss" && !force) return false;
-  s.enemy.hp -= damage;
+  const ambush = s.enemy.ambush;
+  const rear = ambushRear(s);
+  // Resolve both hits before promoting a survivor, so a mixed sword/fireball
+  // cascade never applies its splash twice or rewards the same encounter twice.
+  if (rear && splashDamage > 0) {
+    rear.hp = Math.max(0, rear.hp - splashDamage);
+    s.score += splashDamage * 5;
+  }
+  s.enemy.hp = Math.max(0, s.enemy.hp - damage);
   s.score += damage * 5;
   if (s.enemy.hp <= 0) {
+    if (rear && rear.hp > 0) {
+      rear.ambush = { rear: null };
+      s.enemy = rear;
+      return false;
+    }
     s.enemy = null;
     s.killed += 1;
+    for (const reward of companionKillRewards(s.companions, s.killed, guardCost(s.killed))) {
+      if (reward.resource === "guard") s.block += reward.amount;
+      else s.resources[reward.resource] += reward.amount;
+    }
+    const detour = s.biome === "forest" ? null : claimRoadBonus(s.roadFork, s.killed);
+    if (detour) { s.resources[detour.resource] += detour.amount; s.score += detour.amount * 2; }
+    if (ambush) {
+      s.resources.wood += FOREST_AMBUSH_REWARD.wood;
+      s.resources.ore += FOREST_AMBUSH_REWARD.ore;
+      s.score += (FOREST_AMBUSH_REWARD.wood + FOREST_AMBUSH_REWARD.ore) * 2;
+    }
     s.score += 100;
     s.pressure -= ADVANCE_PER_KILL * s.surgeMult; // surge forward, away from the skull
     clampPressure(s);
@@ -300,17 +351,22 @@ export function dealDamage(s: RunState, damage: number, force = false): boolean 
 }
 
 /** Apply one cascade's cleared-tile counts. Returns what happened (for juice). */
-export function applyMatches(s: RunState, counts: Record<number, number>): MatchOutcome {
+export function applyMatches(s: RunState, counts: Record<number, number>, empowered?: { type: number; count: number }): MatchOutcome {
   const n = (t: number) => counts[t] ?? 0;
   const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay per-match — they're tension)
   // Keys pay per MATCH, not per tile: a 3-match banks one, a 5-match two,
   // two separate 3-matches in one wave two. (round(n/3): 3,4->1  5,6->2)
   const perMatch = (tiles: number) => tiles >= 3 ? Math.round(tiles / 3) : 0;
   const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: perMatch(n(KEY)) };
+  // Fixed companion extras are paid once per cascade, outside item multipliers.
+  if (n(WOOD) >= PET.hazel.matchSize && s.companions?.includes("hazel")) gained.wood += PET.hazel.wood;
+  if (n(ORE) >= PET.flint.matchSize && s.companions?.includes("flint")) gained.ore += PET.flint.stone;
 
   // Shields reward the BIGGER match: 3 tiles -> 1 charge, then +1 per extra
   // tile (4 -> 2, 5 -> 3, 6 -> 4, ...). Working for the long swap pays off.
-  const guard = n(SHIELD) >= 3 ? n(SHIELD) - 2 : 0;
+  const extra = (type: number) => empowered?.type === type ? Math.min(n(type), empowered.count) : 0;
+  const guard = (n(SHIELD) >= 3 ? n(SHIELD) - 2 : 0) + Math.max(0, extra(SHIELD) - 2)
+    + (n(SHIELD) >= PET.flurry.matchSize && s.companions?.includes("flurry") ? PET.flurry.guard : 0);
   s.block += guard;
   s.resources.wood += gained.wood;
   s.resources.ore += gained.ore;
@@ -322,14 +378,21 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
 
   // ---- steel: Wren's Whetstone can turn any sword match into a full combo ----
   let swords = n(SWORD);
+  let whetted = false;
   if (swords >= 3 && s.whetstone > 0 && s.enemy && s.enemy.kind !== "boss" && !s.sunderEdge) {
     s.whetstone--;
+    whetted = true;
     swords = Math.max(swords, 5);
   }
   const rawHits = swordHits(swords);
   if (rawHits.length && swords >= 3) rawHits[0] += s.swordBonus; // forged edge bites harder
   const pM = physMult(defense);
   let hits = rawHits.map((h) => Math.max(1, Math.round(h * pM))); // even glancing blows land 1
+  if (extra(SWORD) >= 3 && hits.length) {
+    const bonus = swordHits(whetted ? Math.max(5, extra(SWORD)) : extra(SWORD));
+    bonus[0] += s.swordBonus;
+    bonus.forEach((h, i) => { hits[Math.min(i, hits.length - 1)] += Math.max(1, Math.round(h * pM)); });
+  }
   let swordMod: DamageMod = !hits.length || pM === 1 ? "none" : pM < 1 ? "resist" : "weak";
   // the peak blade SUNDERS: one felling stroke, defense be damned (never bosses)
   const sunder = s.sunderEdge && swords >= 3 && s.enemy !== null && s.enemy.kind !== "boss";
@@ -345,13 +408,19 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
     if (s.enemy?.spores !== undefined) s.enemy.spores = 0;
     const tier: 3 | 4 | 5 = staves >= 5 ? 5 : staves === 4 ? 4 : 3;
     const raw = SPELL_DMG[tier] + Math.max(0, staves - 5) * SPELL_EXTRA + s.spellBonus; // Aldwin's study sharpens every cast
-    const sM = spellMult(defense);
-    spell = {
-      dmg: Math.max(1, Math.round(raw * sM)),
-      tier,
-      mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak",
-      burn: tier >= SPELL_BURN_TIER,
+    const hit = (targetDefense: Defense): { dmg: number; mod: DamageMod } => {
+      const sM = spellMult(targetDefense);
+      let dmg = Math.max(1, Math.round(raw * sM));
+      if (extra(STAFF) >= 3) {
+        const count = extra(STAFF), bonusTier = Math.min(5, count) as 3 | 4 | 5;
+        dmg += Math.max(1, Math.round((SPELL_DMG[bonusTier] + Math.max(0, count - 5) * SPELL_EXTRA + s.spellBonus) * sM));
+      }
+      if (s.companions?.includes("hush")) dmg += Math.max(PET.hush.minDamage, Math.round(dmg * PET.hush.damagePercent / 100));
+      return { dmg, mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak" };
     };
+    spell = { ...hit(defense), tier, burn: tier >= SPELL_BURN_TIER };
+    const rear = ambushRear(s);
+    if (rear) spell.splash = hit(rear.defense);
   }
 
   // Malgrim shrugs off the board entirely (see dealDamage) — report NO damage
@@ -362,8 +431,9 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
     swordMod = "none";
   }
 
-  const damage = hits.reduce((a, b) => a + b, 0) + (spell?.dmg ?? 0);
-  const killed = dealDamage(s, damage);
+  const frontDamage = hits.reduce((a, b) => a + b, 0) + (spell?.dmg ?? 0);
+  const damage = frontDamage + (spell?.splash?.dmg ?? 0);
+  const killed = dealDamage(s, frontDamage, false, spell?.splash?.dmg ?? 0);
 
   return { damage, hits, swordMod, spell, killed, gained, guard, swords: n(SWORD) > 0 ? swords : 0, sunder };
 }
@@ -372,12 +442,15 @@ export function applyMatches(s: RunState, counts: Record<number, number>): Match
  * A raw spell blast from outside the board (Stormcall etc.) — runs through the
  * foe's ward like any other magic. Returns what landed.
  */
-export function castBlast(s: RunState, raw: number): { dmg: number; mod: DamageMod; killed: boolean } {
+export function castBlast(s: RunState, raw: number): Pick<SpellOutcome, "dmg" | "mod" | "splash"> & { killed: boolean } {
   if (s.enemy?.kind === "boss") return { dmg: 0, mod: "resist", killed: false }; // his wards drink it whole
   const sM = spellMult(s.enemy?.defense ?? "none");
   const dmg = Math.max(1, Math.round((raw + s.spellBonus) * sM)); // the study sharpens scrolls too
-  const killed = dealDamage(s, dmg);
-  return { dmg, mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak", killed };
+  const rear = ambushRear(s), rearMult = spellMult(rear?.defense ?? "none");
+  const splash = rear ? { dmg: Math.max(1, Math.round((raw + s.spellBonus) * rearMult)),
+    mod: (rearMult === 1 ? "none" : rearMult < 1 ? "resist" : "weak") as DamageMod } : undefined;
+  const killed = dealDamage(s, dmg, false, splash?.dmg ?? 0);
+  return { dmg, mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak", killed, splash };
 }
 
 /** Spawn the next enemy — the scene calls this after the death animation. */
@@ -457,7 +530,7 @@ export function enemyStrike(s: RunState): number {
 export function drinkPotion(s: RunState): void {
   if (s.over) return;
   s.pressure = Math.max(0, s.pressure - POTION_GROUND);
-  s.block += POTION_GUARD;
+  s.block += POTION_GUARD + (s.companions?.includes("rime") ? PET.rime.guard : 0);
   s.score += 30;
   clampPressure(s);
 }

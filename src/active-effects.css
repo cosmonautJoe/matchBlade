@@ -3,3 +3,11 @@
 .active-effect{flex:0 0 auto;display:flex;align-items:center;gap:3px;height:22px;padding:1px 4px;border:1px solid #58765c;border-radius:4px;background:#1b2e24ed;box-sizing:border-box;white-space:nowrap}
 .effect-icon{font-size:16px}.effect-status{color:#d4e9a7;font-variant-numeric:tabular-nums}.active-effect.is-paused .effect-status{color:#aeb9b1}
 .active-effects.is-wide{flex-wrap:wrap;align-content:flex-start;overflow-x:hidden;overflow-y:auto;touch-action:pan-y}
+.active-effect{font:inherit;color:inherit;cursor:pointer;touch-action:manipulation}
+.active-effect:hover,.active-effect[aria-expanded="true"]{border-color:#e2c585;background:#35443a}
+.active-effect:focus-visible{outline:2px solid #ffe1a1;outline-offset:-2px}
+.effect-detail{position:absolute;z-index:50;box-sizing:border-box;padding:12px 14px;border:1px solid #b59a63;border-radius:12px;background:linear-gradient(140deg,#30393f,#20272d);box-shadow:0 6px 25px #0009;color:#f4eee0;font:16px/1.4 system-ui,sans-serif;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y}
+.effect-detail[hidden]{display:none}.effect-detail header{display:flex;align-items:center;gap:8px}.effect-detail h3{margin:0;font-size:17px;line-height:1.25;color:#ffe0a0}.effect-detail-icon{font-size:23px;flex-shrink:0}
+.effect-detail header button{flex-shrink:0;margin-left:auto;width:36px;height:36px;border:1px solid #606569;border-radius:8px;background:#394147;color:#f4eee0;cursor:pointer;font:16px system-ui,sans-serif;touch-action:manipulation}.effect-detail header button:focus-visible{outline:2px solid #ffe1a1}
+.effect-detail p{margin:7px 0 0}.effect-detail .effect-detail-status{color:#bddbe2;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
+#effect-detail-description{white-space:pre-line}

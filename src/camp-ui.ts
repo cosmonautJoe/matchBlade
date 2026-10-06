@@ -20,12 +20,14 @@ export interface PanelCard {
 export interface CampPanel {
   title: string;
   subtitle: string;
-  kind?: "shop" | "quests" | "upgrade";
+  kind?: "shop" | "quests" | "upgrade" | "routes";
   npc?: CampNpc;
   cards: PanelCard[];
   footer?: string;
   reply?: { speaker: string; text: string };
   actions?: PanelAction[];
+  tabs?: PanelAction[];
+  animateNpc?: boolean;
   onClose: () => void;
 }
 
@@ -35,7 +37,7 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
   const overlay = document.createElement("div");
   const isShop = model.kind === "shop";
   const npc = model.npc ?? (isShop ? "shop" : undefined);
-  const camp = npc ? document.querySelector<HTMLElement>(".caravan-hub") : null;
+  const camp = document.querySelector<HTMLElement>(".caravan-hub");
   let closing = false;
   let merchantView: ReturnType<typeof createCampNpcView> | null = null;
   const requestClose = (done = model.onClose) => {
@@ -100,6 +102,13 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
   close.setAttribute("aria-label", "Close panel");
   header.append(heading, close);
   dialog.append(header);
+  if (model.tabs?.length) {
+    const tabs=el("nav","mb-panel-tabs");tabs.setAttribute("aria-label","Guide sections");
+    for(const def of model.tabs) {
+      const button=action(def);button.setAttribute("aria-pressed",String(!def.secondary));tabs.append(button);
+    }
+    dialog.append(tabs);
+  }
   const content = el("div", "mb-panel-content");
   if (model.reply) {
     const reply = el("aside", "mb-npc-reply");
@@ -183,7 +192,7 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
   const environment = camp?.querySelector<HTMLElement>(".caravan-environment");
   const prep = camp?.querySelector<HTMLElement>(".caravan-prep");
   const syncBounds = () => {
-    if (!environment || !prep) return;
+    if (!npc || !environment || !prep) return;
     const parent = document.getElementById("game")!.getBoundingClientRect();
     const e = environment.getBoundingClientRect(), p = prep.getBoundingClientRect();
     const landscape = matchMedia("(orientation: landscape)").matches;
@@ -199,10 +208,12 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
   if (environment && prep) { layoutObserver.observe(environment); layoutObserver.observe(prep); syncBounds(); }
   // The close-up samples the live camp art; the camp itself keeps its original framing.
   const wasInert = camp?.inert ?? false;
-  if (camp) { camp.classList.add("is-serving"); camp.inert = true; }
-  merchantView = camp && npc ? createCampNpcView(camp, merchant, npc, !model.reply) : null;
+  if (camp) { if (npc) camp.classList.add("is-serving"); camp.inert = true; }
+  merchantView = camp && npc ? createCampNpcView(camp, merchant, npc, model.animateNpc ?? !model.reply) : null;
   if (npc) overlay.addEventListener("click", event => {
-    if (event.target === overlay) requestClose();
+    const inScenery = event.target instanceof Node && merchant.contains(event.target);
+    if (event.target === overlay || (inScenery && !merchantView?.containsCart(event.clientX, event.clientY)))
+      requestClose();
   });
   close.focus({ preventScroll: true });
   const dispose = () => {

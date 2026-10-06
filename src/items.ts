@@ -22,6 +22,8 @@ export interface ItemDef {
   hint: string; // tooltip footer ("tap to use" variants)
   bossOnly?: boolean; // only appears in the boss-hoard table
   bossAid?: boolean; // a warden-charm: only does anything inside a boss arena.
+  zone?: "forest" | "snow" | "dungeon"; // guaranteed local shop supply, excluded from generic chest rolls
+  price?: number; // optional gem price instead of the tier default
   // The Peddler always keeps one of these on her table (see rollShopOffers) —
   // her whole pitch is that a boss fight is survivable if you shop first.
 }
@@ -30,6 +32,7 @@ export type ChestPull = { kind: "wood" | "ore" | "treasure" | "item"; n: number;
 
 // ---- effect tuning (the scene reads these) ---------------------------------
 export const STORMCALL_DMG = 25;
+export const AMBUSH_FLASK_DMG = 12;
 export const WARHORN_SECS = 15;
 export const WAYSTONE_SECS = 12;
 export const BULWARK_BLOCK = 6; // guard charges — six shields' worth
@@ -54,7 +57,7 @@ export const ITEMS: ItemDef[] = [
   { id: "whetstone", name: "Sharpening Stone", glyph: "🗡️", tier: "common", target: "none",
     desc: `Your next ${WHETSTONE_CHARGES} sword matches attack with at least 5 tiles of power. Lasts until used.`, hint: TAP },
   { id: "stormcall", name: "Lightning Scroll", glyph: "📜", tier: "rare", target: "none",
-    desc: `${STORMCALL_DMG} base spell damage, plus staff upgrades. Enemy resistance applies. Cannot damage bosses.`, hint: "tap during a regular fight" },
+    desc: `${STORMCALL_DMG} base spell damage, plus spell upgrades. Enemy resistance applies. Cannot damage bosses.`, hint: "tap during a regular fight" },
   { id: "warhorn", name: "Rally Horn", glyph: "📯", tier: "common", target: "none",
     desc: `For ${WARHORN_SECS}s of regular combat, kills push you back toward safety twice as far.`, hint: TAP },
   { id: "cinderflask", name: "Fire Bomb", glyph: "🔥", tier: "uncommon", target: "none", bossOnly: true,
@@ -70,22 +73,27 @@ export const ITEMS: ItemDef[] = [
     desc: "The current regular enemy attacks more slowly until defeated. Does not affect its attack already in progress.", hint: "tap during a regular fight" },
   // ---- board ----
   { id: "sapper", name: "Tile Bomb", glyph: "💣", tier: "uncommon", target: "cell",
-    desc: "Clear a 3×3 area. Wood, ore and gems are collected; combat tiles and keys use normal match thresholds. Potions are collected too.", hint: AIM },
+    desc: "Clear a 3×3 area. Wood, stone and gems are collected; combat tiles and keys use normal match thresholds. Potions are collected too.", hint: AIM },
   { id: "prism", name: "Sword Converter", glyph: "🔮", tier: "rare", target: "type",
     desc: "Choose a tile type to turn all its tiles into swords. Any resulting matches activate immediately.", hint: AIM },
   { id: "dice", name: "Shuffle", glyph: "🎲", tier: "common", target: "none",
     desc: "Replace the board with new tiles and at least one valid move. Replaced tiles give no rewards.", hint: TAP },
   { id: "lodestone", name: "Resource Magnet", glyph: "🧲", tier: "uncommon", target: "none",
-    desc: "Collect all wood and ore tiles, then refill the gaps. Kept if there is nothing to collect.", hint: TAP },
+    desc: "Collect all wood and stone tiles, then refill the gaps. Kept if there is nothing to collect.", hint: TAP },
   // ---- economy ----
+  // Keep the saved ID so already purchased forest supplies remain useful.
+  { id: "shears", name: "Ember Flask", glyph: "🏺", tier: "common", target: "none", zone: "forest", price: 4,
+    desc: `${AMBUSH_FLASK_DMG} base fire damage to both ambushers, plus spell upgrades. Resistance applies. Kept unless both enemies are present.`, hint: "tap during a forest ambush" },
+  { id: "thawflask", name: "Thaw Flask", glyph: "♨️", tier: "common", target: "none", zone: "snow", price: 6,
+    desc: "Melt all current ice and prevent new ice until you defeat 3 more enemies. Does not stack. Tiles stay on the board.", hint: TAP },
+  { id: "lockpick", name: "Lockpick", glyph: "🔓", tier: "common", target: "none", zone: "dungeon", price: 4,
+    desc: "Open the current bonus cache immediately for 3 gems, without spending keys. Counts toward the 3-cache limit. Kept if all caches are open.", hint: TAP },
   { id: "skeleton", name: "Spare Key", glyph: "🗝️", tier: "uncommon", target: "none",
     desc: "Open the next chest without spending a key. Extra uses each cover another chest.", hint: TAP },
   { id: "pan", name: "Bonus Loot", glyph: "🎁", tier: "uncommon", target: "none",
     desc: `The next chest gives ${PAN_EXTRA_PULLS} extra rewards. Extra uses each apply to another chest.`, hint: TAP },
   { id: "ledger", name: "Double Resources", glyph: "📒", tier: "uncommon", target: "none",
-    desc: `Double wood, ore and gems collected from the board for ${LEDGER_SECS}s of regular combat. Does not double chest loot or keys.`, hint: TAP },
-  { id: "ink", name: "Scout Map", glyph: "🗺️", tier: "common", target: "none",
-    desc: "Show the next three encounter types: enemies, chests or bosses. Lasts for this run.", hint: TAP },
+    desc: `Double wood, stone and gems collected from the board for ${LEDGER_SECS}s of regular combat. Does not double chest loot or keys.`, hint: TAP },
   // ---- warden-charms (the Peddler's speciality; dead weight outside a boss) ----
   { id: "wardsalve", name: "Boss Armor", glyph: "🩹", tier: "uncommon", target: "none", bossAid: true,
     desc: "Boss hits move you half as far toward the skull for this run. Does not stack or affect regular enemies.", hint: "tap before or during a boss" },
@@ -106,14 +114,15 @@ export interface ItemUseContext {
 /** Validate before spending a slot: an unusable item stays in the inventory. */
 export function itemUseReason(def: ItemDef, ctx: ItemUseContext): string | null {
   if (ctx.arena && !def.bossAid && def.id !== "hearth") return "Use this between boss fights.";
-  if (["stormcall", "cinderflask", "spurs"].includes(def.id)) {
+  if (def.zone && ctx.boardBusy) return "Wait for the board to settle.";
+  if (["stormcall", "cinderflask", "spurs", "shears"].includes(def.id)) {
     if (ctx.boss) return "This item only works on regular enemies.";
     if (!ctx.hasEnemy) return "Wait for an enemy to engage.";
     if (ctx.boardBusy) return "Wait for the board to settle.";
   }
   if ((def.target !== "none" || ["dice", "lodestone"].includes(def.id)) && ctx.boardBusy)
     return "Wait for the board to settle.";
-  if (def.id === "lodestone" && !ctx.hasMaterials) return "No wood or ore to collect. Item kept.";
+  if (def.id === "lodestone" && !ctx.hasMaterials) return "No wood or stone to collect. Item kept.";
   if (def.id === "cinderflask" && ctx.burning) return "This enemy is already burning. Item kept.";
   if (def.id === "whetstone" && ctx.sunder) return "Your sword already defeats regular enemies in one match. Item kept.";
   return null;
@@ -148,7 +157,7 @@ export function rollItem(bossHoard: boolean, rand: () => number = Math.random): 
       break;
     }
   }
-  const pool = ITEMS.filter((i) => i.tier === tier && (bossHoard || !i.bossOnly));
+  const pool = ITEMS.filter((i) => !i.zone && i.tier === tier && (bossHoard || !i.bossOnly));
   return pool[(rand() * pool.length) | 0];
 }
 

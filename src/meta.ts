@@ -5,23 +5,36 @@
  * resources, hired recruits, forge upgrades, and the quest board. Runs stay
  * disposable (run.ts); the camp reads/writes this.
  *
- * QUESTS (YMBAB-style, with our twist): the Wayfarer OFFERS quests from an
- * ordered pool; the player ACCEPTS up to MAX_ACTIVE at a time. Progress counts
- * from the moment of acceptance (delta quests snapshot a baseline), so you
- * can't retro-complete. Completing quests frees a slot and the next offers
- * appear. Quests are optional; defeating the final boss opens the next biome.
+ * Up to three quests per area track automatically. Camp pays completed quests
+ * and fills the current area's slots; other areas retain their progress.
+ * Achievements are permanent badges. Final bosses alone unlock the next zone.
  */
+
+import { cleanCompanions, type CompanionId } from "./companions";
+import { cleanAchievements, unlockAchievements } from "./achievements";
 
 export interface ActiveQuest {
   id: string;
   base: number; // stat snapshot at acceptance (delta quests)
 }
 
+export interface ZoneStats {
+  slain: number;
+  chestsOpened: number;
+  totalWood: number;
+  totalOre: number;
+}
+const emptyZoneStats = (): ZoneStats => ({ slain: 0, chestsOpened: 0, totalWood: 0, totalOre: 0 });
+
 export interface MetaState {
   version: 1;
+  companions: CompanionId[];
+  achievements: string[];
+  progressNotice: { quests: string[]; achievements: string[] };
   // the caravan's current stop; the quest board + both scenes' art route off this
   biome: string;
   clearedBiomes: string[];
+  zoneStats: Record<string, ZoneStats>;
   activeRun?: import("./run-save").RunCheckpoint;
   // banked resources (keys are per-run tension — they don't bank)
   wood: number;
@@ -50,7 +63,7 @@ export interface MetaState {
   // item ids bought from the Peddler, delivered into slots when the next run starts
   stockedItems: string[];
   // quest board
-  active: ActiveQuest[];
+  active: ActiveQuest[]; // up to three per area; use currentQuests for the current stop
   questsRewarded: string[]; // completed & paid out
   fulfilledRuns: string[]; // single-run quests satisfied since acceptance
 }
@@ -61,8 +74,12 @@ export const MAX_ACTIVE = 3;
 export function defaultMeta(): MetaState {
   return {
     version: 1,
+    companions: [],
+    achievements: [],
+    progressNotice: { quests: [], achievements: [] },
     biome: "plains",
     clearedBiomes: [],
+    zoneStats: {},
     wood: 0,
     ore: 0,
     treasure: 0,
@@ -100,6 +117,41 @@ export function loadMeta(): MetaState {
 /** Preserve roads unlocked by the old quest gate when loading older saves. */
 export function migrateMeta(parsed: Partial<MetaState>): MetaState {
   const m: MetaState = { ...defaultMeta(), ...parsed, version: 1 };
+  m.companions = cleanCompanions(parsed.companions);
+  m.achievements = cleanAchievements(parsed.achievements);
+  // Scout Map was retired; old packed copies must not occupy shop capacity.
+  m.stockedItems = (Array.isArray(parsed.stockedItems) ? parsed.stockedItems : []).filter(id => id !== "ink");
+  const quests = (ids: unknown): string[] => Array.isArray(ids)
+    ? [...new Set(ids.filter((id): id is string => typeof id === "string" && !!questById(id)))] : [];
+  m.questsRewarded = quests(parsed.questsRewarded);
+  m.fulfilledRuns = quests(parsed.fulfilledRuns);
+  const activeIds = new Set<string>();
+  const slots: Record<string, number> = {};
+  m.active = (Array.isArray(parsed.active) ? parsed.active : []).filter(a => {
+    if (!a || !questById(a.id) || !Number.isFinite(a.base) || activeIds.has(a.id) || m.questsRewarded.includes(a.id)) return false;
+    const biome = questBiome(a.id)!;
+    if ((slots[biome] ?? 0) >= MAX_ACTIVE) return false;
+    slots[biome] = (slots[biome] ?? 0) + 1;
+    activeIds.add(a.id); return true;
+  }).map(a => ({ id: a.id, base: a.base }));
+  m.zoneStats = {};
+  for (const biome of BIOME_ORDER) {
+    const stats = emptyZoneStats(), saved = parsed.zoneStats?.[biome];
+    for (const key of Object.keys(stats) as (keyof ZoneStats)[])
+      stats[key] = Number.isFinite(saved?.[key]) ? Math.max(0, saved![key]) : 0;
+    m.zoneStats[biome] = stats;
+  }
+  // Older saves only know lifetime totals. Keep each visible quest's earned
+  // progress as a baseline credit; never guess how past runs split across zones.
+  if (!parsed.zoneStats) for (const aq of m.active) {
+    const q = questById(aq.id)!;
+    if (q.kind === "delta" && q.stat !== "swordLevel" && q.stat !== "staffLevel")
+      aq.base = -Math.max(0, Math.min(q.target, m[q.stat!] - aq.base));
+  }
+  m.progressNotice = {
+    quests: quests(parsed.progressNotice?.quests).filter(id => m.questsRewarded.includes(id)),
+    achievements: cleanAchievements(parsed.progressNotice?.achievements).filter(id => m.achievements.includes(id)),
+  };
   // Hiring the smith now includes the first improvement, including existing saves.
   if (m.blacksmithHired) m.swordLevel = Math.max(1, m.swordLevel);
   m.clearedBiomes = Array.isArray(parsed.clearedBiomes) ? [...parsed.clearedBiomes] : [];
@@ -176,11 +228,16 @@ export function bankRun(
   m.totalOre += run.ore;
   m.slain += run.kills;
   m.chestsOpened += run.chests;
+  const stats = m.zoneStats[m.biome] ??= emptyZoneStats();
+  stats.slain += run.kills;
+  stats.chestsOpened += run.chests;
+  stats.totalWood += run.wood;
+  stats.totalOre += run.ore;
   m.bestDepth = Math.max(m.bestDepth, run.kills); // depth == kills this run
   if (run.kills >= 20 && !m.clearedBiomes.includes(m.biome)) m.clearedBiomes.push(m.biome);
   delete m.activeRun; // settlement and checkpoint removal share one storage write
   // single-run quests: did this run satisfy any accepted "in one run" targets?
-  for (const aq of m.active) {
+  for (const aq of currentQuests(m)) {
     const q = questById(aq.id);
     if (q?.kind === "run-depth" && run.kills >= q.target && !m.fulfilledRuns.includes(q.id)) m.fulfilledRuns.push(q.id);
   }
@@ -268,7 +325,7 @@ export const PLAINS_QUESTS: Quest[] = [
   { id: "hire", label: "Hire Wren the blacksmith", shortLabel: "hire the smith", reward: 15, kind: "state", target: 1 },
   { id: "depth10", label: "Reach depth 10 in a single run", shortLabel: "depth 10 run", reward: 15, kind: "run-depth", target: 10 },
   { id: "slay60", label: "Defeat 60 more enemies", shortLabel: "defeat enemies II", reward: 15, kind: "delta", stat: "slain", target: 60 },
-  { id: "ore80", label: "Collect 80 ore and finish the run", shortLabel: "haul ore", reward: 15, kind: "delta", stat: "totalOre", target: 80 },
+  { id: "ore80", label: "Collect 80 stone and finish the run", shortLabel: "haul stone", reward: 15, kind: "delta", stat: "totalOre", target: 80 },
   { id: "forge2", label: "Upgrade your sword to level 3", shortLabel: "sword level 3", reward: 20, kind: "delta", stat: "swordLevel", target: 3 },
   { id: "chests12", label: "Open 12 more chests", shortLabel: "open chests II", reward: 15, kind: "delta", stat: "chestsOpened", target: 12 },
   { id: "depth16", label: "Reach depth 16 in a single run", shortLabel: "depth 16 run", reward: 25, kind: "run-depth", target: 16 },
@@ -279,7 +336,7 @@ export const FOREST_QUESTS: Quest[] = [
   { id: "f_slay50", label: "Defeat 50 forest enemies", shortLabel: "forest enemies", reward: 20, kind: "delta", stat: "slain", target: 50 },
   { id: "f_chests10", label: "Open 10 treasure chests", shortLabel: "open chests", reward: 20, kind: "delta", stat: "chestsOpened", target: 10 },
   { id: "f_wood120", label: "Collect 120 wood and finish the run", shortLabel: "haul wood", reward: 20, kind: "delta", stat: "totalWood", target: 120 },
-  { id: "f_ore120", label: "Collect 120 ore and finish the run", shortLabel: "haul ore", reward: 25, kind: "delta", stat: "totalOre", target: 120 },
+  { id: "f_ore120", label: "Collect 120 stone and finish the run", shortLabel: "haul stone", reward: 25, kind: "delta", stat: "totalOre", target: 120 },
   { id: "f_forge3", label: "Upgrade your sword to level 6", shortLabel: "sword level 6", reward: 30, kind: "delta", stat: "swordLevel", target: 6 },
   // Runs end victorious at depth 20 (the second boss) — quests fit the road.
   { id: "f_depth22", label: "Reach depth 18 in a single run", shortLabel: "depth 18 run", reward: 30, kind: "run-depth", target: 18 },
@@ -291,7 +348,7 @@ export const SNOW_QUESTS: Quest[] = [
   { id: "s_slay80", label: "Defeat 80 snow enemies", shortLabel: "snow enemies", reward: 30, kind: "delta", stat: "slain", target: 80 },
   { id: "s_chests15", label: "Open 15 treasure chests", shortLabel: "open chests", reward: 30, kind: "delta", stat: "chestsOpened", target: 15 },
   { id: "s_wood180", label: "Collect 180 wood and finish the run", shortLabel: "haul wood", reward: 35, kind: "delta", stat: "totalWood", target: 180 },
-  { id: "s_ore180", label: "Collect 180 ore and finish the run", shortLabel: "haul ore", reward: 35, kind: "delta", stat: "totalOre", target: 180 },
+  { id: "s_ore180", label: "Collect 180 stone and finish the run", shortLabel: "haul stone", reward: 35, kind: "delta", stat: "totalOre", target: 180 },
   { id: "s_forge9", label: "Upgrade your sword to level 9", shortLabel: "sword level 9", reward: 45, kind: "delta", stat: "swordLevel", target: 9 },
   { id: "s_depth20", label: "Defeat the second boss", shortLabel: "clear the pass", reward: 60, kind: "run-depth", target: 20 },
 ];
@@ -301,13 +358,16 @@ export const DUNGEON_QUESTS: Quest[] = [
   { id: "d_slay120", label: "Defeat 120 dungeon enemies", shortLabel: "dungeon enemies", reward: 40, kind: "delta", stat: "slain", target: 120 },
   { id: "d_chests20", label: "Open 20 treasure chests", shortLabel: "open chests", reward: 40, kind: "delta", stat: "chestsOpened", target: 20 },
   { id: "d_wood240", label: "Collect 240 wood and finish the run", shortLabel: "haul wood", reward: 45, kind: "delta", stat: "totalWood", target: 240 },
-  { id: "d_ore240", label: "Collect 240 ore and finish the run", shortLabel: "haul ore", reward: 45, kind: "delta", stat: "totalOre", target: 240 },
+  { id: "d_ore240", label: "Collect 240 stone and finish the run", shortLabel: "haul stone", reward: 45, kind: "delta", stat: "totalOre", target: 240 },
   { id: "d_forge12", label: "Upgrade your sword to level 12", shortLabel: "sword level 12", reward: 60, kind: "delta", stat: "swordLevel", target: 12 },
   { id: "d_depth20", label: "Defeat the second boss", shortLabel: "clear the deep", reward: 80, kind: "run-depth", target: 20 },
 ];
 
 // Ordered march of the caravan. Each biome has an optional quest pool.
 export const BIOME_ORDER = ["plains", "forest", "snow", "dungeon"] as const;
+export const BIOME_LABELS: Record<string, string> = {
+  plains: "Grass Plains", forest: "High Forest", snow: "Glacial Pass", dungeon: "The Delve",
+};
 export const QUEST_POOLS: Record<string, Quest[]> = {
   plains: PLAINS_QUESTS,
   forest: FOREST_QUESTS,
@@ -328,8 +388,17 @@ export function questById(id: string): Quest | undefined {
   return undefined;
 }
 
-function statOf(m: MetaState, stat: DeltaStat): number {
-  return m[stat];
+export function questBiome(id: string): string | undefined {
+  return BIOME_ORDER.find(biome => QUEST_POOLS[biome].some(q => q.id === id));
+}
+
+export function currentQuests(m: MetaState, biome = m.biome): ActiveQuest[] {
+  return m.active.filter(aq => questBiome(aq.id) === biome);
+}
+
+function statOf(m: MetaState, stat: DeltaStat, biome = m.biome): number {
+  if (stat === "swordLevel" || stat === "staffLevel") return m[stat];
+  return m.zoneStats[biome]?.[stat] ?? 0;
 }
 
 /** Progress of an ACCEPTED quest, optionally counting the run in progress. */
@@ -340,6 +409,8 @@ export function questProgress(
 ): { have: number; need: number } {
   const q = questById(aq.id);
   if (!q) return { have: 0, need: 1 };
+  const biome = questBiome(aq.id)!;
+  if (biome !== m.biome) live = undefined;
   if (q.kind === "state") return { have: m.blacksmithHired ? 1 : 0, need: 1 };
   if (q.kind === "run-depth") {
     const hit = m.fulfilledRuns.includes(q.id) || (live ? live.kills >= q.target : false);
@@ -348,7 +419,7 @@ export function questProgress(
   // forge quests measure the blade's ABSOLUTE level (caps make deltas
   // unreachable if accepted after a forging) — other stats count from accept
   const absolute = q.stat === "swordLevel" || q.stat === "staffLevel"; // capped levels: measure absolutely
-  let have = absolute ? statOf(m, q.stat!) : statOf(m, q.stat!) - aq.base;
+  let have = absolute ? statOf(m, q.stat!) : statOf(m, q.stat!, biome) - aq.base;
   if (live) {
     if (q.stat === "slain") have += live.kills;
     else if (q.stat === "chestsOpened") have += live.chests;
@@ -366,12 +437,12 @@ export function questDone(m: MetaState, aq: ActiveQuest): boolean {
 /** Quests the Wayfarer is offering right now (fills free slots, current-biome pool order). */
 export function offeredQuests(m: MetaState): Quest[] {
   const taken = new Set([...m.active.map((a) => a.id), ...m.questsRewarded]);
-  const room = MAX_ACTIVE - m.active.length;
+  const room = MAX_ACTIVE - currentQuests(m).length;
   return currentPool(m).filter((q) => !taken.has(q.id)).slice(0, Math.max(0, room));
 }
 
 export function acceptQuest(m: MetaState, id: string): boolean {
-  if (m.active.length >= MAX_ACTIVE) return false;
+  if (currentQuests(m).length >= MAX_ACTIVE || questBiome(id) !== m.biome) return false;
   const q = questById(id);
   if (!q || m.active.some((a) => a.id === id) || m.questsRewarded.includes(id)) return false;
   const base = q.kind === "delta" ? statOf(m, q.stat!) : 0;
@@ -381,23 +452,63 @@ export function acceptQuest(m: MetaState, id: string): boolean {
 }
 
 /** Move finished active quests to completed, pay their rewards. Returns them. */
-export function collectQuestRewards(m: MetaState): Quest[] {
-  const done = m.active.filter((aq) => questDone(m, aq));
+export function collectQuestRewards(m: MetaState, persist = true): Quest[] {
+  const done = currentQuests(m).filter((aq) => questDone(m, aq));
   if (!done.length) return [];
   const quests: Quest[] = [];
   for (const aq of done) {
+    if (m.questsRewarded.includes(aq.id)) continue;
     const q = questById(aq.id)!;
     m.treasure += q.reward;
     m.questsRewarded.push(q.id);
     quests.push(q);
   }
-  m.active = m.active.filter((aq) => !questDone(m, aq) || !m.questsRewarded.includes(aq.id));
   m.active = m.active.filter((aq) => !m.questsRewarded.includes(aq.id));
-  saveMeta(m);
+  if (persist) saveMeta(m);
   return quests;
 }
 
-/** The current biome's whole quest pool cleared -> the road onward opens. */
+/** Settle only between runs: one save contains payments, replacements and badges. */
+export function prepareCampProgress(m: MetaState) {
+  const paid: Quest[] = [];
+  let added = 0;
+  if (m.activeRun) return { paid, achievements: [] as ReturnType<typeof unlockAchievements> };
+  do {
+    paid.push(...collectQuestRewards(m, false));
+    for (const q of offeredQuests(m)) {
+      m.active.push({ id: q.id, base: q.kind === "delta" ? statOf(m, q.stat!) : 0 });
+      added++;
+    }
+    // Hiring/upgrade quests may already be satisfied when they become available.
+    // Only those pay immediately; new haul and depth quests require future runs.
+  } while (currentQuests(m).some(aq => questDone(m, aq)));
+  const achievements = unlockAchievements(m);
+  if (paid.length || achievements.length || added) {
+    m.progressNotice.quests = [...new Set([...m.progressNotice.quests, ...paid.map(q => q.id)])];
+    m.progressNotice.achievements = [...new Set([...m.progressNotice.achievements, ...achievements.map(a => a.id)])];
+    saveMeta(m);
+  }
+  return { paid, achievements };
+}
+
+export function acknowledgeProgress(m: MetaState) {
+  if (!m.progressNotice.quests.length && !m.progressNotice.achievements.length) return;
+  m.progressNotice = { quests: [], achievements: [] }; saveMeta(m);
+}
+
+export function progressNoticeText(m: MetaState): string {
+  const { quests, achievements } = m.progressNotice;
+  const gems = quests.reduce((sum, id) => sum + (questById(id)?.reward ?? 0), 0);
+  return [quests.length ? `✓ ${quests.length} quest${quests.length === 1 ? "" : "s"} completed · +${gems} gems collected` : "",
+    achievements.length ? `★ ${achievements.length} achievement${achievements.length === 1 ? "" : "s"} unlocked` : ""].filter(Boolean).join("\n");
+}
+
+export function campQuestFocus(m: MetaState) {
+  return currentQuests(m).map(aq => ({ quest: questById(aq.id)!, progress: questProgress(m, aq) }))
+    .sort((a, b) => b.progress.have / b.progress.need - a.progress.have / a.progress.need)[0] ?? null;
+}
+
+/** All optional quests in the current biome have been rewarded. */
 export function allQuestsDone(m: MetaState): boolean {
   const pool = currentPool(m);
   return pool.length > 0 && pool.every((q) => m.questsRewarded.includes(q.id));
@@ -414,12 +525,29 @@ export function roadOpen(m: MetaState): boolean {
   return m.clearedBiomes.includes(m.biome) && nextBiome(m) !== null;
 }
 
-/** Break camp and travel to the next biome. Clears any dangling active quests. */
+/** Cleared roads and the next reachable stop are always available to revisit. */
+export function unlockedBiomes(m: MetaState): string[] {
+  let furthest = Math.max(0, BIOME_ORDER.indexOf(m.biome as typeof BIOME_ORDER[number]));
+  for (const biome of m.clearedBiomes) {
+    const i = BIOME_ORDER.indexOf(biome as typeof BIOME_ORDER[number]);
+    if (i >= 0) furthest = Math.max(furthest, Math.min(BIOME_ORDER.length - 1, i + 1));
+  }
+  return BIOME_ORDER.slice(0, furthest + 1);
+}
+
+/** Travel only between runs; inventory, upgrades and each area's quests stay saved. */
+export function travelToBiome(m: MetaState, biome: string): boolean {
+  if (m.activeRun || biome === m.biome || !unlockedBiomes(m).includes(biome)) return false;
+  prepareCampProgress(m);
+  m.biome = biome;
+  saveMeta(m);
+  prepareCampProgress(m);
+  return true;
+}
+
+/** Forward-travel shortcut used by run results. */
 export function advanceBiome(m: MetaState): boolean {
   const next = nextBiome(m);
   if (!roadOpen(m) || !next) return false;
-  m.biome = next;
-  // Carry optional quests forward; players don't lose accepted goals by traveling.
-  saveMeta(m);
-  return true;
+  return travelToBiome(m, next);
 }

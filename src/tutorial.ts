@@ -61,7 +61,7 @@ const COPY: { title: string; body: string }[] = [
   },
   {
     title: "SWORDS STRIKE",
-    body: "Match ⚔️ swords for melee damage or 🪄 staves for spell damage. Make the highlighted swap to attack.",
+    body: "Match ⚔️ swords for melee damage or purple fireballs for spell damage. Make the highlighted swap to attack.",
   },
   {
     title: "WATCH YOUR POSITION",
@@ -77,7 +77,7 @@ const COPY: { title: string; body: string }[] = [
   },
   {
     title: "UPGRADE AT CAMP",
-    body: "Keep all collected 🪵 wood, 🪨 ore and 💎 gems, even if you lose. Spend them at camp on permanent upgrades and items.",
+    body: "Keep all collected 🪵 wood, 🪨 stone and 💎 gems, even if you lose. Spend them at camp on permanent upgrades and items.",
   },
   {
     title: "YOU'RE READY",

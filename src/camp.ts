@@ -21,10 +21,17 @@ import type { CampNpc } from "./camp-npc-view";
 import { createVillageHub } from "./village-hub";
 import { createCaravan } from "./caravan";
 import { campReaction, SPEAKERS, type CampReaction } from "./camp-dialogue";
+import { ACHIEVEMENTS, achievementProgress } from "./achievements";
+import { COMPANIONS } from "./companions";
 import {
   type MetaState,
   loadMeta,
   saveMeta,
+  BIOME_ORDER,
+  BIOME_LABELS,
+  QUEST_POOLS,
+  unlockedBiomes,
+  travelToBiome,
   canAfford,
   spend,
   BLACKSMITH_COST,
@@ -37,13 +44,12 @@ import {
   wizardAvailable,
   questById,
   questProgress,
-  questDone,
-  offeredQuests,
-  acceptQuest,
-  collectQuestRewards,
-  allQuestsDone,
+  prepareCampProgress,
+  acknowledgeProgress,
+  progressNoticeText,
+  currentPool,
+  currentQuests,
   roadOpen,
-  advanceBiome,
   nextBiome,
   MAX_ACTIVE,
 } from "./meta";
@@ -449,6 +455,7 @@ export class CampScene extends Phaser.Scene {
   private closeNativePanel: (() => void) | null = null;
   private campDock: HTMLElement | null = null;
   private villageHub: ReturnType<typeof createVillageHub> | ReturnType<typeof createCaravan> | null = null;
+  private shownProgressNotice = "";
   private campPan: HTMLElement | null = null;
   private campFocus = -130;
   private peddlerBark: Phaser.GameObjects.Container | null = null;
@@ -538,7 +545,9 @@ export class CampScene extends Phaser.Scene {
     this.peddler = null;
     this.peddlerBark = null;
     this.toastStack = [];
+    this.shownProgressNotice = "";
     this.meta = loadMeta();
+    prepareCampProgress(this.meta);
     // a 💾-saved edit wins over the baked table, so work-in-progress survives reloads
     this.lay = loadSavedLayout(this.meta.biome) ?? campLayout(this.meta.biome);
     this.rollShopOffers();
@@ -595,15 +604,8 @@ export class CampScene extends Phaser.Scene {
     this.biomeLabel = this.add
       .text(14, 10, `⛺ CAMP — ${biome.label}`, { fontFamily: "monospace", fontStyle: "bold", fontSize: "15px", color: "#dfe3ea", stroke: "#0a0b0f", strokeThickness: 4 })
       .setDepth(50);
-    // TEMP debug: tap the biome tag to flip plains<->forest instantly (preview both worlds; remove before release)
-    this.biomeLabel.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-      if (this.editMode || this.panelOpen || this.departing || this.cutscene) return;
-      // cycle all worlds for previewing
-      const cycle = ["plains", "forest", "snow", "dungeon"];
-      this.meta.biome = cycle[(cycle.indexOf(this.meta.biome) + 1) % cycle.length];
-      saveMeta(this.meta);
-      this.scene.restart();
-    });
+    this.biomeLabel.setInteractive({ useHandCursor: true })
+      .on("pointerdown", () => this.openRoutes());
     this.resText = this.add
       .text(14, 34, "", { fontFamily: EMOJI_FONT, fontSize: "17px", color: "#dfe3ea", stroke: "#0a0b0f", strokeThickness: 4 })
       .setDepth(50);
@@ -615,8 +617,7 @@ export class CampScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true })
       .on("pointerdown", () => this.openMenu());
 
-    // NB: quest rewards are no longer auto-paid on arrival — the Wayfarer holds
-    // them (her gold "?" invites the visit) and pays when you see her.
+    // Completed objectives were paid before building camp; the guide shows their history.
 
     if (import.meta.env.DEV && new URLSearchParams(location.search).has("debug")) {
       this.buildEditor();
@@ -687,7 +688,7 @@ export class CampScene extends Phaser.Scene {
         this.villageHub.startIntro();
       } else if (!this.meta.campIntroSeen) {
         this.meta.campIntroSeen = true;
-        this.villageHub.announce("Your caravan. Pick a quest, then head out to collect supplies.");
+        this.villageHub.announce("Your quests are tracking. Head out when you're ready.");
       }
       if (!this.meta.peddlerArrived && this.meta.treasure >= 1) {
         this.meta.peddlerArrived = true;
@@ -699,6 +700,8 @@ export class CampScene extends Phaser.Scene {
     else if (!this.meta.campIntroSeen || replayIntro) this.playIntro();
     else if (!this.meta.peddlerArrived && this.meta.treasure >= 1) this.playPeddlerArrival();
     else this.refreshWayfarerMark();
+
+    this.showProgressNotice();
 
     if (import.meta.env.DEV) (globalThis as unknown as { __mbCamp: CampScene }).__mbCamp = this;
   }
@@ -973,26 +976,19 @@ export class CampScene extends Phaser.Scene {
     }
   }
 
-  /**
-   * The Wayfarer's marker is her state, at a glance:
-   *   big gold "?"  — a sworn oath is DONE; she has payment waiting (top priority)
-   *   big gold "!"  — new oaths to swear (or the road onward is open)
-   *   small gray "?" — oaths in progress, nothing to do at the board yet
-   *   nothing        — no offers, nothing sworn (pool exhausted, journey's end)
-   */
+  /** Legacy scene marker: new journal entries, an open road, or tracked quests. */
   private refreshWayfarerMark() {
     for (const o of this.wayMark) o.destroy();
     this.wayMark = [];
     if (!this.goddess) return;
-    const anyDone = this.meta.active.some((aq) => questDone(this.meta, aq));
-    const hasOffers = offeredQuests(this.meta).length > 0;
+    const hasNews = this.meta.progressNotice.quests.length + this.meta.progressNotice.achievements.length > 0;
     const road = roadOpen(this.meta);
 
     let glyph: string;
     let big: boolean;
-    if (anyDone) [glyph, big] = ["?", true];
-    else if (hasOffers || road) [glyph, big] = ["!", true];
-    else if (this.meta.active.length) [glyph, big] = ["?", false];
+    if (hasNews) [glyph, big] = ["✓", true];
+    else if (road) [glyph, big] = ["!", true];
+    else if (currentQuests(this.meta).length) [glyph, big] = ["▤", false];
     else return;
 
     // boxed and pinned to her sprite so the editor can drag her with it
@@ -1202,7 +1198,7 @@ export class CampScene extends Phaser.Scene {
       lines: [
         { text: "Welcome! This is your camp. You can upgrade your equipment here between runs." },
         {
-          text: "Pick a quest before you start. Use the portal to play a run and collect resources.",
+          text: "Your quests track automatically. Start a run to collect resources and clear the road.",
           cue: () => {
             if (this.departSign)
               this.tweens.add({ targets: this.departSign, scale: 1.3, duration: 260, yoyo: true, repeat: 2, ease: "Sine.easeInOut" });
@@ -1242,7 +1238,7 @@ export class CampScene extends Phaser.Scene {
         this.meta.campIntroSeen = true;
         saveMeta(this.meta);
         this.refreshWayfarerMark();
-        if (skipped) this.toast("Talk to the guide by the portal for quests.");
+        if (skipped) this.toast("Quests are tracking. The guide keeps your progress.");
       },
     });
   }
@@ -1257,7 +1253,7 @@ export class CampScene extends Phaser.Scene {
    * on the table when the player walks up.
    */
   private rollShopOffers() {
-    const pool = ITEMS.filter((i) => !i.bossOnly);
+    const pool = ITEMS.filter((i) => !i.bossOnly && !i.zone);
     Phaser.Utils.Array.Shuffle(pool);
     const aids = pool.filter((i) => i.bossAid);
     const rest = pool.filter((i) => !i.bossAid);
@@ -1266,6 +1262,8 @@ export class CampScene extends Phaser.Scene {
     this.shopOffers = aids.length ? [aids[0], ...rest.slice(0, 2)] : rest.slice(0, 3);
     // A new player can always buy something immediately useful after two gem matches.
     if (this.meta.bestDepth < 10) this.shopOffers = [ITEMS.find(i => i.id === "bulwark")!, ITEMS.find(i => i.id === "wardbell")!, rest.find(i => i.id !== "bulwark")!];
+    const zoneItem = ITEMS.find(i => i.zone === this.meta.biome);
+    if (zoneItem) this.shopOffers = [zoneItem, aids[0], rest[0]];
   }
 
   /**
@@ -1419,14 +1417,14 @@ export class CampScene extends Phaser.Scene {
     const stocked = this.meta.stockedItems;
     const refresh = (reaction?: { speaker: string; text: string }) => { this.closePanel(); this.peddlerTapped(reaction); };
     const cards: PanelCard[] = [...this.shopOffers]
-      .sort((a, b) => Number(!!b.bossAid) - Number(!!a.bossAid))
+      .sort((a, b) => Number(!!b.zone) - Number(!!a.zone) || Number(!!b.bossAid) - Number(!!a.bossAid))
       .map((item) => {
-        const price = PEDDLER_PRICES[item.tier];
+        const price = item.price ?? PEDDLER_PRICES[item.tier];
         const room = stocked.length < MAX_STOCKED;
         const afford = this.meta.treasure >= price;
         return {
           title: item.name, icon: item.glyph,
-          tag: `${item.bossAid ? "Boss item" : "Run item"} · ${item.tier}`,
+          tag: `${item.zone ? `${item.zone[0].toUpperCase()}${item.zone.slice(1)} gear` : item.bossAid ? "Boss item" : "Run item"} · ${item.tier}`,
           lines: [item.desc, item.hint],
           action: {
             label: !room ? "Pack full" : afford ? `Buy · 💎 ${price}` : `Need 💎 ${price}`,
@@ -1478,6 +1476,8 @@ export class CampScene extends Phaser.Scene {
   }
 
   private npcReaction(event: CampReaction, bubble = true) {
+    if ((event === "sword" || event === "smith") && this.villageHub && "forgeBurst" in this.villageHub)
+      this.villageHub.forgeBurst();
     const line = campReaction(event);
     if (bubble && this.villageHub && "say" in this.villageHub) this.villageHub.say(line);
     return { speaker: SPEAKERS[line[0]], text: line[1] };
@@ -1543,12 +1543,28 @@ export class CampScene extends Phaser.Scene {
   }
 
   private refreshResources() {
+    prepareCampProgress(this.meta);
     this.resText.setText(`🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`);
     this.villageHub?.refresh();
+    this.showProgressNotice();
     const sword = this.campDock?.querySelector('[data-service="Sword upgrades"]');
     const magic = this.campDock?.querySelector('[data-service="Magic upgrades"]');
     if (sword) sword.textContent = `Sword level ${this.meta.swordLevel} · Permanent damage`;
     if (magic) magic.textContent = `Staff level ${this.meta.staffLevel} · Permanent damage`;
+  }
+
+  private showProgressNotice() {
+    if (!this.villageHub || this.cutscene || this.panelOpen || this.departing) return;
+    const text = progressNoticeText(this.meta);
+    const key = JSON.stringify(this.meta.progressNotice);
+    if (!text || key === this.shownProgressNotice) return;
+    this.shownProgressNotice = key;
+    if ("announce" in this.villageHub) this.villageHub.announce(text);
+    else this.toast(text);
+    if ("say" in this.villageHub) this.villageHub.say(["quests", this.meta.progressNotice.quests.length
+      ? "Nice work out there. Your quest rewards are in the supplies."
+      : "That's one for the journal. We've come a long way."]);
+    this.sfx("coin3", .35);
   }
 
   /** Simple modal panel: dim veil + title + lines + buttons. One at a time. */
@@ -1556,7 +1572,7 @@ export class CampScene extends Phaser.Scene {
     this.closePanel();
     this.panelOpen = true;
     const costs: string[] = [];
-    for (const [glyph, name, have] of [["🪵", "wood", this.meta.wood], ["🪨", "ore", this.meta.ore], ["💎", "gems", this.meta.treasure]] as const) {
+    for (const [glyph, name, have] of [["🪵", "wood", this.meta.wood], ["🪨", "stone", this.meta.ore], ["💎", "gems", this.meta.treasure]] as const) {
       const match = buttons[0]?.label.match(new RegExp(`${glyph}\\s*(\\d+)`));
       if (match) costs.push(`${glyph} ${have} / ${match[1]} ${name}`);
     }
@@ -1635,8 +1651,6 @@ export class CampScene extends Phaser.Scene {
         this.lightFurnace(true); // she keeps her word — the furnace roars to life
         this.toast("Wren joins the camp ⚒");
         this.refreshWayfarerMark(); // a "hire" oath may now be ready to turn in
-        if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-          this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
       },
     });
   }
@@ -1654,10 +1668,10 @@ export class CampScene extends Phaser.Scene {
     if (!this.meta.wizardHired) {
       const afford = canAfford(this.meta, WIZARD_COST);
       this.panel(
-        "ALDWIN · STAFF UPGRADES",
+        "ALDWIN · SPELL UPGRADES",
         [
-          `I can upgrade the damage from your staff matches.`,
-          `Hire me to unlock permanent staff upgrades.`,
+          `I can upgrade the damage from your fireball matches.`,
+          `Hire me to unlock permanent spell upgrades.`,
           `Each level adds +4 damage to your spells.`,
           ``,
           `Resources:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`,
@@ -1674,12 +1688,12 @@ export class CampScene extends Phaser.Scene {
     const cap = studyCap(this.meta.biome);
     if (lvl >= cap) {
       this.panel(
-        "🪄 STAFF UPGRADES",
+        "✦ SPELL UPGRADES",
         [
           `Staff level ${lvl} · area maximum reached`,
           `Spell damage bonus: +${lvl * SPELL_BONUS_PER_LEVEL}`,
           ``,
-          `You have all the staff upgrades for this area.`,
+          `You have all the spell upgrades for this area.`,
           `More upgrades unlock in the next area.`,
         ],
         [{ label: "later" }],
@@ -1690,7 +1704,7 @@ export class CampScene extends Phaser.Scene {
     const cost = studyCost(lvl);
     const afford = canAfford(this.meta, { ore: cost });
     this.panel(
-      "🪄 STAFF UPGRADES",
+      "✦ SPELL UPGRADES",
       [
         `Spell bonus: +${lvl * SPELL_BONUS_PER_LEVEL} → +${(lvl + 1) * SPELL_BONUS_PER_LEVEL} damage`,
         `Upgrades available in this area: ${cap - lvl}`,
@@ -1720,8 +1734,6 @@ export class CampScene extends Phaser.Scene {
     this.tweens.add({ targets: flare, scale: 3.4, alpha: 0, duration: 700, onComplete: () => flare.destroy() });
     this.toast("Aldwin joins the camp 🪄");
     this.refreshWayfarerMark();
-    if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
   }
 
   private studyUpgrade(cost: number) {
@@ -1732,10 +1744,8 @@ export class CampScene extends Phaser.Scene {
     this.npcReaction("staff");
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.staffLevel >= studyCap(this.meta.biome);
-    this.toast(atPeak ? `Staff maxed for this area · +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} spell damage` : `staff improved — level ${this.meta.staffLevel} 🪄`);
+    this.toast(atPeak ? `Spells maxed for this area · +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} spell damage` : `Spells improved · level ${this.meta.staffLevel}`);
     this.refreshWayfarerMark();
-    if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
   }
 
   /** Wren's forge: permanent sword levels, capped per zone — the cap SUNDERS. */
@@ -1794,76 +1804,105 @@ export class CampScene extends Phaser.Scene {
     const atPeak = this.meta.swordLevel >= forgeCap(this.meta.biome);
     this.toast(atPeak ? "Sword maxed. One match defeats regular enemies in this area." : `blade sharpened — level ${this.meta.swordLevel} ⚔`);
     this.refreshWayfarerMark(); // a forge oath may now be ready to turn in
-    if (this.meta.active.some((aq) => questDone(this.meta, aq)))
-      this.time.delayedCall(1500, () => this.toast("Quest complete. Talk to the guide to collect your reward."));
   }
 
-  /** The Wayfarer's quest board: accepted quests with progress + new offers to accept. */
-  private goddessTapped(reply?: { speaker: string; text: string }) {
+  /** The guide's journal: automatically tracked quests and permanent milestones. */
+  private goddessTapped(tab: "quests" | "achievements" = "quests", switching = false) {
     if (this.editMode || this.panelOpen || this.cutscene) return;
-
-    // turn-ins happen HERE: she pays every kept oath the moment you see her
-    const rewarded = collectQuestRewards(this.meta);
-    if (rewarded.length) {
-      reply = this.npcReaction("reward", false);
-      this.refreshResources();
-      rewarded.forEach((q, i) =>
-        this.time.delayedCall(250 + i * 1200, () => {
-          this.sfx("coin3", 0.5);
-          this.toast(`Quest complete: ${q.label}  +${q.reward} 💎`);
-        }),
-      );
-    }
-
+    prepareCampProgress(this.meta);
+    const receipt = progressNoticeText(this.meta);
+    acknowledgeProgress(this.meta);
+    this.refreshResources();
     this.closePanel();
     this.panelOpen = true;
-
-    const cards: PanelCard[] = this.meta.active.map((aq) => {
+    const cards: PanelCard[] = tab === "achievements" ? ACHIEVEMENTS.map(a => ({
+      title: a.name, icon: a.icon, tag: this.meta.achievements.includes(a.id) ? "Unlocked · permanent badge" : "Achievement",
+      lines: [a.description], progress: achievementProgress(this.meta, a),
+    })) : currentQuests(this.meta).map((aq) => {
       const q = questById(aq.id)!;
       const progress = questProgress(this.meta, aq);
-      return { title: q.label, icon: "📜", tag: "Active quest", lines: [`Reward · 💎 ${q.reward}`], progress };
+      return { title: q.label, icon: "▤", tag: "Tracking automatically", lines: [`Reward · 💎 ${q.reward}`], progress };
     });
-    for (const q of offeredQuests(this.meta)) cards.push({
-      title: q.label, icon: "📜", tag: "Available quest", lines: [`Reward · 💎 ${q.reward}`],
-      action: {
-        label: this.meta.active.length < MAX_ACTIVE ? "Accept quest" : "Quest slots full",
-        enabled: this.meta.active.length < MAX_ACTIVE,
-        run: () => {
-          if (!acceptQuest(this.meta, q.id)) return;
-          this.sfx("pickup", 0.55);
-          this.closePanel();
-          this.goddessTapped(this.npcReaction("quest", false));
-        },
-      },
-    });
-    if (!cards.length) cards.push({
-      title: allQuestsDone(this.meta) ? "Area complete" : "You're all caught up",
-      icon: "✓", lines: [allQuestsDone(this.meta) ? "All quests in this area are complete." : "Come back after your next run."],
-    });
-    const ready = roadOpen(this.meta);
+    if (tab === "quests") {
+      if (!cards.length) cards.push({ title: "All caught up", icon: "✓", lines: ["Every quest in this area is complete. Keep exploring for more."] });
+      for (const q of currentPool(this.meta).filter(q => !this.meta.active.some(a=>a.id===q.id) && !this.meta.questsRewarded.includes(q.id)).slice(0, 2))
+        cards.push({title:q.label,icon:"·",tag:"Up next",lines:[`Starts automatically when a quest slot opens · 💎 ${q.reward}`]});
+      for (const id of this.meta.questsRewarded.filter(id => currentPool(this.meta).some(q => q.id === id)).slice(-3).reverse()) {
+        const q=questById(id)!;
+        cards.push({title:q.label,icon:"✓",tag:"Completed",lines:[`💎 ${q.reward} already collected`]});
+      }
+    }
     this.closeNativePanel = openCampPanel(this, {
-      title: "Quests", kind: "quests", npc: "quests",
-      reply,
-      subtitle: `${this.meta.active.length}/${MAX_ACTIVE} active · 💎 ${this.meta.treasure} gems`,
+      title: tab === "quests" ? `${BIOME_LABELS[this.meta.biome]} quests` : "Achievements", kind: "quests", npc: "quests", animateNpc: !switching,
+      subtitle: tab === "quests" ? `${currentQuests(this.meta).length}/${MAX_ACTIVE} tracking · Rewards collected at camp`
+        : `${this.meta.achievements.length}/${ACHIEVEMENTS.length} unlocked · Your journey so far`,
+      tabs: (["quests", "achievements"] as const).map(section=>({label:section === "quests" ? "Quests" : `Achievements ${this.meta.achievements.length}/${ACHIEVEMENTS.length}`,
+        secondary:section!==tab,run:()=>{if(section!==tab){this.closePanel();this.goddessTapped(section,true);}}})),
       cards,
-      footer: rewarded.length ? `Collected 💎 ${rewarded.reduce((sum, q) => sum + q.reward, 0)} in quest rewards.`
-        : ready ? "The next area is ready." : "Defeat the final boss at depth 20 to unlock the next area. Quests give extra rewards.",
-      actions: ready ? [{ label: `Next area: ${nextBiome(this.meta)}`, closeAfter: true, run: () => { this.closePanel(); this.travelOnward(); } }] : [],
+      footer: receipt || (tab === "quests" ? "Quests stay with this area. Return anytime to continue them. Rewards collect automatically at camp."
+        : "Badges unlock automatically and stay with this save. No reward to claim."),
+      actions: [{ label: "Choose area", secondary: true, closeAfter: true, run: () => { this.closePanel(); this.openRoutes(); } }],
       onClose: () => this.closePanel(),
     });
   }
 
+  /** Travel keeps the camp in view and doesn't zoom in on an NPC. */
+  private openRoutes() {
+    if (this.editMode || this.panelOpen || this.departing || this.cutscene) return;
+    prepareCampProgress(this.meta);
+    const unlocked = unlockedBiomes(this.meta);
+    this.panelOpen = true;
+    this.closeNativePanel = openCampPanel(this, {
+      title: "Choose a road", subtitle: "Revisit any unlocked area", kind: "routes",
+      cards: BIOME_ORDER.map((biome, index) => {
+        const here = biome === this.meta.biome, available = unlocked.includes(biome);
+        const pets = COMPANIONS.filter(pet => pet.biome === biome);
+        const quests = QUEST_POOLS[biome];
+        const cleared = this.meta.clearedBiomes.includes(biome);
+        return {
+          title: BIOME_LABELS[biome], tag: here ? "Current camp" : cleared ? "Road cleared" : available ? "Ready to explore" : "Locked",
+          lines: available
+            ? [`Pets ${pets.filter(pet => this.meta.companions.includes(pet.id)).length}/${pets.length} · Quests ${quests.filter(q => this.meta.questsRewarded.includes(q.id)).length}/${quests.length}`]
+            : [`Defeat the final boss in ${BIOME_LABELS[BIOME_ORDER[index - 1]]} to open this road.`],
+          action: { label: here ? "Here" : available ? "Travel →" : "Locked", enabled: available && !here && !this.meta.activeRun,
+            closeAfter: true, run: () => this.travelTo(biome) },
+        };
+      }),
+      footer: this.meta.activeRun ? "Finish or end your current run before traveling."
+        : "Your crew, pets, packed items and upgrades come with you. Each area's quest progress stays saved.",
+      onClose: () => { this.closePanel(); this.refreshResources(); },
+    });
+  }
+
+  /** Development shortcut for trying each road with the current crew. */
+  private previewNextZone() {
+    if (!import.meta.env.DEV || this.editMode || this.panelOpen || this.departing || this.cutscene) return;
+    this.departing = true;
+    const index = BIOME_ORDER.indexOf(this.meta.biome as typeof BIOME_ORDER[number]);
+    this.meta.biome = BIOME_ORDER[(index + 1) % BIOME_ORDER.length];
+    delete this.meta.activeRun;
+    saveMeta(this.meta);
+    this.scene.restart();
+  }
+
   /** The road is open — break camp and rebuild the scene in the next biome. */
   private travelOnward() {
-    if (this.departing) return;
-    this.departing = true;
-    this.closePanel();
     const next = nextBiome(this.meta);
-    if (!advanceBiome(this.meta) || !next) {
-      this.departing = false;
+    if (next && roadOpen(this.meta)) this.travelTo(next);
+  }
+
+  private travelTo(biome: string) {
+    if (this.departing) return;
+    if (!travelToBiome(this.meta, biome)) return;
+    this.closePanel();
+    this.departing = true;
+    this.sfx("pickup", 0.6);
+    if (this.villageHub) {
+      this.cameras.main.setVisible(false);
+      this.villageHub.root.classList.add("is-departing");
+      this.time.delayedCall(600, () => this.scene.restart());
       return;
     }
-    this.sfx("pickup", 0.6);
     this.toast("packing up…");
     this.cameras.main.fadeOut(900, 6, 8, 12);
     this.cameras.main.once("camerafadeoutcomplete", () => this.scene.restart());
@@ -1872,6 +1911,8 @@ export class CampScene extends Phaser.Scene {
   /** Head out: the hero jogs off toward the portal, the day fades, the run begins. */
   private depart() {
     if (this.departing || this.editMode || this.panelOpen || this.cutscene) return;
+    prepareCampProgress(this.meta);
+    acknowledgeProgress(this.meta);
     this.departing = true;
     if (this.villageHub) {
       // The DOM hub stays opaque while its own curtain fades to black.
@@ -2370,6 +2411,8 @@ export class CampScene extends Phaser.Scene {
       if (!this.departing && !this.panelOpen && !this.cutscene) action();
     };
     const actions = {
+      routes: guarded(() => this.openRoutes()),
+      previewZone: import.meta.env.DEV ? guarded(() => this.previewNextZone()) : undefined,
       shop: guarded(() => this.peddlerTapped()),
       forge: guarded(() => this.meta.blacksmithHired ? this.furnaceTapped() : this.tentTapped()),
       magic: guarded(() => this.mageTapped()),
@@ -2377,7 +2420,7 @@ export class CampScene extends Phaser.Scene {
       travel: guarded(() => this.travelOnward()),
       start: () => this.depart(), menu: () => this.openMenu(),
       canTalk: () => !this.panelOpen && (!this.cutscene || !!this.villageHub?.root.classList.contains("is-intro")) && !this.departing && this.scene.isActive(),
-      introEnded: () => { this.cutscene = false; },
+      introEnded: () => { this.cutscene = false; this.showProgressNotice(); },
     };
     this.villageHub = import.meta.env.DEV && new URLSearchParams(location.search).has("village-preview")
       ? createVillageHub(this.meta, biomeDef(this.meta.biome).label, actions)
@@ -2394,7 +2437,7 @@ export class CampScene extends Phaser.Scene {
     const title = document.createElement("strong");
     title.textContent = "Get ready for the next run";
     const copy = document.createElement("span");
-    copy.textContent = "Pick a quest, upgrade your gear, and head out.";
+    copy.textContent = "Quests are tracking. Upgrade your gear and head out.";
     heading.append(title, copy);
     dock.append(heading);
     const actions = document.createElement("div");

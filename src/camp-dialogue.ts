@@ -18,10 +18,26 @@ export const CAMP_INTRO: readonly CampLine[] = [
   ["quests", "Then you've got a place here. Catch your breath. We'll be ready when you are."],
 ];
 
-type Conversation = { id: string; lines: readonly CampLine[]; biome?: string };
+type Conversation = { id: string; lines: readonly CampLine[]; biome?: string; companion?: string };
 export const CAMP_CHAT: readonly Conversation[] = [
+  { id: "bramble-sticks", companion: "bramble", lines: [["quests", "Bramble brought more sticks."], ["player", "And one of my gloves."], ["quests", "At least you've got it back."]] },
+  { id: "pip-spoon", companion: "pip", lines: [["shop", "Pip. That's a spoon. We need that."], ["quests", "Try trading a bottle cap."], ["shop", "I'm negotiating with a bird now."]] },
+  { id: "moss-watch", companion: "moss", lines: [["player", "Moss hasn't moved for an hour."], ["quests", "Neither has anyone touched your bag. Good work, Moss."]] },
+  { id: "hazel-stash", companion: "hazel", lines: [["shop", "There's a nut in the till."], ["quests", "Hazel's putting something away."], ["shop", "I'd prefer coins."]] },
+  { id: "hazel-check", companion: "hazel", lines: [["player", "She's dug that same hole three times."], ["quests", "Checking the inventory. Thorough little thing."]] },
+  { id: "hush-stare", companion: "hush", lines: [["quests", "Hush has been watching you pack."], ["player", "Am I doing it wrong?"], ["quests", "Apparently."]] },
+  { id: "hush-quiet", companion: "hush", lines: [["forge", "Sorry, Hush. Last nail."], ["player", "He heard that the last time too."]] },
+  { id: "flurry-leaf", companion: "flurry", lines: [["player", "Flurry just jumped at a leaf."], ["quests", "It was moving quite suddenly."]] },
+  { id: "flurry-blanket", companion: "flurry", lines: [["shop", "That blanket is reserved now, apparently."], ["player", "She looks comfortable."], ["shop", "She looks impossible to move."]] },
+  { id: "rime-sleeve", companion: "rime", lines: [["player", "Something's asleep in my sleeve."], ["quests", "Rime. Use the other coat."]] },
+  { id: "rime-clean", companion: "rime", lines: [["forge", "How does Rime stay that clean?"], ["quests", "Doesn't do any of the washing up, for a start."]] },
+  { id: "echo-roost", companion: "echo", lines: [["quests", "Mind the awning. Echo's asleep."], ["shop", "I hung a little sign. He keeps hanging from that too."]] },
+  { id: "echo-key", companion: "echo", lines: [["player", "Another key. Where does he find them?"], ["quests", "Places we're too big to look."]] },
+  { id: "flint-stone", companion: "flint", lines: [["player", "Flint brought me this stone."], ["forge", "Good weight. Smooth edges. He knows what he's doing."]] },
+  { id: "flint-hole", companion: "flint", lines: [["shop", "No digging under the wheel, please."], ["quests", "He's moved six inches to the left."], ["shop", "I'll take it."]] },
   { id: "guide-map", lines: [["quests", "Same road, three different names on this map. Very helpful."]] },
   { id: "guide-kettle", lines: [["quests", "Kettle's still warm, if anyone wants some."]] },
+  { id: "guide-records", lines: [["quests", "I've kept a record of the roads we've cleared."], ["player", "And all the animals we've picked up?"], ["quests", "They've got their own page."]] },
   { id: "guide-wheel", lines: [["quests", "I'll check the wheels before we leave. The left one sounded unhappy."]] },
   { id: "boots", lines: [["quests", "How are your boots holding up?"], ["player", "Better than my feet."], ["quests", "There's clean cloth under the seat. Take some."]] },
   { id: "watch", lines: [["player", "I can take first watch."], ["quests", "You took it yesterday. Get some sleep. I'll wake you if we need you."]] },
@@ -64,7 +80,8 @@ export function availableCampChat(meta: MetaState) {
   if (meta.peddlerArrived) present.add("shop");
   if (meta.blacksmithHired) present.add("forge");
   if (meta.wizardHired) present.add("magic");
-  return CAMP_CHAT.filter(chat => (!chat.biome || chat.biome === meta.biome) && chat.lines.every(([who]) => present.has(who)));
+  return CAMP_CHAT.filter(chat => (!chat.biome || chat.biome === meta.biome) &&
+    (!chat.companion || meta.companions.some(id => id === chat.companion)) && chat.lines.every(([who]) => present.has(who)));
 }
 
 const recent: string[] = [];
@@ -74,7 +91,7 @@ const REACTIONS = {
   sword: ["forge", ["There. Better edge, same grip.", "Try that. You should feel the difference.", "Sharpened and checked. You're good to go."]],
   staff: ["magic", ["That should give it a little more punch.", "All set. Give it a try out there.", "Better. And nothing caught fire this time."]],
   smith: ["forge", ["Thanks for the space. I've already sharpened your sword.", "I'll keep your gear in shape. You keep the road clear."]],
-  mage: ["magic", ["Glad to be aboard. Let me take a look at that staff.", "A workspace of my own. I'll try to keep it tidy."]],
+  mage: ["magic", ["Glad to be aboard. Let's work on those fireballs.", "A workspace of my own. I'll try to keep it tidy."]],
   quest: ["quests", ["Thanks. Every bit helps us keep moving.", "No rush. Come back in one piece.", "I'll keep track of that for you."]],
   reward: ["quests", ["Nicely done. Here's what we promised.", "You took care of it. Thank you.", "That helps everyone here. You've earned this."]],
 } as const;
@@ -104,7 +121,8 @@ export function createCampDialogue(root: HTMLElement, meta: MetaState, options: 
   const bubble = document.createElement("button");
   bubble.type = "button";
   bubble.className = "caravan-chat"; bubble.hidden = true;
-  bubble.innerHTML = '<strong></strong><p></p><small>Tap to continue ›</small>';
+  bubble.innerHTML = '<strong></strong><p></p><small aria-hidden="true">▸</small>';
+  bubble.title = "Tap to continue";
   environment.append(bubble);
   let activeIntro = false, arrival = 1, line = -1;
   let idle = 16 + Math.random() * 10, remaining = 0, exchange: readonly CampLine[] = [], index = 0;

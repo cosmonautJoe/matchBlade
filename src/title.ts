@@ -4,19 +4,17 @@
  * camp. Deliberately light: no menus here, the camp is the real hub.
  */
 import Phaser from "phaser";
+import { version as APP_VERSION } from "../package.json";
 import { biomeDef } from "./camp";
 import { loadMeta, readSlot, SAVE_SLOTS } from "./meta";
 import { readCheckpoint } from "./run-save";
 import { musicV, setSoundLevel } from "./audio";
+import { TILE_KEYS, TILE_TEXTURE_DENSITY, preloadTileArt, prepareTileArt } from "./tile-art";
 
 const PARALLAX_SRC_H = 216; // vnitti layer source height (shared with camp/run)
 const GROUND_FRAC = 0.8; // ground line as a fraction of viewport height
 
-const TILE_DECOR = [
-  { key: "tile-sword", file: "tiles/sword.png" },
-  { key: "tile-staff", file: "tiles/staff.png" },
-  { key: "tile-shield", file: "tiles/shield.png" },
-];
+const TILE_DECOR = TILE_KEYS.slice(0, 3);
 
 export class TitleScene extends Phaser.Scene {
   private parallax: { sprite: Phaser.GameObjects.TileSprite; drift: number }[] = [];
@@ -47,11 +45,12 @@ export class TitleScene extends Phaser.Scene {
     };
     for (const l of biome.parallax) img(l.key, l.file);
     img(biome.floor.key, biome.floor.file);
-    for (const t of TILE_DECOR) img(t.key, t.file);
+    preloadTileArt(this);
     if (!this.cache.audio.exists("music_menu")) this.load.audio("music_menu", "sounds/music_menu.mp3"); // A Great Journey (Overworld)
   }
 
   create() {
+    prepareTileArt(this);
     this.parallax = [];
     this.tiles = [];
     this.starting = false;
@@ -96,8 +95,8 @@ export class TitleScene extends Phaser.Scene {
 
     // three tiles of the trade bob under the name, each on its own beat
     // (the bob tweens are (re)built by layout(), pinned to the laid-out y)
-    TILE_DECOR.forEach((t, i) => {
-      const img = this.add.image(0, 0, t.key).setDepth(20).setScale(0.8).setAngle(i === 1 ? 0 : i === 0 ? -5 : 5);
+    TILE_DECOR.forEach((key, i) => {
+      const img = this.add.image(0, 0, key).setDepth(20).setScale(0.8 / TILE_TEXTURE_DENSITY).setAngle(i === 1 ? 0 : i === 0 ? -5 : 5);
       this.tiles.push(img);
     });
 
@@ -114,9 +113,9 @@ export class TitleScene extends Phaser.Scene {
       .text(0, 0, "Progress saves automatically. Pick up where you left off.", { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: "12px", color: "#91a7bc" })
       .setOrigin(0.5, 1)
       .setDepth(20);
-    // build version, bottom-right — fed from package.json by vite's define
+    // Import the version directly so Vite watches package.json during development.
     this.version = this.add
-      .text(0, 0, `v${__APP_VERSION__}`, { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffffff", stroke: "#0a0b0f", strokeThickness: 4 })
+      .text(0, 0, `v${APP_VERSION}`, { fontFamily: "monospace", fontStyle: "bold", fontSize: "13px", color: "#ffffff", stroke: "#0a0b0f", strokeThickness: 4 })
       .setOrigin(1, 1)
       .setDepth(20);
 
@@ -214,6 +213,9 @@ export class TitleScene extends Phaser.Scene {
 
     const cx = vw / 2;
     this.tweens.killTweensOf([this.btnStart, this.btnLoad]);
+    // Reflow can cancel the delayed intro fade while its buttons are still transparent.
+    this.btnStart.setAlpha(1);
+    this.btnLoad.setAlpha(1);
     // Phone typography uses screen pixels instead of shrinking the desktop
     // card (which reduced 12px copy to just 7px on a 393px-wide phone).
     if (vw < 600 && vh >= vw) {
@@ -229,7 +231,7 @@ export class TitleScene extends Phaser.Scene {
         .setWordWrapWidth(contentW).setAlign("center").setPosition(cx, top + cardH * .32);
       this.tiles.forEach((t, i) => {
         this.tweens.killTweensOf(t);
-        t.setAlpha(1).setScale(.72).setPosition(cx + (i - 1) * 82, top + cardH * .48);
+        t.setAlpha(1).setScale(.72 / TILE_TEXTURE_DENSITY).setPosition(cx + (i - 1) * 82, top + cardH * .48);
         this.tweens.add({ targets: t, y: t.y + 5, duration: 1500 + i * 180, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
       });
       this.saveInfo.setScale(1).setFontSize(13).setWordWrapWidth(contentW).setAlign("center").setPosition(cx, top + cardH * .6);
@@ -254,7 +256,7 @@ export class TitleScene extends Phaser.Scene {
       this.tagline.setScale(1).setFontSize(17).setWordWrapWidth(vw * 0.4).setAlign("center").setPosition(left, vh * 0.5);
       this.tiles.forEach((t, i) => {
         this.tweens.killTweensOf(t);
-        t.setAlpha(1).setScale(0.65).setPosition(left + (i - 1) * 72, vh * 0.74);
+        t.setAlpha(1).setScale(0.65 / TILE_TEXTURE_DENSITY).setPosition(left + (i - 1) * 72, vh * 0.74);
       });
       this.saveInfo.setScale(1).setFontSize(15).setWordWrapWidth(vw * 0.39).setAlign("center").setPosition(right, vh * 0.25);
       this.btnStart.setScale(this.uiScale).setPosition(right, vh * 0.46);
@@ -283,7 +285,7 @@ export class TitleScene extends Phaser.Scene {
     this.tiles.forEach((t, i) => {
       this.tweens.killTweensOf(t); // rebuild the bob pinned to the fresh y (also ends any fade — snap visible)
       t.setAlpha(1);
-      t.setScale(0.95 * s).setPosition(cx + (i - 1) * 105 * s, cy - 14 * s);
+      t.setScale(0.95 * s / TILE_TEXTURE_DENSITY).setPosition(cx + (i - 1) * 105 * s, cy - 14 * s);
       this.tweens.add({ targets: t, y: t.y + 7, duration: 1500 + i * 180, yoyo: true, repeat: -1, ease: "Sine.easeInOut", delay: i * 260 });
     });
     this.btnStart.setScale(buttonScale).setPosition(cx, cy + 117 * s);

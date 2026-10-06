@@ -1,15 +1,9 @@
 import { defineConfig } from "vite";
-import { readFileSync } from "node:fs";
-
-// The title screen shows the build version. Read it from package.json so the
-// two can never drift — bump the version there and the title follows.
-const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
 
 // The Claude preview harness assigns a free port via the PORT env var (autoPort
 // in .claude/launch.json). Vite doesn't read PORT on its own, so bind to it here
 // and fall back to 5173 for a plain `npm run dev`.
 export default defineConfig(({ command }) => ({
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   // Cloudflare Pages serves this project at the site root and injects CF_PAGES
   // during builds. Keep the /matchBlade/ base for the existing GitHub Pages
   // deploy script, while local dev and Cloudflare both use /.

@@ -19,10 +19,9 @@ export function animateVillage(map: HTMLElement, art: HTMLImageElement, motionBu
     // contains more opaque pixels in a particular pose.
     [221,302],[199.5,303],[180.5,303],[162.5,303],
   ] as const;
-  const reduce = matchMedia("(prefers-reduced-motion: reduce)");
   let preference: string | null = null;
   try { preference = localStorage.getItem("matchblade-camp-motion"); } catch { /* Storage may be unavailable. */ }
-  let enabled = preference === null ? !reduce.matches : preference === "on";
+  let enabled = preference !== "off";
   const arrivalDuration = 4.6;
   let arrival = enabled ? 0 : arrivalDuration;
   const updateButton = () => {
@@ -35,11 +34,6 @@ export function animateVillage(map: HTMLElement, art: HTMLImageElement, motionBu
     preference = enabled ? "on" : "off";
     try { localStorage.setItem("matchblade-camp-motion", preference); } catch { /* Keep the session preference. */ }
     last = performance.now();
-    updateButton(); draw();
-  };
-  const systemMotionChanged = () => {
-    if (preference === null) enabled = !reduce.matches;
-    if (!enabled) arrival = arrivalDuration;
     updateButton(); draw();
   };
   motionButton.addEventListener("click", toggle);
@@ -226,11 +220,11 @@ export function animateVillage(map: HTMLElement, art: HTMLImageElement, motionBu
   };
   const observer=new ResizeObserver(size); observer.observe(map);
   const intersection=new IntersectionObserver(entries => { visible=entries[0].isIntersecting; }); intersection.observe(map);
-  sheet.onload=draw; player.onload=draw; art.addEventListener("load",draw); reduce.addEventListener("change",systemMotionChanged);
+  sheet.onload=draw; player.onload=draw; art.addEventListener("load",draw);
   size(); request=requestAnimationFrame(tick);
   return () => {
     destroyed=true; cancelAnimationFrame(request); observer.disconnect(); intersection.disconnect();
-    art.removeEventListener("load",draw); reduce.removeEventListener("change",systemMotionChanged);
+    art.removeEventListener("load",draw);
     motionButton.removeEventListener("click",toggle); sheet.onload=null; player.onload=null; canvas.remove();
   };
 }

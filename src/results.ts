@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { openCampPanel } from "./camp-ui";
-import { loadMeta, roadOpen, nextBiome, advanceBiome } from "./meta";
+import { loadMeta, roadOpen, nextBiome, advanceBiome, questDone, questById, currentQuests, BIOME_LABELS } from "./meta";
 import { endOfRunCopy, nextUpgrade } from "./run-advice";
 import type { RunState } from "./run";
 
@@ -21,6 +21,7 @@ export function showResults(scene: Phaser.Scene, result: RunResult) {
   const meta = loadMeta();
   const outcome = endOfRunCopy(result.reason, result.won);
   const unlocked = roadOpen(meta);
+  const completed=currentQuests(meta).filter(aq=>questDone(meta,aq)).map(aq=>questById(aq.id)!);
   let leaving = false;
   const leave = () => {
     if (leaving) return;
@@ -38,13 +39,16 @@ export function showResults(scene: Phaser.Scene, result: RunResult) {
         `Best cascade ×${Math.max(1, result.cascade)}`,
       ] },
       { title: "Added to camp", lines: [
-        `🪵 ${result.wood} wood`, `🪨 ${result.ore} ore`, `💎 ${result.treasure} gems`,
+        `🪵 ${result.wood} wood`, `🪨 ${result.ore} stone`, `💎 ${result.treasure} gems`,
       ] },
+      ...(completed.length ? [{title:`✓ ${completed.length} quest${completed.length===1?"":"s"} complete`,lines:[
+        `${completed.reduce((sum,q)=>sum+q.reward,0)} gems will be collected automatically at camp.`,
+      ]}] : []),
       nextUpgrade(meta),
     ],
-    footer: unlocked ? `Next area unlocked: ${nextBiome(meta)}. Travel when you're ready; quests are optional.` : outcome.tip,
+    footer: unlocked ? `${BIOME_LABELS[nextBiome(meta)!]} is open. You can revisit earlier roads from camp.` : outcome.tip,
     actions: [
-      ...(unlocked ? [{ label: `Travel to ${nextBiome(meta)} →`, run: () => { advanceBiome(loadMeta()); leave(); } }] : []),
+      ...(unlocked ? [{ label: `Travel to ${BIOME_LABELS[nextBiome(meta)!]} →`, run: () => { advanceBiome(loadMeta()); leave(); } }] : []),
       { label: "Back to camp →", secondary: unlocked, run: leave },
     ],
     onClose: leave,

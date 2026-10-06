@@ -16,7 +16,7 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
   committing; there are no unit tests yet.
 - `npm run bump` — **bump the version with every batch of changes** (`bump
   minor` / `bump major` when it's more than a patch). `package.json`'s version
-  is the single source of truth: vite's `define` feeds it to the title screen,
+  is the single source of truth: the title screen imports it directly,
   so this one number is the whole version story. It sat at 0.0.1 for 58 commits
   because nothing prompted it — bump it as part of committing, not later.
 - `npm run deploy` — **the ONLY way the live site updates.** Builds, then
@@ -51,7 +51,7 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
   `.debugItem(id?)`, `.rigSwapMatch(type)`, `.debugBossIn(biome)`,
   `.debugArenaStage(0..3)`.
 - **Boss bar** (bottom-left of the run screen): jump straight to any zone boss
-  (MALGRIM / GORRACH / WARDEN — each writes `meta.biome`, restarts the run and
+  (SLIME / MALGRIM / GORRACH / WARDEN — each writes `meta.biome`, restarts the run and
   rigs the warden with 6 guard banked), skip to arena stage I/II/III or the
   FINISH, and bank +9 guard. It's a DOM overlay, not canvas text — two arenas
   listen on screen-wide tap catchers that would otherwise eat the clicks.
@@ -60,10 +60,21 @@ Runs are disposable; the caravan camp between runs is the persistent progress.
   the camp arrival cutscene.
 
 ## Quirks worth knowing
+
+- **Animation policy:** always enable motion by default on every device. Do not
+  add OS/browser reduced-motion checks or CSS overrides that silently suppress
+  effects. Explicit in-game pause/effect controls and hidden-tab suspension are
+  separate from automatic motion reduction.
 - `assets/` (raw art/audio packs) is **gitignored and not served** — the game
   loads only from `public/`. Vite ignores it in watch (locked files crash chokidar).
 - Windows checkout: LF/CRLF warnings on commit are normal; ignore them.
-- Tile faces are custom 84×84 ironbound pixel-art PNGs in `public/tiles/`;
-  `TILE_ART` in `src/main.ts` maps board types to preload keys. Keep future
-  replacements inside the shared frame/inset silhouette so the set stays cohesive.
+- Tile faces come from `public/tiles/atlas-v062.png`, with the warm-gray stone
+  override in `public/tiles/stone-v065.png`; `src/tile-art.ts` maps their
+  measured sprite bounds to stable texture keys, 252×252 textures and 84×84 logical
+  faces, with a quiet backing and glass finish. `tile-drag.ts` previews swaps using
+  artwork positions only; the grid changes on release. The magic
+  tile is a purple fireball (legacy `STAFF` ID). Keep replacements readable on
+  phones, with a thin dark frame and large symbols. `tile-feedback.ts` owns
+  press/settle movement and the short material accents when tiles clear;
+  `tile-shatter.ts` breaks the actual tile art into tumbling pieces.
 - The `⚙` gear (bottom-left) is dev-only; hidden in production builds.

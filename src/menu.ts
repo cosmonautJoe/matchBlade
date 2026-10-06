@@ -14,6 +14,7 @@
 import Phaser from "phaser";
 import { defaultMeta, loadMeta, saveMeta, readSlot, saveToSlot, loadFromSlot, SAVE_SLOTS } from "./meta";
 import { audioSettings, setAudioSettings, sfxV } from "./audio";
+import { tileEffectsEnabled, setTileEffectsEnabled, TILE_EFFECTS_CHANGED } from "./tile-effects";
 
 const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
 
@@ -178,14 +179,40 @@ export class MenuScene extends Phaser.Scene {
   private showOptions() {
     this.redraw = () => this.showOptions();
     this.view = "options";
-    const { box, x, y, w } = this.freshRoot(330);
+    const { box, x, y, w } = this.freshRoot(384);
     this.title(box, x, y, "OPTIONS");
     const s = audioSettings();
-    let sy = y + 92;
+    let sy = y + 86;
     this.slider(box, x, sy, w, "effects", s.sfx, (v) => setAudioSettings({ sfx: v }));
-    this.slider(box, x, (sy += 64), w, "ambience", s.amb, (v) => setAudioSettings({ amb: v }));
-    this.slider(box, x, (sy += 64), w, "music", s.music, (v) => setAudioSettings({ music: v }));
-    this.button(box, x, y + 330 - 40, 160, "back", () => this.showMain(), { small: true });
+    this.slider(box, x, (sy += 56), w, "ambience", s.amb, (v) => setAudioSettings({ amb: v }));
+    this.slider(box, x, (sy += 56), w, "music", s.music, (v) => setAudioSettings({ music: v }));
+
+    const left = x - w / 2 + 26;
+    const tx = x + w / 2 - 65;
+    box.add(this.add.text(left, y + 264, "Tile effects", {
+      fontFamily: EMOJI_FONT, fontSize: "17px", color: "#dfe3ea",
+    }).setOrigin(0, 0.5));
+    box.add(this.add.text(left, y + 296, "Glisten & tile shattering", {
+      fontFamily: EMOJI_FONT, fontSize: "14px", color: "#aeb5c0",
+    }).setOrigin(0, 0.5));
+    const toggle = this.add.rectangle(tx, y + 264, 78, 44).setInteractive({ useHandCursor: true });
+    const state = this.add.text(tx, y + 264, "", {
+      fontFamily: EMOJI_FONT, fontSize: "17px", fontStyle: "bold",
+    }).setOrigin(0.5);
+    const refresh = () => {
+      const on = tileEffectsEnabled();
+      toggle.setFillStyle(on ? 0x393729 : 0x242832).setStrokeStyle(2, on ? 0xffd982 : 0x69717c);
+      state.setText(on ? "ON" : "OFF").setColor(on ? "#ffe6a5" : "#b4bdcc");
+    };
+    toggle.on("pointerdown", () => {
+      this.sfx("swap", 0.25);
+      setTileEffectsEnabled(!tileEffectsEnabled());
+      refresh();
+      this.game.events.emit(TILE_EFFECTS_CHANGED);
+    });
+    box.add([toggle, state]);
+    refresh();
+    this.button(box, x, y + 344, 160, "back", () => this.showMain(), { small: true });
   }
 
   /** Label + draggable fader + live percentage. Changes broadcast immediately. */

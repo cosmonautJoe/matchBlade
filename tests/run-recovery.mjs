@@ -21,7 +21,7 @@ const fixture = () => ({version:1,savedAt:Date.now(),run:run.newRun(0,3,'plains'
   grid:board.makeInitialGrid(()=>Math.random(),10,5),items:['hearth',null,null,null,null,null],
   chestsOpened:2,sinceChest:1,bestCascade:3,rainy:false,arenaWard:1,
   pendingChest:[{kind:'wood',n:8,icon:'wood'}],
-  buffs:{freezeLeft:4,hornLeft:0,ledgerLeft:8,burnLeft:0,burnAcc:0,skeletonCharges:1,panCharges:0,spursActive:false,inkActive:true,bossChestNext:false}});
+  buffs:{freezeLeft:4,hornLeft:0,ledgerLeft:8,burnLeft:0,burnAcc:0,skeletonCharges:1,panCharges:0,spursActive:false,bossChestNext:false}});
 
 let m = meta.defaultMeta();
 m.activeRun=fixture(); m.activeRun.run.pressure=.72; m.activeRun.run.resources.keys=2;
@@ -71,7 +71,7 @@ assert.match(nextUpgrade(m).title,/Ready now.*forge/);
 m.blacksmithHired=true;
 assert.match(nextUpgrade(m).title,/Sword level 1/);
 m.ore=0;
-assert.match(nextUpgrade(m).lines.join(' '),/Still needed: 20 ore/);
+assert.match(nextUpgrade(m).lines.join(' '),/Still needed: 20 stone/);
 for (const [fn,reason] of [[s=>run.scroll(s,1),'pressure'],[run.enemyStrike,'enemy'],[run.pierceStrike,'boss']]) {
   const s=run.newRun(0,3,'plains',0); run.spawnNext(s); s.pressure=.999; fn(s);
   assert.equal(s.endReason,reason);

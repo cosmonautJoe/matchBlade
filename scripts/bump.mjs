@@ -1,7 +1,7 @@
 /**
  * Bump the game's version in package.json.
  *
- * The title screen reads this through vite's `define` (see vite.config.ts), so
+ * The title screen imports this directly from package.json, so
  * this one number is the whole version story — there is nothing else to edit.
  *
  * Usage:

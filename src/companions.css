@@ -1,0 +1,35 @@
+.companion-rescue{position:absolute;inset:0;z-index:90;display:grid;place-items:center;padding:16px;background:#0d1519b8;backdrop-filter:blur(3px);font-family:system-ui,sans-serif;color:#f6ebd5;touch-action:manipulation}
+.companion-rescue[hidden]{display:none}
+.companion-rescue section{width:min(100%,350px);max-height:100%;overflow:auto;text-align:center;border:1px solid #bba16b;border-radius:20px;padding:20px;background:radial-gradient(ellipse at 50% 30%,#3c4944,#20292f 75%);box-shadow:inset 0 0 0 4px #121b254d,0 18px 70px #0008}
+.rescue-eyebrow{font-size:11px;letter-spacing:.14em;color:#c9c096}.companion-rescue h2{font-size:23px;margin:9px 0 0;color:#ffe0a0}
+.rescue-cage{position:relative;display:block;margin:4px auto;width:240px;max-width:100%;padding:0;border:0;background:none;cursor:pointer;touch-action:manipulation}.rescue-cage canvas{display:block;width:100%;image-rendering:pixelated}
+.rescue-bars{position:absolute;inset:23% 17% 16%;border:5px solid #819394;border-radius:24px 24px 3px 3px;background:repeating-linear-gradient(90deg,transparent 0 24px,#819394 25px 29px,transparent 30px 32px);box-shadow:inset 0 0 0 2px #293839,2px 3px 0 #0b171b;transform-origin:left center;transition:transform .6s ease,opacity .5s}
+.rescue-lock{position:absolute;top:53%;left:46%;color:#ffe3a6;text-shadow:0 2px 5px #000;font-size:26px;animation:rescue-lock-glow 2s ease-in-out infinite}.is-freed .rescue-bars{transform:perspective(250px) rotateY(-110deg);opacity:0}.is-freed .rescue-lock{display:none}
+.rescue-copy{font-size:16px;line-height:1.4;margin:0 0 10px}.rescue-benefit{font-size:15px;color:#dbd49b;line-height:1.35;margin:0}.rescue-benefit:empty{display:none}
+.rescue-continue{margin-top:18px;min-height:46px;width:100%;border:1px solid #ffe0a0;border-radius:10px;background:#e7c888;color:#292923;font-size:16px;font-weight:bold;cursor:pointer}.rescue-continue[hidden]{display:none}.rescue-cage:focus-visible,.rescue-continue:focus-visible{outline:3px solid #fff0b2;outline-offset:3px}
+.caravan-companion{position:absolute;bottom:7%;width:max(44px,var(--camp-pet-size,44px));height:max(44px,var(--camp-pet-size,44px));border:0;background:transparent;color:#ffe3a6;border-radius:50%;padding:0;z-index:1}.caravan-companion canvas{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:var(--camp-pet-size,44px);height:var(--camp-pet-size,44px);image-rendering:pixelated;pointer-events:none}.caravan-companion:hover{background:#fff3bb22;box-shadow:0 0 15px #ffe2a755}
+.rescue-cage{cursor:default}
+.rescue-options{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
+.rescue-options[hidden]{display:none}
+.rescue-options button{min-height:48px;padding:8px;border:1px solid #dbc186;border-radius:10px;background:#e7c888;color:#2d2922;font:600 16px/1.2 system-ui;cursor:pointer}
+.rescue-options button:disabled{background:#30353a;color:#a0a7ac;border-color:#555d62;cursor:default}
+.rescue-options small{grid-column:1/-1;color:#bcc6c9;font-size:13px;line-height:1.4}
+.rescue-options button:focus-visible,.caravan-pet-book:focus-visible{outline:3px solid #fff0b2;outline-offset:3px}
+.rescue-continue.is-secondary{background:transparent;color:#c7cdd0;border-color:#687074;margin-top:10px}
+.caravan-pet-book{position:absolute;right:10px;top:10px;z-index:3;min-height:40px;padding:6px 12px;border:1px solid #c2ad7966;border-radius:20px;background:#20282cce;color:#ffe0a0;font:16px "Pixelify Sans",system-ui;box-shadow:0 2px 8px #0003;cursor:pointer}
+.caravan-hub.is-intro .caravan-pet-book,.caravan-hub.is-serving .caravan-pet-book{display:none}
+.companion-collection{position:absolute;inset:0;z-index:90;display:grid;place-items:center;padding:14px;background:#0c1217b8;backdrop-filter:blur(3px);color:#eee9de;font-family:system-ui,sans-serif;touch-action:pan-y}
+.companion-collection section{width:min(100%,500px);max-height:100%;overflow:auto;overscroll-behavior:contain;background:#232a30;border:1px solid #ad9568;border-radius:20px;padding:18px;box-shadow:0 20px 60px #0007}
+.companion-collection header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.companion-collection header small{font-size:11px;letter-spacing:.09em;color:#c1b48f}
+.companion-collection h2{font:30px "Pixelify Sans",system-ui;margin:2px 0;color:#ffe0a0}
+.companion-collection header button{width:44px;height:44px;flex-shrink:0;border:1px solid #62696b;border-radius:50%;background:#333c43;color:#eee9de;font-size:20px;cursor:pointer}
+.companion-collection header button:focus-visible{outline:3px solid #ffe0a0}
+.companion-collection p{font-size:15px;line-height:1.4;color:#d1d7d9}
+.pet-book-list h3{font:21px "Pixelify Sans",system-ui;color:#e8cb90;margin:20px 0 8px}
+.pet-book-card{display:flex;gap:10px;padding:12px 8px;border-top:1px solid #92988733;align-items:center}
+.pet-book-card canvas{width:56px;height:56px;flex-shrink:0;image-rendering:pixelated}
+.pet-book-card strong{font-size:16px;color:#ffdfaa}.pet-book-card p{margin:4px 0;font-size:15px}.pet-book-card small{font-size:13px;color:#aebec4;line-height:1.35;display:block}
+.pet-book-card.is-undiscovered canvas{filter:brightness(0);opacity:.35}.pet-book-card.is-undiscovered strong{color:#b7c1c7}.companion-collection .pet-book-note{border-top:1px solid #92988744;padding-top:12px;color:#c8bd9c;font-size:14px}
+@keyframes rescue-lock-glow{50%{filter:brightness(1.5);text-shadow:0 0 12px #ffe3a6}}
+@media(orientation:landscape) and (max-height:500px){.companion-rescue section{padding:12px}.rescue-cage{width:170px}.companion-rescue h2{font-size:20px}.rescue-continue{margin-top:10px}}

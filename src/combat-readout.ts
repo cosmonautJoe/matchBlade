@@ -1,4 +1,4 @@
-import { guardCost, type RunState, type EnemyVariant } from "./run";
+import { ambushRear, guardCost, type RunState, type EnemyVariant } from "./run";
 import "./combat-readout.css";
 
 const NAMES: Record<EnemyVariant, string> = {
@@ -10,10 +10,12 @@ const NAMES: Record<EnemyVariant, string> = {
 export function combatCue(s: RunState) {
   const foe = s.enemy;
   if (!foe) return { name: "Moving on", tip: "Every defeated enemy gives you room to recover." };
+  const rear = ambushRear(s);
+  if (rear) return { name: `Ambush · ${Math.ceil(foe.hp)} + ${Math.ceil(rear.hp)} HP`, tip: "" };
   const guard = guardCost(s.killed);
-  let tip = foe.defense === "hide" ? "Match staves · resists swords"
+  let tip = foe.defense === "hide" ? "Match fireballs · resists swords"
     : foe.defense === "ward" ? "Match swords · resists magic" : "";
-  if (foe.spores !== undefined) tip = `Staves clear spores${foe.spores ? ` ×${foe.spores}` : ""} · shields prevent them`;
+  if (foe.spores !== undefined) tip = `Fireballs clear spores${foe.spores ? ` ×${foe.spores}` : ""} · shields prevent them`;
   else if (s.pressure >= .7) tip = "Near the skull! Defeat an enemy to recover";
   else if (guard > 1) tip = [tip, `Block costs ${guard}`].filter(Boolean).join(" · ");
   return { name: `${NAMES[foe.variant]} · ${Math.max(0, Math.ceil(foe.hp))} HP`, tip };

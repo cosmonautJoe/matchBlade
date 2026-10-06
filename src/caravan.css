@@ -1,4 +1,9 @@
+@font-face{font-family:"Pixelify Sans";src:url("/fonts/PixelifySans.ttf") format("truetype");font-weight:400 700;font-display:swap}
 #game{--camp-panel-share:55%}
+.caravan-header .caravan-zone-switch{background:transparent;text-align:left;padding:0;font-size:inherit}
+.caravan-zone-switch .caravan-zone{text-decoration:underline dotted #8d7954;text-underline-offset:3px}
+.caravan-zone-switch .caravan-zone::after{content:" ▾";color:#e7c888}
+.caravan-header .caravan-zone-switch:hover{color:#ffe0a0}
 .caravan-hub{position:absolute;inset:0;z-index:70;display:grid;grid-template-rows:auto minmax(0,1fr) minmax(0,var(--camp-panel-share));background:#20282c;color:#f2ebd7;font-family:system-ui,sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);isolation:isolate}
 .caravan-hub *{box-sizing:border-box}.caravan-hub button{font:inherit;cursor:pointer;touch-action:manipulation}.caravan-hub button:focus-visible{outline:3px solid #ffe29a;outline-offset:2px}
 .caravan-header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#273136;border-bottom:2px solid #8c8054;z-index:2}.caravan-header strong{font-size:14px;letter-spacing:.08em}.caravan-zone{display:block;font-size:12px;color:#d0d4d3}.caravan-resources{margin-left:auto;font-size:14px;font-weight:650;white-space:nowrap}.caravan-header button{min-width:36px;min-height:44px;border:0;border-radius:6px;background:#354044;color:#ede9d0;font-size:22px}.caravan-motion{font-size:15px!important}
@@ -6,26 +11,28 @@
 .caravan-station{position:absolute;border:1px solid transparent;border-radius:6px;background:transparent;min-width:44px;min-height:44px;display:flex;align-items:flex-end;justify-content:center;padding:2px}.caravan-station[hidden]{display:none}.caravan-station span{opacity:0;padding:4px 7px;border-radius:5px;background:#20282cf0;color:#fff0be;font-size:13px;font-weight:700;white-space:nowrap}.caravan-station:is(:focus-visible,:hover) span{opacity:1}.caravan-station::before{content:"";position:absolute;inset:-12%;border-radius:40%;background:radial-gradient(ellipse,#ffe7a552 0%,#ffd57930 40%,#ffd57900 72%);filter:blur(5px);opacity:0;transition:opacity .18s ease;pointer-events:none}.caravan-station:is(:hover,:focus-visible,:active)::before{opacity:1}.caravan-station span{position:relative;z-index:1}.caravan-station:active span{opacity:1}.caravan-station--shop{left:18%;top:39%;width:24%;height:28%}.caravan-station--quests{left:52%;top:40%;width:27%;height:28%}.caravan-station--forge{left:83%;top:50%;width:16%;height:22%}.is-expanded .caravan-station--shop{left:19%;top:53%;width:24%;height:23%}.is-expanded .caravan-station--forge{left:58%;top:54%;width:33%;height:25%}.is-expanded .caravan-station--quests{left:52%;top:24%;width:35%;height:25%}.is-expanded .caravan-station--magic{left:19%;top:23%;width:25%;height:26%}
 .caravan-announcement{position:absolute;top:12px;left:16px;right:16px;margin:0;text-align:center;font-size:15px;line-height:1.4;background:#273136ed;color:#fff1bf;border-radius:8px;padding:10px;pointer-events:none}.caravan-announcement:empty{display:none}
 .caravan-station.is-speaking::before{opacity:.65}
+.caravan-atmosphere{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
+.caravan-announcement{z-index:3}
 .caravan-hub .caravan-chat{
   --speaker-ink:#75412f;
-  position:absolute;z-index:3;width:max-content;max-width:min(290px,calc(100% - 20px));
-  padding:13px 15px 10px;border:2px solid #6e503b;border-radius:18px;
+  position:absolute;z-index:3;width:max-content;max-width:min(330px,calc(100% - 20px));
+  padding:8px 11px 9px;border:2px solid #6e503b;border-radius:13px;
   background:linear-gradient(135deg,#fff5dc,#ecdbb8);color:#30252a;
   box-shadow:inset 0 0 0 2px #fff9e8,inset 0 0 0 3px #c8ad7d,0 4px 0 #392c29,0 8px 18px #0005;
-  font:16px/1.45 system-ui,sans-serif;pointer-events:auto;text-align:left;cursor:pointer;touch-action:manipulation;
+  font:500 18px/1.2 "Pixelify Sans",system-ui,sans-serif;pointer-events:auto;text-align:left;cursor:pointer;touch-action:manipulation;
 }
 .caravan-chat[data-speaker="player"]{--speaker-ink:#354960}
 .caravan-chat[data-speaker="shop"]{--speaker-ink:#765322}
 .caravan-chat[data-speaker="forge"]{--speaker-ink:#7b3631}
 .caravan-chat[data-speaker="magic"]{--speaker-ink:#604571}
-.caravan-chat strong{display:table;margin:0 0 9px;padding:3px 9px;border:1px solid #fff2c977;border-radius:2px;background:var(--speaker-ink);color:#fff5df;font-size:12px;font-weight:750;letter-spacing:.045em;box-shadow:2px 2px 0 #b9a07a}
-.caravan-chat p{margin:0;text-wrap:pretty}
-.caravan-chat small{display:block;margin-top:10px;padding-top:7px;border-top:1px solid #b9a17a;font-size:12px;font-weight:600;color:#715640;text-align:right}
+.caravan-chat strong{display:block;margin:0 0 3px;padding:0;color:var(--speaker-ink);font:700 12px/1.2 "Pixelify Sans",system-ui,sans-serif;letter-spacing:.045em}
+.caravan-chat p{margin:0;padding-right:9px;text-wrap:pretty}
+.caravan-chat small{position:absolute;right:8px;bottom:6px;font-size:16px;font-weight:600;color:#715640;line-height:1}
 .caravan-chat:active{box-shadow:inset 0 0 0 2px #fff9e8,inset 0 0 0 3px #c8ad7d,0 2px 0 #392c29,0 5px 10px #0004}
 .caravan-hub .caravan-chat:focus-visible{outline:3px solid #fff5dc;outline-offset:4px}
 .caravan-chat[hidden],.caravan-dialogue[hidden]{display:none}
 .caravan-chat::after{content:"";position:absolute;left:var(--tail-x,50%);bottom:-8px;width:12px;height:12px;background:#ecdbb8;border-right:2px solid #6e503b;border-bottom:2px solid #6e503b;transform:translateX(-50%) rotate(45deg);box-shadow:2px 2px 0 #392c29;pointer-events:none}
-.is-intro .caravan-chat{font-size:17px;line-height:1.5;padding:15px 17px 12px;max-width:min(320px,calc(100% - 24px))}
+.is-intro .caravan-chat{font-size:18px;line-height:1.2;padding:9px 12px 10px;max-width:min(330px,calc(100% - 24px))}
 .caravan-dialogue{width:100%;text-align:left}.caravan-dialogue small{font-size:11px;letter-spacing:.12em;color:#d7c2a0}.caravan-dialogue nav{display:flex;align-items:center;gap:12px}.caravan-dialogue button{min-height:46px;border-radius:4px;padding:9px 12px}.camp-next{flex:1;border:2px solid #b99a69;background:#f1dfb8;color:#362b30;box-shadow:inset 0 0 0 1px #fff7df,0 3px 0 #14111b;font-weight:700!important}.camp-next:disabled{opacity:.6;cursor:default}.camp-skip{border:1px solid #88788b;background:#322b3b;color:#ebdfe7;font-size:13px!important}
 .caravan-hub.is-intro .caravan-prep{background:linear-gradient(135deg,#302838,#201e2a);border-color:#aa8d63}
 .caravan-hub.is-intro .caravan-prep>:not(.caravan-dialogue){display:none}.caravan-hub.is-intro .caravan-prep{min-height:0}.caravan-hub.is-intro .caravan-announcement{display:none}.caravan-dialogue nav{margin-top:12px}
@@ -39,7 +46,6 @@
 @media(orientation:landscape){.caravan-hub{grid-template-columns:minmax(0,1fr) minmax(0,var(--camp-panel-share));grid-template-rows:auto minmax(0,1fr)}.caravan-header{grid-column:1/-1}.caravan-prep{border-top:0;border-left:2px solid #8d7954;display:flex;flex-direction:column;justify-content:center;padding:12px;overflow-y:auto}.caravan-prep h2{font-size:19px}.caravan-service{min-height:58px;padding:8px;gap:6px}.caravan-icon{font-size:20px}.caravan-service strong{font-size:14px}.caravan-service small{font-size:11px}.caravan-start{min-height:46px}}
 @media(max-height:720px) and (orientation:portrait){.caravan-prep{padding:10px 12px}.caravan-prep h2{font-size:18px;margin-bottom:8px}.caravan-service{min-height:54px;padding:7px}.caravan-service strong{font-size:14px}.caravan-packed{margin:6px 0}.caravan-start{min-height:46px}}
 @media(max-width:360px){.caravan-header{padding:5px 8px;gap:5px}.caravan-resources{font-size:12px}.caravan-zone{font-size:10px}.caravan-header button{min-width:30px}.caravan-service{gap:6px}.caravan-icon{font-size:20px}}
-@media(prefers-reduced-motion:reduce){.caravan-hub::after,.caravan-station::before{transition:none}.is-expanded .caravan-vehicle{animation:none}}
 
 .caravan-travel { min-height: 40px; border: 1px solid #d6b873; border-radius: 10px; color: #ffe0a0; background: #30393b; font: 600 15px system-ui; cursor: pointer; margin-bottom: 8px; width: 100%; }
 .caravan-travel[hidden] { display: none; }
@@ -57,9 +63,11 @@
 @media(orientation:landscape){.caravan-prep{border-radius:18px 0 0 18px}}
 
 /* A warm invitation to depart; motion never changes the button's layout. */
-.caravan-start{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:14px;background:linear-gradient(180deg,#f7dfa5,#e7c888 55%,#d6ac62);border-color:#ffe6aa;text-shadow:0 1px #fff4d277;box-shadow:0 3px 0 #876336,0 4px 14px #e7c88820;animation:camp-start-glow 5.5s ease-in-out infinite;transition:transform .15s ease,filter .15s ease}
-.caravan-start::before{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(110deg,transparent 25%,#fff9df66 48%,transparent 71%);transform:translateX(-125%);animation:camp-start-shimmer 7s ease-in-out infinite;pointer-events:none}
-.caravan-start-arrow{display:inline-block;font-size:26px;line-height:1;animation:camp-start-arrow 5.5s ease-in-out infinite}
+.caravan-start{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:12px;min-height:62px;padding:6px 56px 6px 105px;flex-shrink:0;background:linear-gradient(180deg,#ffe7ae,#e9c67f 55%,#d4a353);border-color:#ffe6aa;text-shadow:0 1px #fff4d277;box-shadow:0 3px 0 #876336,0 4px 14px #e7c88820;animation:camp-start-glow 3.2s ease-in-out infinite;transition:transform .15s ease,filter .15s ease}
+.caravan-start::before{content:"";position:absolute;inset:0;z-index:2;background:linear-gradient(110deg,transparent 35%,#fff9df77 48%,transparent 61%);transform:translateX(-125%);animation:camp-start-shimmer 3.8s ease-in-out infinite;pointer-events:none}
+.caravan-start-scene{position:absolute;left:0;top:0;width:112px;height:100%;object-fit:cover;image-rendering:pixelated;pointer-events:none;mask-image:linear-gradient(90deg,#000 78%,transparent)}
+.caravan-start-label{position:relative;font-family:"Pixelify Sans",system-ui,sans-serif;font-size:25px;line-height:1.1;white-space:nowrap}.caravan-start-label small{display:block;margin-top:3px;font:600 11px/1.2 system-ui,sans-serif;letter-spacing:.01em;color:#5b462b}
+.caravan-start-arrow{position:absolute;right:10px;display:grid;place-items:center;width:36px;height:36px;border:1px solid #fff0c199;border-radius:9px;background:#8c602529;box-shadow:inset 0 1px #fff4d277;font-size:26px;line-height:1;animation:camp-start-arrow 2.8s ease-in-out infinite}
 .caravan-start:hover{background:linear-gradient(180deg,#ffeac0,#efd397 55%,#dfba75);filter:brightness(1.04)}
 .caravan-start:active{transform:translateY(2px);filter:brightness(.96)}
 @keyframes camp-start-glow{0%,65%,100%{box-shadow:0 3px 0 #876336,0 4px 14px #e7c88820}32%{box-shadow:0 3px 0 #876336,0 4px 22px #e7c88850}}
@@ -68,4 +76,25 @@
 .caravan-hub:is(.is-motion-paused,.is-serving,.is-service-closing,.is-departing) .caravan-start,
 .caravan-hub:is(.is-motion-paused,.is-serving,.is-service-closing,.is-departing) .caravan-start::before,
 .caravan-hub:is(.is-motion-paused,.is-serving,.is-service-closing,.is-departing) .caravan-start-arrow{animation-play-state:paused}
-@media(prefers-reduced-motion:reduce){.caravan-start,.caravan-start::before,.caravan-start-arrow{animation:none}.caravan-start{transition:none}}
+@media(max-width:360px){.caravan-start{padding-left:79px;padding-right:48px}.caravan-start-scene{width:88px}.caravan-start-label{font-size:23px}.caravan-start-arrow{right:7px;width:31px}}
+.caravan-quest-service>span:last-child{min-width:0;flex:1}
+.caravan-quest-service progress{display:block;width:100%;height:4px;margin-top:6px;accent-color:#e7c888;border:0;border-radius:4px;overflow:hidden;background:#454d52}
+.caravan-quest-service progress[hidden]{display:none}
+.caravan-quest-service progress::-webkit-progress-bar{background:#454d52}
+.caravan-quest-service progress::-webkit-progress-value{background:#e7c888}
+.caravan-announcement.is-progress{top:auto;bottom:10px;left:10px;right:10px;white-space:pre-line;border:1px solid #d6b578;background:#242a30f2;color:#ffe3a4;box-shadow:0 4px 20px #0005;animation:quest-receipt .4s ease-out}
+@keyframes quest-receipt{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+/* An affordable first forge is a milestone: flag it without moving the card. */
+.caravan-service.is-build-ready{position:relative;padding-right:21px;border-color:#f4d48b;background:linear-gradient(120deg,#51432c,#343b3b);animation:forge-ready-glow 3.2s ease-in-out infinite}
+.caravan-service.is-build-ready strong{color:#fff0c1}
+.caravan-service.is-build-ready small{color:#ffe19c;font-weight:700}
+.caravan-service.is-build-ready .caravan-icon{color:#ffdd8e;text-shadow:0 0 9px #ffc65c70}
+.caravan-service.is-build-ready::after{content:"";position:absolute;right:9px;top:10px;width:7px;height:7px;border-radius:50%;background:#ffdf91;box-shadow:0 0 7px #ffc75b90;pointer-events:none}
+.caravan-service.is-build-ready:hover{background:linear-gradient(120deg,#605035,#424a49)}
+.caravan-service.is-build-ready:focus-visible{outline:2px solid #ffedb5;outline-offset:3px}
+.caravan-station--forge.is-build-ready::after{content:"!";background:#f0cf83;color:#3d2c18;border-color:#ffe9b0;font:700 19px/1 "Pixelify Sans",sans-serif;animation:forge-ready-glow 3.2s ease-in-out infinite}
+.caravan-station--forge.is-build-ready::before{opacity:.45}
+@keyframes forge-ready-glow{0%,100%{box-shadow:inset 0 0 0 1px #f4d48b66,0 0 3px #ffc65b25}50%{box-shadow:inset 0 0 0 1px #ffe6a7,0 0 13px #ffc65b65}}
+.caravan-hub:is(.is-motion-paused,.is-serving,.is-service-closing,.is-departing) .caravan-service.is-build-ready,
+.caravan-hub:is(.is-motion-paused,.is-serving,.is-service-closing,.is-departing) .caravan-station--forge.is-build-ready::after{animation-play-state:paused}

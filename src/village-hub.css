@@ -45,4 +45,3 @@
   .village-packed { text-align:left; margin:0; }
   .village-start,.village-motion { grid-column:1/-1; }
 }
-@media(prefers-reduced-motion:reduce) { .village-station-label { transition:none; } }

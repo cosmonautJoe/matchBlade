@@ -27,21 +27,25 @@ export function malgrimToken(scene: Phaser.Scene, kind: "gold" | "red" | "blue")
   return key;
 }
 
-export function malgrimArena(scene: Phaser.Scene, R: {x:number;y:number;w:number;h:number;cx:number;cy:number}, stage:number, title:string, instruction:string, progress:string) {
+export function malgrimArena(scene: Phaser.Scene, R: {x:number;y:number;w:number;h:number;cx:number;cy:number}, stage:number, title:string, instruction:string, progress:string, forest=false) {
   const root=scene.add.container(R.x,R.y).setDepth(40);
   const g=scene.add.graphics();
-  g.fillStyle(0x101923,1);g.fillRoundedRect(0,0,R.w,R.h,18);
-  g.lineStyle(2,0x80613e,.8);g.strokeRoundedRect(3,3,R.w-6,R.h-6,16);
+  g.fillStyle(forest?0x162822:0x1b1929,1);g.fillRoundedRect(0,0,R.w,R.h,18);
+  g.lineStyle(2,forest?0x839365:0x887aab,.8);g.strokeRoundedRect(3,3,R.w-6,R.h-6,16);
   g.fillStyle(0x1e2930,1);g.fillRoundedRect(10,10,R.w-20,98,12);
   // Etched stone rings and seams give the play area structure without noise.
   g.lineStyle(1,0xc19757,.08);
   for(let r=100;r<R.w*.6;r+=68)g.strokeEllipse(R.w/2,R.h*.55,r*2,r*1.3);
   for(let y=150;y<R.h-55;y+=86)g.lineBetween(18,y,R.w-18,y);
+  if(forest)for(const side of [18,R.w-18]){
+    g.lineStyle(4,0x668153,.6).strokePoints([{x:side,y:120},{x:side+7,y:R.h*.45},{x:side-5,y:R.h*.7},{x:side,y:R.h-70}]);
+    for(let y=142;y<R.h-70;y+=40)g.fillStyle(0x97ab68,.45).fillEllipse(side+4,y,18,7);
+  }
   g.fillStyle(0x080f18,.7);g.fillRoundedRect(12,R.h-58,R.w-24,46,10);
   root.add(g);
   const text=(x:number,y:number,value:string,size:number,color:string)=>scene.add.text(x,y,value,{fontFamily:"system-ui, sans-serif",fontSize:`${size}px`,fontStyle:"bold",color}).setOrigin(0,0);
-  root.add(text(22,18,title,26,"#fff0d5"));
-  root.add(text(22,57,instruction,20,"#c4cfda"));
+  root.add(text(22,18,title,28,"#fff0d5"));
+  root.add(text(22,57,instruction,22,"#c4cfda"));
   const tally=text(R.w-24,20,progress,23,"#ffe1a0").setOrigin(1,0);root.add(tally);
   for(let i=0;i<3;i++) {
     const x=22+i*27;
@@ -55,7 +59,7 @@ export function malgrimArena(scene: Phaser.Scene, R: {x:number;y:number;w:number
   });
   // Sparse rising embers behind targets, always below interaction layers.
   for(let i=0;i<8;i++) {
-    const ember=scene.add.circle(28+(i*.137%1)*(R.w-56),R.h-80,1.5+i%2,0xe8ad62,.25);
+    const ember=scene.add.circle(28+(i*.137%1)*(R.w-56),R.h-80,1.5+i%2,forest?0xcbdc92:0xba9edf,.3);
     root.add(ember);
     const tween=scene.tweens.add({targets:ember,y:125,alpha:0,duration:4200+i*230,delay:i*380,repeat:-1});
     ember.once("destroy",()=>tween.stop());
