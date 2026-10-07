@@ -2,23 +2,22 @@ import Phaser from "phaser";
 
 // Keep texture keys and tile IDs stable for existing saves and boss mechanics.
 export const TILE_KEYS = ["tile-sword", "tile-staff", "tile-shield", "tile-key", "tile-treasure", "tile-wood", "tile-ore", "tile-potion"] as const;
-const ATLAS_KEY = "tile-atlas-v062";
-const STONE_KEY = "tile-stone-v065";
-// Visible frame bounds; exclude the almost-transparent gutter around the sprite.
-const STONE_RECT = [116, 116, 1022, 1009] as const;
+const ATLAS_KEY = "tile-atlas-v104";
+const WOOD_KEY = "tile-wood-v106";
+const WOOD_RECT = [136, 150, 982, 953] as const;
 export const TILE_FACE_SIZE = 84;
 export const TILE_TEXTURE_DENSITY = 3;
-const TILE_BACKINGS = ["#743746", "#553b76", "#395a7c", "#396b49", "#78663b", "#785336", "#635f57", "#32676a"];
+const TILE_BACKINGS = ["#743746", "#553b76", "#395a7c", "#396b49", "#78663b", "#d6b88a", "#635f57", "#32676a"];
 // Measured opaque bounds in the 1254px atlas; gutters aren't perfectly uniform.
 const TILE_RECTS = [
-  [54, 63, 363, 355], [446, 63, 363, 355], [837, 63, 364, 355],
-  [54, 443, 363, 354], [446, 443, 363, 354], [837, 443, 364, 354],
-  [54, 821, 363, 355], [446, 821, 363, 355],
+  [54, 62, 363, 356], [446, 62, 363, 356], [837, 62, 364, 356],
+  [54, 443, 363, 355], [446, 443, 363, 355], [837, 443, 364, 355],
+  [54, 822, 363, 355], [446, 822, 363, 355],
 ] as const;
 
 export function preloadTileArt(scene: Phaser.Scene) {
-  if (!scene.textures.exists(ATLAS_KEY)) scene.load.image(ATLAS_KEY, "tiles/atlas-v062.png");
-  if (!scene.textures.exists(STONE_KEY)) scene.load.image(STONE_KEY, "tiles/stone-v065.png");
+  if (!scene.textures.exists(ATLAS_KEY)) scene.load.image(ATLAS_KEY, "tiles/atlas-v104.png");
+  if (!scene.textures.exists(WOOD_KEY)) scene.load.image(WOOD_KEY, "tiles/wood-v106.png");
 }
 
 function tileOutline(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, corner: number) {
@@ -33,9 +32,9 @@ export function prepareTileArt(scene: Phaser.Scene) {
   if (TILE_KEYS.every(key => scene.textures.exists(key))) return;
   TILE_KEYS.forEach((key, index) => {
     if (scene.textures.exists(key)) return;
-    const stone = key === "tile-ore";
-    const source = scene.textures.get(stone ? STONE_KEY : ATLAS_KEY).getSourceImage() as HTMLImageElement;
-    const [x, y, width, height] = stone ? STONE_RECT : TILE_RECTS[index];
+    const wood = key === "tile-wood";
+    const source = scene.textures.get(wood ? WOOD_KEY : ATLAS_KEY).getSourceImage() as HTMLImageElement;
+    const [x, y, width, height] = wood ? WOOD_RECT : TILE_RECTS[index];
     const face = document.createElement("canvas");
     face.width = face.height = TILE_FACE_SIZE * TILE_TEXTURE_DENSITY;
     const g = face.getContext("2d")!;

@@ -1,5 +1,128 @@
 # matchBlade — Game Design Document
 
+## Surprise ×2s and earned ×3s — v0.0.112
+
+- Restored the original random combat-tile ×2 alongside earned power: the first appears after two successful swaps; after consuming it, another becomes available in 6–8 successful swaps. One random charge can wait on the board at a time. Earned charges do not prevent it appearing; frozen, already charged and non-combat tiles are excluded from random selection.
+- Deliberately match four to leave a ×2 tile; connected matches of five or more leave ×3. The latter has a gold badge and three orbiting sparks. Damage, guard, keys and resource bonuses honor the displayed multiplier, including item clears. Multiple powers in the same connected match use the strongest multiplier once and do not regenerate themselves.
+- Strength, random origin and cadence survive checkpoints and board rotation. Existing charges without a multiplier remain ×2. Old single-charge saves keep their random charge and move counter. The tutorial copy explains the two earned tiers and the continued random rewards.
+- Verification: production build and focused power/companion checks, including ×2/×3 rewards for all seven regular tile types, mixed-charge groups, item bonuses, random eligibility/cooldown, checkpoint recovery and rotation. Visual playtesting remains with the user.
+
+## Earned power, caravan milestones and shared UI — v0.0.111
+
+- A player's swap forming a connected match of four or more leaves one charged tile at the moved tile's destination (or the other swapped cell if that is the matching group). All seven regular types can be charged. The original match still pays its normal reward; its surviving tile gathers sparks and gains the existing orbiting glow and ×2 badge. Matching it later adds one extra payout for its connected group: damage, guard, keys or resources. Separate groups stay separate; joining multiple charged tiles doubles once. Cascades and item clears can consume power but do not generate new charges, so power cannot renew itself indefinitely. The former random move-count charging is retired.
+- Multiple earned tiles are tracked through gravity, swaps, conversion, blasts, resource magnets, reshuffles, rotation and run recovery. Legacy single-charge saves migrate on read. Rotation caches the exact charged positions and grants no new tiles or power. Boss mechanics and weapon progression are unchanged.
+- Permanent camp details derive from existing progression: the merchant adds a strapped roof pack, hiring the blacksmith fits a tool chest, the first pet adds a sheltered straw basket, and the mage brings a hanging crystal lantern. Cleared roads add distinct sewn pennants to the deck rail. These are separate, small pixel-art decorations on the existing cart canvas, so they follow camp resizing and NPC focus without replacing its artwork or enlarging the caravan.
+- A quiet Journey button opens the road picker, now with a four-stop route showing current, cleared, available and unknown destinations. A collapsible caravan journal lists earned additions and their requirements. Unopened destinations and the unrecruited traveler remain mysterious. Existing travel locks, debug unlocks, quests and boss-clear requirements still apply.
+- Pause, settings, manual save/load and confirmation screens now use native browser controls: readable text, charcoal surfaces, warm gold primary actions, rounded buttons, clear save cards, labeled volume sliders, keyboard focus containment and scrollable short-screen layouts. Pausing retains the current camp scenery. The common camp/shop/quest/results panels share the same surface palette; tutorial cards use matching rounded styling, readable type, a slim progress indicator and concise sentence-case copy. Its last card mentions earned ×2 tiles; no new tutorial steps or boss popups were added.
+- Verification: focused empowered/companion checks cover all regular tile rewards, connected matches, multi-charge use, legacy recovery and repeated rotation; the older full-run companion fixture now defeats both forest ambushers and separates their supply rewards. Ice refill regression passes. Production build checked; visual/device playtesting remains with the user and no browser save was opened or modified.
+
+## Readable modern title screen — v0.0.110
+
+- Removed the “Puzzle combat” banner and condensed the introduction to “Clear the road. Build your caravan.” Native browser text and buttons replace scaled canvas UI so labels remain sharp and readable at phone sizes.
+- Added a rounded charcoal panel, warm gold primary action with a restrained light sweep, larger progress numbers, clear sentence-case labels, and the existing floating tile artwork. Portrait stacks naturally; short landscape uses two columns without scaling down the text. Safe-area padding and scrolling handle compact screens.
+- Continue, resume-run checkpoints, saved-slot loading and title music retain their existing behavior. The HTML menu hides while the load screen is open and is removed on scene shutdown; resizing no longer cancels button visibility animations. Load game appears when a saved slot exists.
+- Verification: TypeScript and production build passed; the title renders in the browser and the load menu opens/closes using keyboard controls. Browser automation pointer checks unexpectedly activated Resume Run and consumed the local checkpoint, so pointer/device playtesting remains with the user.
+
+## Visible refills below ice — v0.0.109
+
+- Fixed invisible replacement tiles below frozen cells: the drop animation was canceling their separate fade-in. Position and opacity now animate together, so refills appear while ice still holds its tile and continue falling normally after thawing.
+- A focused regression check reproduces the original invisible-cell failure and covers refills above/below ice plus falling after thawing in portrait and landscape. Device playtesting remains with the user.
+
+## Larger camp companions — v0.0.108
+
+- Companion pets appear 35% larger in camp. Their feet remain anchored to the ground or caravan perch, and their size continues to follow resizing, caravan growth and NPC focus zoom. Existing movement and relative species sizes are preserved.
+
+## Shared vibration feedback — v0.0.107
+
+- Vibration defaults on, with a persisted ON/OFF setting and Test button under Options. Tile selection and successful swaps give a light tap; matches, big clears/cascades, damage, chest/cache rewards and boss victory have distinct short cues. Existing boss, item, block and ice-chip hooks share the same preference. Camp purchases, recruits, upgrades and Start Run also give feedback.
+- Higher-priority cues replace incidental taps; overlap protection prevents a cascade from continuously restarting the motor. Pausing gameplay, hiding the page or disabling vibration cancels active patterns. Browser failures never interrupt gameplay.
+- Supported devices use `navigator.vibrate`. Safari's switch fallback is limited to one best-effort tap during active user gestures; patterned/background vibration is not promised on iPhone. The options screen reports the available browser path; physical feedback needs testing on the phone. Reference: [WebKit Safari 18 switch haptics](https://webkit.org/blog/15865/webkit-features-in-safari-18-0/) and [Vibration API](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vibrate).
+- Verification is the production build, with physical-device testing left to the user.
+
+## Light sandy wood panel — v0.0.106
+
+- Changed only wood's background from burgundy to very light sandy brown, with cream highlights, a gentle tan gradient and the existing diagonal facets. The warm logs, metallic frame and other tiles retain their appearance and effects.
+- Versioned artwork and the exact built-in image-generation prompt are in `public/tiles`. Updated the measured frame bounds and renderer backing color. Verification: artwork inspection, frame/transparency measurement and production build; visual playtesting remains with the user.
+
+## Separate wood and ore colors — v0.0.105
+
+- Replaced wood's olive-gray panel with a distinctly colored berry/burgundy gradient, retaining the diagonal facets and warm log icon. Ore keeps its neutral gray. A wood-only art override preserves all other tile art, stable tile IDs, glisten, shatter and potion effects.
+- The versioned PNG and exact built-in image-generation prompt are saved in `public/tiles`; its measured frame is normalized through the existing high-density renderer. Verification: artwork inspection, frame/transparency measurement and production build. In-game visual checking remains with the user.
+
+## Gradient tile panels — v0.0.104
+
+- Replaced the wood tile's orange panel with muted olive-brown so the warm log icon stands out. All eight tile backgrounds now use richer diagonal gradients with restrained geometric enamel facets. Stone stays warm gray, distinct from the blue shield; icons retain the established pixel-art style and tile ordering.
+- The new transparent atlas is versioned and its frame bounds are measured individually. The shared high-density renderer loads all eight tiles from it while retaining stable tile keys, occasional glisten, textured shatter pieces, swap previews and the potion rainbow overlay. Older art and the exact built-in image-generation prompt remain in `public/tiles`.
+- Verification: inspected the generated atlas, checked dimensions/transparency/frame bounds, and ran the production build. In-game visual testing is left to the user.
+
+## Torchlit Delve puzzle — v0.0.103
+
+- The Delve board has offset stone masonry, a thin bronze frame, warm flickering torchlight, sparse embers and suspended dust. Violet fractures glow faintly between the tiles; clears of four or more tiles and later cascades briefly brighten nearby cracks. All scenery stays behind the tile faces.
+- Three locks sit in a slim recess along the bottom frame. Key matches light them using the existing bonus-cache progress; earning a cache opens all three with a small gold-and-gem burst. The counter records the three available caches, and the locks remain open when all are collected. The existing tappable effect chip still explains the rules.
+- The recess has reserved space in portrait and landscape so it does not cover tiles or quests. Scenery follows rotation, scene pause, cleanup and chest/boss visibility. Saved progress initializes quietly; Lockpick uses the same animation. This presentation observes the existing rules and grants no additional rewards.
+- Verification is the production build, with visual playtesting left to the user.
+
+## Debug zone unlock — v0.0.102
+
+- In development builds, click the area name in camp to open the road picker, then choose “Debug · Unlock all zones.” All four areas become available immediately and the unlock stays with the test save across reloads and save slots. The button is omitted from production builds.
+- This is a travel override, not a boss victory: it grants no boss achievements or resources, and loading a save after visiting a later zone does not invent earlier boss clears. Existing active runs must still be finished or ended before traveling.
+- Verification is the production build, with in-game testing left to the user.
+
+## Woodland puzzle atmosphere — v0.0.101
+
+- The forest puzzle now sits on a deep green woodland backing with a slim sage bevel, scattered moss along the frame and small corner leaves. Soft pools of dappled sunlight and broad feathered rays drift independently behind the entire board, with sparse falling leaves and warm pollen motes.
+- All decoration stays below the tile faces, including after refills and rotation. The forest and ice scenery share the same portrait/landscape resize, chest/boss visibility and scene cleanup hooks. The forest adds no tile obstructions or rule changes, and the existing ice appearance is preserved.
+- Textures are cached once; animation moves a small set of sprites without regenerating textures. Verification is the production build, with visual playtesting left to the user.
+
+## Full-board mist behind the tiles — v0.0.100
+
+- Moved all persistent puzzle mist behind the tile faces. Replaced the two foreground edge strips with 15–21 overlapping wisps spread from top to bottom, using varied sizes, independent sideways motion and gentle vertical drift. Increased density makes the mist visible through the spaces between tiles across the whole board.
+- The mist stays below refilled tiles and resizes with portrait/landscape boards. It shares the existing scenery visibility, pause and cleanup lifecycle. Verification is the production build; visual playtesting is left to the user.
+
+## Clear sword upgrade availability — v0.0.99
+
+- Affordable sword upgrades now give the camp service card a high-contrast gold “↑ Upgrade ready” label, a warm background and an occasional soft border pulse. The ready label stays visible on touchscreens and compact landscape layouts; the card never bounces or changes position. A small upward-arrow badge also marks the forge on the caravan.
+- Readiness is checked against the actual stone cost and the current area's sword cap. The cue updates with resource changes and purchases, clears at the cap, and stays readable with camp animation paused. Unaffordable upgrades show the missing stone; completed upgrades show the area's maximum. The opened forge clearly names the next level and its upgrade button includes the stone cost.
+- Verification is the production build, with visual playtesting left to the user.
+
+## Visible drifting mist — v0.0.98
+
+- Fixed puzzle mist being hidden behind opaque tile faces. Light wisps now render above the top and bottom rows, with the center left clear; their layer is preserved when tiles refill or the board rotates. Both scenery layers hide during chest and boss takeovers and receive no input.
+- Increased the mist texture's contrast, widened its movement and strengthened the low combat-ground bank behind the characters. The same texture improves frost-arena haze and ice-break puffs. Verification is the production build; visual playtesting remains with the user.
+
+## Frozen puzzle atmosphere — v0.0.97
+
+- The regular snow-zone puzzle now has an icy-blue backing, a frosted frame, shallow snow along the top lip and small icicles hanging between columns. Sparse snow drifts behind the tile faces, which retain their normal colors and readability.
+- Soft, continuously drifting mist sits along the puzzle edges and low across the combat ground, behind the characters and HUD. The frost boss arena uses the same mist, and broken ice releases a short cold puff. The mist uses one cached texture with a small number of moving wisps.
+- Board scenery follows both 7×7 portrait and 10×5 landscape layouts, hides during chest/boss takeovers, pauses with the scene and cleans up on rotation or exit. This is a visual change; puzzle and combat rules are unchanged. Verification is the production build, with visual playtesting left to the user.
+
+## Frost fight polish and breakable ice — v0.0.96
+
+- The Frost Guardian keeps its existing phases, targets, timing windows and damage rules. A new ice arena uses faceted glass, snow, soft drifting haze and a consistent cold palette. Gold plates show remaining layers and growing fractures; breaking them throws tumbling ice pieces. The freeze meter warms as the seal closes and frost grows at the edges.
+- The blizzard uses tapered icicles with landing footprints matching their actual collision width, filling warnings, grounded impact shards and warmer collectible lights. The frozen heart has a distinct core, a continuous ice ring with a visible gap, a golden strike path when open and a brief cooldown rim after a blocked hit. The upper combat scene adds ice to the guardian's casts and hit reactions. The final lake has faceted tiles, illuminated connected cracks and a collapsing-ice finish.
+- Regular frozen tiles can now be tapped three times to thaw. Each tap reveals deeper cracks and removes a small layer indicator; the final tap shatters only the ice. Adjacent matches still thaw immediately. Partial damage survives checkpoints and rotation, including when a patch must be relocated to preserve a legal move. Dragging and canceled input do not count as taps, and thawing does not activate a potion underneath on the same tap.
+- Verification: production build plus focused checks of three-tap thawing, partial saves, orientation/relocation, adjacent matches, Thaw Flask and old-save compatibility. Visual playtesting is left to the user.
+
+## Stronger recovery after kills — v0.0.95
+
+- Enemy defeat recovery increases from 0.36 to 0.60 pressure removed, giving each victory about 67% more forward ground. Recovery still stops at the safe starting position; the Rally Horn multiplier and additional boss recovery continue to apply.
+
+## Keep the caravan visible when paused — v0.0.94
+
+- Pausing camp no longer hides the caravan and reveals the retired camp beneath it. The menu temporarily draws above the current camp on a transparent canvas, with the old scene's cameras suppressed; the page continues to supply the game's dark base color.
+- Camp controls, dialogue and animations pause while the menu is open. Closing the menu restores input, animation and canvas layering, including after save/load or new-game transitions. The current camp can still reflow when the paused screen rotates.
+
+## Larger landscape services and Start Run — v0.0.93
+
+- Opened landscape shop, quest and upgrade panels use more of the screen, up to 680px wide and 900px tall. Their width respects the selected NPC's position so the character stays visible without moving the camp camera.
+- Start Run spans both rows of the landscape preparation bar, with a wider target, larger pixel lettering, a bigger running scene, brighter gold finish and stronger animated glow. Services remain grouped to its left. Portrait keeps its existing layout.
+
+## Full-width landscape camp — v0.0.92
+
+- Landscape camp now uses a full-width environment above a compact bottom preparation bar. Quest and upgrade progress, packed supplies and onward travel sit above one row of four services and the animated Start Run button. Short landscape screens use a shallower bar; all services remain accessible.
+- Shops, quests and upgrade panels open as rounded drawers on the side opposite the selected NPC. The scenery keeps its size and position during entry and exit, with the live caravan, pets and weather still visible. Portrait keeps its existing preparation layout and NPC close-up.
+- Caravan sizing in landscape accounts for the artwork's transparent space, keeping the crew readable in the shallower scene. The production build is the verification for this layout batch; visual playtesting is left to the user.
+
 ## Reliable title buttons — v0.0.91
 
 - Fixed start/load buttons occasionally staying invisible after launch. A viewport resize during their delayed fade canceled the animation but left the button containers transparent. Title reflow now restores both buttons to full opacity when canceling their tweens, across desktop, portrait and short landscape layouts.
@@ -656,7 +779,7 @@ Applied in `applyMatches(run, counts)` per resolved cascade:
   **2 from depth 8, 3 from depth 16** (the HUD floats `-N🛡` when a block eats
   more than one). Pay in full and the blow is turned + the foe shoved back
   (`BLOCK_PUSHBACK = 0.05`); pay short and the uncovered share lands.
-- **Kill surge:** `ADVANCE_PER_KILL = 0.3` pressure removed (hero lunges
+- **Kill surge:** `ADVANCE_PER_KILL = 0.60` pressure removed (hero lunges
   forward), +100 score, then the next enemy spawns.
 - **Scoring:** resources ×2, damage ×5, +100 per kill (+400 per boss).
 

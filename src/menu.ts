@@ -1,334 +1,173 @@
 /**
- * matchBlade — pause / system menu (Esc or the ☰ button).
- *
- * Launched OVER the camp or the run; the scene underneath is paused, so
- * strikes, scroll pressure, chest choreography and cutscenes all hold their
- * breath while this is open. Views: main, options (channel faders from
- * audio.ts), save/load (three snapshot slots from meta.ts), and a reusable
- * confirm step for the destructive moves.
- *
- * The ACTIVE save auto-persists constantly; "Save Game" snapshots it into a
- * slot, "Load Game" restores a snapshot (and rebuilds the world at camp).
+ * Native system menus share the camp's readable, responsive UI.
+ * The caller remains paused; save slots snapshot camp progress, never the live run.
  */
-
 import Phaser from "phaser";
-import { defaultMeta, loadMeta, saveMeta, readSlot, saveToSlot, loadFromSlot, SAVE_SLOTS } from "./meta";
+import { defaultMeta, loadMeta, saveMeta, readSlot, saveToSlot, loadFromSlot, SAVE_SLOTS, BIOME_LABELS } from "./meta";
 import { audioSettings, setAudioSettings, sfxV } from "./audio";
 import { tileEffectsEnabled, setTileEffectsEnabled, TILE_EFFECTS_CHANGED } from "./tile-effects";
-
-const EMOJI_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+import { haptic, hapticsEnabled, setHapticsEnabled, hapticsNote, testHaptics, stopHaptics } from "./haptics";
+import "./ui-theme";
+import "./menu.css";
 
 type View = "main" | "options" | "save" | "load" | "confirm";
+const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = "") => {
+  const element = document.createElement(tag); element.className = className; element.textContent = text; return element;
+};
 
 export class MenuScene extends Phaser.Scene {
-  private from = "camp"; // scene key we paused (resume target)
-  private direct: View | null = null; // opened straight to one view (title's LOAD GAME) — back resumes, not showMain
-  private root: Phaser.GameObjects.Container | null = null;
-  private view: View = "main";
-  private dragging: ((px: number) => void) | null = null; // active slider, if any
-  private redraw: () => void = () => this.showMain();
+  private from = "camp";
+  private direct: View | null = null;
+  private overlay!: HTMLDivElement;
+  private back: () => void = () => this.resume();
+  private leaving = false;
 
-  constructor() {
-    super("menu");
-  }
-
-  init(data: { from?: string; view?: View }) {
-    this.from = data?.from ?? "camp";
-    this.direct = data?.view ?? null;
-  }
+  constructor() { super("menu"); }
+  init(data: { from?: string; view?: View }) { this.from = data?.from ?? "camp"; this.direct = data?.view ?? null; }
 
   create() {
-    const vw = this.scale.width;
-    const vh = this.scale.height;
-    const shade = this.add.rectangle(vw / 2, vh / 2, vw, vh, 0x05060a, 0.7).setInteractive();
-    const resize = () => {
-      this.dragging = null;
-      shade.setPosition(this.scale.width / 2, this.scale.height / 2).setSize(this.scale.width, this.scale.height);
-      this.redraw();
+    stopHaptics(); this.leaving = false;
+    const focus = document.activeElement;
+    const camp = document.querySelector<HTMLElement>(".caravan-hub, .village-hub");
+    const wasInert = camp?.inert ?? false;
+    const cameras = this.from === "camp" ? this.scene.get(this.from).cameras.cameras.map(camera => ({ camera, visible: camera.visible })) : [];
+    for (const { camera } of cameras) camera.setVisible(false);
+    if (camp) { camp.inert = true; camp.classList.add("is-system-paused"); }
+    this.overlay = node("div", "mb-system");
+    for (const event of ["pointerdown", "pointerup", "pointermove", "click", "wheel"])
+      this.overlay.addEventListener(event, e => e.stopPropagation());
+    const keyboard = (event: KeyboardEvent) => {
+      if (!this.scene.isActive()) return;
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); this.back(); return; }
+      if (event.key !== "Tab") return;
+      const list = Array.from(this.overlay.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)"));
+      const first = list[0], last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
-    this.scale.on("resize", resize);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off("resize", resize));
-
-    this.input.keyboard?.on("keydown-ESC", () => {
-      if (this.view === "main" || this.direct) this.resume();
-      else this.showMain();
+    document.addEventListener("keydown", keyboard, true);
+    (this.game.canvas.parentElement ?? document.body).append(this.overlay);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.overlay.remove(); document.removeEventListener("keydown", keyboard, true);
+      if (camp) { camp.inert = wasInert; camp.classList.remove("is-system-paused"); }
+      for (const { camera, visible } of cameras) camera.setVisible(visible);
+      if (focus instanceof HTMLElement && focus.isConnected) focus.focus({ preventScroll: true });
     });
-    // slider dragging is scene-wide so the knob can't be "dropped" mid-drag
-    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
-      if (this.dragging && p.isDown) this.dragging(p.x);
-    });
-    this.input.on("pointerup", () => {
-      if (this.dragging) {
-        this.dragging = null;
-        this.sfx("pickup", 0.35); // an audible ping at the new level
-      }
-    });
-
-    if (this.direct === "load") this.showSlots("load");
-    else this.showMain();
+    if (this.direct === "load") this.showSlots("load"); else this.showMain();
   }
 
-  private sfx(key: string, volume = 0.5) {
+  private sfx(key = "swap", volume = .25) {
     if (this.cache.audio.exists(key)) this.sound.play(key, { volume: sfxV(volume) });
   }
-
-  // ---- shared bits ----------------------------------------------------------
-
-  private freshRoot(h: number): { box: Phaser.GameObjects.Container; x: number; y: number; w: number } {
-    this.root?.destroy();
-    const vw = this.scale.width;
-    const vh = this.scale.height;
-    const W = Math.min(480, vw - 40);
-    const box = this.add.container(0, 0).setDepth(10);
-    const bg = this.add.rectangle(vw / 2, vh / 2, W, h, 0x14171f, 0.98).setStrokeStyle(3, 0x2a2d38);
-    box.add(bg);
-    this.root = box;
-    const fit = Math.min(1, (vh - 16) / h);
-    box.setScale(fit).setPosition(vw / 2 * (1 - fit), vh / 2 * (1 - fit));
-    return { box, x: vw / 2, y: vh / 2 - h / 2, w: W };
+  private button(text: string, action: () => void, style = "") {
+    const button = node("button", style, text); button.type = "button";
+    button.onclick = () => { if (this.leaving) return; this.sfx(); action(); };
+    return button;
   }
-
-  private title(box: Phaser.GameObjects.Container, x: number, y: number, label: string) {
-    box.add(
-      this.add.text(x, y + 30, label, { fontFamily: "monospace", fontStyle: "bold", fontSize: "22px", color: "#ffe08a" }).setOrigin(0.5),
-    );
+  private panel(title: string, back: () => void, className = "") {
+    this.back = back; this.overlay.replaceChildren();
+    const panel = node("section", "mb-system-panel");
+    panel.setAttribute("role", "dialog"); panel.setAttribute("aria-modal", "true"); panel.setAttribute("aria-label", title);
+    const header = node("header", "mb-system-header"), close = this.button("×", back, "mb-system-close");
+    close.setAttribute("aria-label", title === "Paused" ? "Resume game" : "Back");
+    header.append(node("h2", "", title), close);
+    const body = node("div", "mb-system-content " + className);
+    panel.append(header, body); this.overlay.append(panel); close.focus({ preventScroll: true });
+    return body;
   }
-
-  private button(
-    box: Phaser.GameObjects.Container,
-    x: number,
-    y: number,
-    w: number,
-    label: string,
-    cb: (() => void) | null,
-    opts: { danger?: boolean; small?: boolean } = {},
-  ) {
-    const enabled = !!cb;
-    const h = opts.small ? 34 : 44;
-    const base = !enabled ? 0x2a2d38 : opts.danger ? 0x5e2e2e : 0x2e5e34;
-    const edge = !enabled ? 0x3a3f4b : opts.danger ? 0xc26e54 : 0x54c26e;
-    const rect = this.add.rectangle(x, y, w, h, base).setStrokeStyle(2, edge);
-    const txt = this.add
-      .text(x, y, label, { fontFamily: EMOJI_FONT, fontStyle: "bold", fontSize: opts.small ? "15px" : "17px", color: enabled ? "#eef5ee" : "#6a707c" })
-      .setOrigin(0.5);
-    if (enabled)
-      rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-        this.sfx("swap", 0.25);
-        cb();
-      });
-    box.add([rect, txt]);
-  }
-
   private resume() {
-    this.scene.stop();
-    this.scene.resume(this.from);
+    if (this.leaving) return; this.leaving = true;
+    this.scene.stop(); this.scene.resume(this.from);
   }
-
-  /** Tear the world down and rebuild at camp (new game / loaded slot). */
   private restartToCamp() {
-    this.scene.stop(this.from);
-    this.scene.start("camp");
+    if (this.leaving) return; this.leaving = true;
+    this.scene.stop(this.from); this.scene.start("camp");
   }
-
-  // ---- views ----------------------------------------------------------------
-
   private showMain() {
-    this.redraw = () => this.showMain();
-    this.view = "main";
-    const inRun = this.from === "game"; // retreat only means something mid-run
-    const compact = this.scale.height < 520;
-    const H = compact ? this.scale.height - 12 : inRun ? 472 : 414;
-    const { box, x, y, w } = this.freshRoot(H);
-    this.title(box, x, y, "— PAUSED —");
-    const bw = w - 80;
-    let by = y + (compact ? 68 : 92);
-    const step = compact ? Math.min(46, (H - 100) / (inRun ? 5 : 4)) : 58;
-    this.button(box, x, by, bw, "resume", () => this.resume());
-    if (inRun)
-      this.button(box, x, (by += step), bw, "return to camp", () =>
-        this.confirmStep(
-          "End this run and return to camp?\nYou keep all collected resources.",
-          "retreat",
-          () => {
-            const g = this.scene.get("game") as unknown as { bankAndRetreat?: () => void };
-            g.bankAndRetreat?.(); // the caravan keeps what the scout carried
-            this.restartToCamp();
-          },
-          () => this.showMain(),
-        ),
-      );
-    this.button(box, x, (by += step), bw, "new game", () => this.confirmStep(
-      "Start over? Progress, quests and banked resources all reset.\n(Save slots are kept.)",
-      "start new game",
-      () => {
-        saveMeta(defaultMeta());
-        this.restartToCamp();
-      },
-      () => this.showMain(),
-    ));
-    this.button(box, x, (by += step), bw, "save game", () => this.showSlots("save"));
-    this.button(box, x, (by += step), bw, "load game", () => this.showSlots("load"));
-    this.button(box, x, (by += step), bw, "options", () => this.showOptions());
-    if (!compact) box.add(
-      this.add
-        .text(x, y + H - 22, "esc closes · progress auto-saves as you play", { fontFamily: "monospace", fontSize: "13px", color: "#8a93a3" })
-        .setOrigin(0.5),
-    );
+    const body = this.panel("Paused", () => this.resume(), "mb-system-main");
+    body.append(this.button("Resume game →", () => this.resume(), "mb-system-primary"));
+    if (this.from === "game") body.append(this.button("Return to camp", () =>
+      this.confirmStep("Head back to camp?", "This run will end. You keep every resource you collected.", "Return to camp", () => {
+        const game = this.scene.get("game") as unknown as { bankAndRetreat?: () => void };
+        game.bankAndRetreat?.(); this.restartToCamp();
+      }, () => this.showMain(), false)));
+    body.append(this.button("Settings", () => this.showOptions()));
+    const saves = node("div", "mb-system-grid");
+    saves.append(this.button("Save game", () => this.showSlots("save")), this.button("Load game", () => this.showSlots("load")));
+    body.append(saves, this.button("Start a new game", () =>
+      this.confirmStep("Start over?", "Your current journey, upgrades and resources will reset. Saved slots are kept.", "New game", () => {
+        saveMeta(defaultMeta()); this.restartToCamp();
+      }, () => this.showMain()), "mb-system-quiet"),
+      node("p", "mb-system-note mb-system-autosave", "Progress saves automatically"));
   }
-
   private showOptions() {
-    this.redraw = () => this.showOptions();
-    this.view = "options";
-    const { box, x, y, w } = this.freshRoot(384);
-    this.title(box, x, y, "OPTIONS");
-    const s = audioSettings();
-    let sy = y + 86;
-    this.slider(box, x, sy, w, "effects", s.sfx, (v) => setAudioSettings({ sfx: v }));
-    this.slider(box, x, (sy += 56), w, "ambience", s.amb, (v) => setAudioSettings({ amb: v }));
-    this.slider(box, x, (sy += 56), w, "music", s.music, (v) => setAudioSettings({ music: v }));
-
-    const left = x - w / 2 + 26;
-    const tx = x + w / 2 - 65;
-    box.add(this.add.text(left, y + 264, "Tile effects", {
-      fontFamily: EMOJI_FONT, fontSize: "17px", color: "#dfe3ea",
-    }).setOrigin(0, 0.5));
-    box.add(this.add.text(left, y + 296, "Glisten & tile shattering", {
-      fontFamily: EMOJI_FONT, fontSize: "14px", color: "#aeb5c0",
-    }).setOrigin(0, 0.5));
-    const toggle = this.add.rectangle(tx, y + 264, 78, 44).setInteractive({ useHandCursor: true });
-    const state = this.add.text(tx, y + 264, "", {
-      fontFamily: EMOJI_FONT, fontSize: "17px", fontStyle: "bold",
-    }).setOrigin(0.5);
-    const refresh = () => {
-      const on = tileEffectsEnabled();
-      toggle.setFillStyle(on ? 0x393729 : 0x242832).setStrokeStyle(2, on ? 0xffd982 : 0x69717c);
-      state.setText(on ? "ON" : "OFF").setColor(on ? "#ffe6a5" : "#b4bdcc");
-    };
-    toggle.on("pointerdown", () => {
-      this.sfx("swap", 0.25);
-      setTileEffectsEnabled(!tileEffectsEnabled());
-      refresh();
-      this.game.events.emit(TILE_EFFECTS_CHANGED);
+    const body = this.panel("Settings", () => this.showMain());
+    const audio = audioSettings();
+    for (const [key, name] of [["sfx", "Sound effects"], ["amb", "Ambience"], ["music", "Music"]] as const) {
+      const row = node("label", "mb-system-slider"), output = node("output", "", Math.round(audio[key] * 100) + "%");
+      const input = node("input"); input.type = "range"; input.min = "0"; input.max = "100"; input.step = "1"; input.value = String(Math.round(audio[key] * 100));
+      input.setAttribute("aria-label", name);
+      input.oninput = () => { output.value = input.value + "%"; setAudioSettings({ [key]: Number(input.value) / 100 }); this.game.events.emit("audio-changed"); };
+      input.onchange = () => this.sfx("pickup", .3);
+      row.append(node("span", "", name), output, input); body.append(row);
+    }
+    this.toggle(body, "Tile effects", "Glisten and tile shattering", tileEffectsEnabled, () => {
+      setTileEffectsEnabled(!tileEffectsEnabled()); this.game.events.emit(TILE_EFFECTS_CHANGED);
     });
-    box.add([toggle, state]);
-    refresh();
-    this.button(box, x, y + 344, 160, "back", () => this.showMain(), { small: true });
-  }
-
-  /** Label + draggable fader + live percentage. Changes broadcast immediately. */
-  private slider(
-    box: Phaser.GameObjects.Container,
-    cx: number,
-    yy: number,
-    w: number,
-    label: string,
-    value: number,
-    onChange: (v: number) => void,
-    note?: string,
-  ) {
-    const left = cx - w / 2 + 34;
-    const tw = 190; // track width
-    const tx = cx + w / 2 - 34 - tw; // track left
-    box.add(this.add.text(left, yy - 9, label, { fontFamily: "monospace", fontSize: "15px", color: "#dfe3ea" }));
-    if (note) box.add(this.add.text(left, yy + 9, note, { fontFamily: "monospace", fontSize: "12px", color: "#8a93a3" }));
-    const track = this.add.rectangle(tx + tw / 2, yy, tw, 8, 0x0a0c11).setStrokeStyle(2, 0x2a2d38);
-    const fill = this.add.rectangle(tx, yy, Math.max(1, tw * value), 6, 0xffd94a).setOrigin(0, 0.5);
-    const knob = this.add.circle(tx + tw * value, yy, 10, 0xffe08a).setStrokeStyle(2, 0x5a3a08);
-    const pct = this.add
-      .text(tx + tw + 12, yy, `${Math.round(value * 100)}`, { fontFamily: "monospace", fontSize: "14px", color: "#bfe6ff" })
-      .setOrigin(0, 0.5);
-    box.add([track, fill, knob, pct]);
-
-    const apply = (px: number) => {
-      const localX = (px - box.x) / box.scaleX;
-      const v = Phaser.Math.Clamp((localX - tx) / tw, 0, 1);
-      fill.width = Math.max(1, tw * v);
-      knob.x = tx + tw * v;
-      pct.setText(`${Math.round(v * 100)}`);
-      onChange(v);
-      this.game.events.emit("audio-changed"); // looping beds re-level live
-    };
-    const zone = this.add.rectangle(tx + tw / 2, yy, tw + 28, 32, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
-    zone.on("pointerdown", (p: Phaser.Input.Pointer) => {
-      apply(p.x);
-      this.dragging = apply;
+    const note = node("p", "mb-system-note", hapticsNote()); note.setAttribute("role", "status");
+    this.toggle(body, "Vibration", "Feedback for matches and rewards", hapticsEnabled, () => {
+      setHapticsEnabled(!hapticsEnabled()); note.textContent = hapticsNote(); if (hapticsEnabled()) haptic("tap");
     });
-    box.add(zone);
+    body.append(note);
+    const controls = node("div", "mb-system-grid");
+    controls.append(this.button("Test vibration", () => {
+      const attempted = testHaptics();
+      note.textContent = !hapticsEnabled() ? "Turn vibration on to test." : attempted
+        ? "No tap? Check your device vibration settings." : "Vibration is unavailable in this browser.";
+    }), this.button("Done", () => this.showMain()));
+    body.append(controls);
   }
-
-  private showSlots(mode: "save" | "load") {
-    this.redraw = () => this.showSlots(mode);
-    this.view = mode;
-    const { box, x, y, w } = this.freshRoot(380);
-    this.title(box, x, y, mode === "save" ? "SAVE GAME" : "LOAD GAME");
-    box.add(
-      this.add
-        .text(x, y + 56, mode === "save" ? "save your camp progress to a slot" : "return to a snapshot (current progress is replaced)", {
-          fontFamily: "monospace", fontSize: "14px", color: "#aeb5c0",
-        })
-        .setOrigin(0.5),
-    );
-
-    let sy = y + 104;
+  private toggle(parent: HTMLElement, title: string, detail: string, value: () => boolean, change: () => void) {
+    const row = node("div", "mb-system-toggle"), copy = node("div");
+    copy.append(node("strong", "", title), node("small", "", detail));
+    const button = this.button("", () => { change(); update(); });
+    button.setAttribute("role", "switch"); button.setAttribute("aria-label", title);
+    const update = () => { button.setAttribute("aria-checked", String(value())); button.textContent = value() ? "On" : "Off"; };
+    update(); row.append(copy, button); parent.append(row);
+  }
+  private showSlots(mode: "save" | "load", receipt = "") {
+    const back = () => this.direct ? this.resume() : this.showMain();
+    const body = this.panel(mode === "save" ? "Save your journey" : "Load a journey", back);
+    body.append(node("p", "mb-system-note", mode === "save" ? "Keep a copy of your camp progress. Runs recover through autosave." : "Choose a saved camp. Loading replaces your current progress."));
+    if (receipt) { const status = node("p", "mb-system-note", receipt); status.setAttribute("role", "status"); body.append(status); }
     for (let n = 1; n <= SAVE_SLOTS; n++) {
       const slot = readSlot(n);
-      const label = slot
-        ? `${n} ▸ ${(slot.meta.biome || "plains").toUpperCase()} · depth ${slot.meta.bestDepth} · 💎${slot.meta.treasure}\n     ${slot.meta.questsRewarded.length} quests completed · ${new Date(slot.savedAt).toLocaleString()}`
-        : `${n} ▸ — empty —`;
-      const canUse = mode === "save" || !!slot;
-      this.slotRow(box, x, sy, w - 60, label, !canUse ? null : () => {
+      const use = () => {
         if (mode === "save") {
-          const doSave = () => {
-            saveToSlot(n, loadMeta());
-            this.sfx("coin3", 0.5);
-            this.showSlots("save");
-          };
-          if (slot) this.confirmStep(`Overwrite slot ${n}?`, "overwrite", doSave, () => this.showSlots("save"));
-          else doSave();
-        } else {
-          this.confirmStep(
-            `Load slot ${n}? This replaces your current progress\nwith the selected save.`,
-            "load it",
-            () => {
-              if (loadFromSlot(n)) this.restartToCamp();
-            },
-            () => this.showSlots("load"),
-          );
-        }
-      });
-      sy += 66;
+          const save = () => { saveToSlot(n, loadMeta()); this.sfx("coin3", .4); this.showSlots("save"); };
+          if (slot) this.confirmStep("Replace save " + n + "?", "The older copy in this slot will be replaced by your current camp progress.", "Replace save", save, () => this.showSlots("save"));
+          else save();
+        } else this.confirmStep("Load save " + n + "?", "This replaces your current progress with the selected camp. An unfinished run will be discarded.", "Load game", () => {
+          if (loadFromSlot(n)) this.restartToCamp(); else this.showSlots("load", "This save could not be loaded.");
+        }, () => this.showSlots("load"));
+      };
+      const button = this.button("", use, "mb-system-slot");
+      button.disabled = mode === "load" && !slot;
+      const copy = node("span");
+      copy.append(node("strong", "", slot ? BIOME_LABELS[slot.meta.biome] ?? slot.meta.biome : "Empty slot"));
+      copy.append(node("small", "", slot ? "Depth " + slot.meta.bestDepth + " · Sword level " + slot.meta.swordLevel : mode === "save" ? "Save your camp here" : "No saved journey"));
+      if (slot) copy.append(node("small", "mb-slot-date", new Date(slot.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })));
+      button.append(node("span", "", String(n).padStart(2, "0")), copy, node("span", "", slot || mode === "save" ? "→" : "—"));
+      body.append(button);
     }
-    // launched straight here (title's LOAD GAME): back returns to the title, not the pause menu
-    this.button(box, x, y + 380 - 40, 160, "back", () => (this.direct ? this.resume() : this.showMain()), { small: true });
+    body.append(this.button("Back", back));
   }
-
-  /** A two-line slot row (taller than a button, left-aligned label). */
-  private slotRow(box: Phaser.GameObjects.Container, x: number, y: number, w: number, label: string, cb: (() => void) | null) {
-    const enabled = !!cb;
-    const rect = this.add.rectangle(x, y, w, 56, enabled ? 0x1c2029 : 0x14171f).setStrokeStyle(2, enabled ? 0x3a4152 : 0x2a2d38);
-    const txt = this.add
-      .text(x - w / 2 + 14, y, label, { fontFamily: EMOJI_FONT, fontSize: "15px", color: enabled ? "#dfe3ea" : "#69717c", lineSpacing: 4 })
-      .setOrigin(0, 0.5);
-    if (enabled)
-      rect.setInteractive({ useHandCursor: true }).on("pointerdown", () => {
-        this.sfx("swap", 0.25);
-        cb();
-      });
-    box.add([rect, txt]);
-  }
-
-  /** Inline confirm view for the irreversible moves. */
-  private confirmStep(message: string, yesLabel: string, yes: () => void, back: () => void) {
-    this.redraw = () => this.confirmStep(message, yesLabel, yes, back);
-    this.view = "confirm";
-    const { box, x, y, w } = this.freshRoot(240);
-    this.title(box, x, y, "ARE YOU SURE?");
-    box.add(
-      this.add
-        .text(x, y + 104, message, { fontFamily: EMOJI_FONT, fontSize: "15px", color: "#dfe3ea", align: "center", lineSpacing: 6, wordWrap: { width: w - 40 } })
-        .setOrigin(0.5),
-    );
-    this.button(box, x - (w - 80) / 4 - 6, y + 240 - 44, (w - 92) / 2, yesLabel, yes, { danger: true });
-    this.button(box, x + (w - 80) / 4 + 6, y + 240 - 44, (w - 92) / 2, "back", back);
+  private confirmStep(title: string, message: string, label: string, yes: () => void, back: () => void, danger = true) {
+    const body = this.panel(title, back);
+    body.append(node("p", "mb-system-confirm", message));
+    const choices = node("div", "mb-system-grid");
+    const cancel = this.button("Cancel", back);
+    choices.append(cancel, this.button(label, yes, danger ? "mb-system-danger" : ""));
+    body.append(choices); cancel.focus({ preventScroll: true });
   }
 }

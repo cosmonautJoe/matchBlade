@@ -24,12 +24,59 @@ assert.deepEqual(e.empoweredMatch(b.findMatches(grid),{r:0,c:1}),{type:0,count:5
 assert.equal(r.applyMatches(durableEnemy(),{0:6},{type:0,count:3}).damage,14,'unrelated group is not doubled');
 let seed=3189;const rand=()=>((seed=(seed*1664525+1013904223)>>>0)/4294967296);
 const portrait=b.makeInitialGrid(rand,7,7), pos=portrait.flatMap((row,r)=>row.flatMap((t,c)=>t===0?[{r,c}]:[]))[0];
-let state={...e.newEmpowered(),type:0,cell:pos};
+let state=e.restoreEmpowered({moves:3,nextAt:5,type:0,cell:pos,layouts:{}},portrait);
+assert.equal(state.charges.length,1,'legacy charged tiles survive migration');
 const wide=b.reflowBoard(portrait,true);assert.ok(wide);
-e.reflowEmpowered(state,portrait,wide.grid);assert.equal(wide.grid[state.cell.r][state.cell.c],0);
-state=JSON.parse(JSON.stringify(state));
+e.reflowEmpowered(state,portrait,wide.grid);assert.equal(wide.grid[state.charges[0].cell.r][state.charges[0].cell.c],0);
+state=e.restoreEmpowered(JSON.parse(JSON.stringify(state)),wide.grid);
 const tall=b.reflowBoard(wide.grid,false,wide.layouts);assert.ok(tall);
-e.reflowEmpowered(state,wide.grid,tall.grid);assert.deepEqual(state.cell,pos,'rotation and save/reload restore the same charge');
+e.reflowEmpowered(state,wide.grid,tall.grid);assert.deepEqual(state.charges[0].cell,pos,'rotation and save/reload restore the same charge');
+// Player-created power: crosses merge, cascades cannot farm new charges, and
+// multiple charged tiles in one group double once rather than multiplying again.
+for(const type of [0,1,2,3,4,5,6]) for(const length of [3,4,5]) for(const multiplier of [2,3]) {
+  const cells=Array.from({length},(_,c)=>({r:0,c}));
+  const matches=[{type,cells,len:length,dir:'h'}];
+  const plan=e.planEmpowered(matches,e.newEmpowered(),[{r:0,c:2},{r:1,c:2}]);
+  assert.equal(plan.create.length,length>=4?1:0);
+  if(length>=4) {
+    assert.deepEqual(plan.create[0].cell,{r:0,c:2});
+    assert.equal(plan.create[0].multiplier,length>=5?3:2);
+  }
+  assert.equal(e.planEmpowered(matches,e.newEmpowered()).create.length,0,'cascade/item resolution grants no free charges');
+  const existing={...e.newEmpowered(),charges:[{id:1,type,cell:cells[0],multiplier},{id:2,type,cell:cells[1],multiplier:2}]};
+  const spent=e.planEmpowered(matches,existing,[cells[2]]);
+  assert.deepEqual(spent.consume,[1,2]); assert.deepEqual(spent.bonus,[{type,count:length,multiplier}]); assert.equal(spent.create.length,0);
+  const base=r.applyMatches(durableEnemy(),{[type]:length});
+  const doubled=r.applyMatches(durableEnemy(),{[type]:length},spent.bonus);
+  assert.equal(doubled.damage,base.damage*multiplier); assert.equal(doubled.guard,base.guard*multiplier);
+  for(const resource of ['wood','ore','treasure','keys']) assert.equal(doubled.gained[resource],base.gained[resource]*multiplier);
+  assert.deepEqual(e.itemPowerBonuses(existing.charges,{[type]:length}),[{type,count:length,multiplier}]);
+}
+const crossPlan=e.planEmpowered(b.findMatches(grid),e.newEmpowered(),[{r:0,c:2}]);
+assert.equal(crossPlan.create.length,1);assert.equal(crossPlan.create[0].cells.length,5);
+const multi=e.newEmpowered();
+multi.charges=portrait.flatMap((row,r)=>row.flatMap((type,c)=>type<7?[{id:r*7+c+1,type,cell:{r,c},multiplier:c%2?2:3}]:[]));
+const original=structuredClone(multi.charges);
+for(let rotation=0;rotation<3;rotation++) {
+  e.reflowEmpowered(multi,portrait,wide.grid);
+  assert.equal(new Set(multi.charges.filter(c=>c.cell).map(c=>JSON.stringify(c.cell))).size,multi.charges.filter(c=>c.cell).length);
+  e.reflowEmpowered(multi,wide.grid,portrait);assert.deepEqual(multi.charges,original);
+}
+const surprise=e.newEmpowered(), powerGrid=[[0,1,2,5],[2,0,1,4]];
+assert.equal(e.randomEmpower(surprise,powerGrid,()=>false,()=>0),undefined,'random power waits for two successful moves');
+surprise.moves=2;
+surprise.charges.push({id:surprise.nextId++,type:0,cell:{r:0,c:0},multiplier:3});
+const random=e.randomEmpower(surprise,powerGrid,cell=>cell.r===0&&cell.c===1,()=>0);
+assert.deepEqual(random.cell,{r:0,c:2},'random power skips earned and frozen tiles');
+assert.equal(random.multiplier,2);assert.equal(random.random,true);
+assert.equal(surprise.charges[0].multiplier,3,'earned power does not block or get replaced by a surprise');
+const restored=e.restoreEmpowered(JSON.parse(JSON.stringify(surprise)),powerGrid);
+assert.deepEqual(restored.charges,surprise.charges);
+assert.equal(restored.moves,2);
+assert.equal(e.randomEmpower(restored,powerGrid),undefined,'reload cannot grant a second random charge');
+restored.charges=restored.charges.filter(c=>!c.random);restored.nextAt=8;
+assert.equal(e.randomEmpower(restored,powerGrid),undefined,'earned tiles do not bypass the random cooldown');
+restored.moves=8;assert.ok(e.randomEmpower(restored,powerGrid));
 const missed=c.newRescueState();assert.equal(c.rollRescue(missed,'plains',4,[],()=>.99),null);
 assert.equal(c.rollRescue(missed,'plains',4,[],()=>0),null,'same encounter cannot reroll on reload');
 assert.equal(c.rollRescue(missed,'plains',5,['bramble'],()=>0),'pip');
@@ -90,9 +137,16 @@ for(const depth of [2,5,8,11,14,17]) {
 }
 for(const biome of ['plains','forest','snow','dungeon']) {
   const crew=r.newRun(0,Infinity,biome,0,c.COMPANIONS.map(p=>p.id));crew.resMult=2;
-  for(let depth=0;depth<20;depth++) {r.spawnNext(crew);r.dealDamage(crew,10000,true);}
+  const solo=r.newRun(0,Infinity,biome);
+  // Forest encounters now contain two enemies and award their own supplies.
+  // Defeat both, and compare pet rewards against the same encounter without pets.
+  for(let depth=0;depth<20;depth++) {
+    r.spawnNext(crew);solo.enemy=structuredClone(crew.enemy);
+    r.dealDamage(crew,10000,true,10000);r.dealDamage(solo,10000,true,10000);
+  }
   assert.equal(crew.block,15,'Moss grants 15 total guard over a full run');
-  assert.deepEqual(crew.resources,{wood:15,ore:15,treasure:0,keys:4},'fixed rewards stack without item multiplication');
+  assert.deepEqual(Object.fromEntries(Object.keys(crew.resources).map(key=>[key,crew.resources[key]-solo.resources[key]])),
+    {wood:15,ore:15,treasure:0,keys:4},'fixed rewards stack without item multiplication');
 }
 // Saved recruitment and camp routines work for the expanded roster in both screen shapes.
 const saves=await import(url('run-save')), motion=await import(url('companion-motion'));

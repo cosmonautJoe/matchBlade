@@ -1,0 +1,6 @@
+{
+  "generator": "Built-in image_gen",
+  "editSource": "wood-v105.png",
+  "output": "wood-v106.png",
+  "prompt": "Use case: precise-object-edit. Edit the attached existing matchBlade wood tile. Change ONLY the colored inner background panel and its thin colored inner bevel from burgundy to a SUPER LIGHT BROWN / SANDY TAN. This must be clearly a light natural beige-brown, with warm cream highlights (#f0dec0) at upper left, pale sandy tan (#d6b88a) through most of the panel, and a gentle light brown (#b4946a) lower-right corner. Keep the background light overall, including the lower portion. No red, pink, burgundy, purple, orange, gold-yellow, olive or gray cast. Preserve its existing tasteful broad diagonal geometric enamel facets and subtle gradient: low contrast, not busy.\n\nCRITICAL: Preserve the existing log bundle, every log shape and grain, silhouette, warm orange-brown wood, cut ends, binding strap, black outline, pose and exact position/size. Preserve the dark metallic clipped-corner outer frame, its geometry, exact canvas dimensions, tile bounds and placement, and transparent outer margins. Do not redesign or change the icon, crop, rotate, zoom or add anything. Only the background panel changes. No text, watermark, particle sparkle or glow. True transparency outside the tile."
+}

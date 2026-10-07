@@ -2,6 +2,7 @@ import type { RunState } from "./run";
 import type { MetaState } from "./meta";
 import type { ChestPull } from "./items";
 import type { BoardLayouts } from "./board";
+import { restoreEmpowered } from "./empowered";
 import { companionById, cleanCompanions } from "./companions";
 import { newRoadFork, restoreRoadFork } from "./road-fork";
 import { restoreSlimeProgress, type SlimeProgress } from "./slime-boss";
@@ -56,11 +57,7 @@ export function readCheckpoint(meta: MetaState): RunCheckpoint | null {
       restored.slimeBoss = restoreSlimeProgress(restored.slimeBoss, restored.arenaWard);
   }
   if (restored.run.biome !== "forest" || restored.run.enemy?.kind !== "boss") delete restored.slimeBoss;
-  const power = restored.empowered;
-  if (power && (!Number.isFinite(power.moves) || !Number.isFinite(power.nextAt) ||
-      ![-1,0,1,2].includes(power.type) || !power.layouts ||
-      (power.cell !== null && (!Number.isInteger(power.cell?.r) || !Number.isInteger(power.cell?.c) ||
-        restored.grid[power.cell.r]?.[power.cell.c] !== power.type)))) delete restored.empowered;
+  restored.empowered = restoreEmpowered(restored.empowered, restored.grid);
   const rescue = restored.rescue;
   if (rescue && (!Number.isFinite(rescue.rolledDepth) || typeof rescue.encountered !== "boolean" ||
       (rescue.pending !== null && !companionById(rescue.pending)))) delete restored.rescue;

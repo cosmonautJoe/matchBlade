@@ -17,6 +17,7 @@
 import Phaser from "phaser";
 import { SWORD, SHIELD } from "./run";
 import type { Coord } from "./board";
+import { UI, UI_FONT } from "./ui-theme";
 
 export interface Rect {
   x: number;
@@ -52,41 +53,41 @@ const DIM = 0x05060a;
 
 const COPY: { title: string; body: string }[] = [
   {
-    title: "HOW TO PLAY",
-    body: "Use the board to fight enemies, collect resources and keep moving. Everything you collect goes back to camp when the run ends.",
+    title: "Clear the road",
+    body: "Match tiles to fight and collect supplies. Everything you collect comes back to camp.",
   },
   {
-    title: "THE BOARD",
+    title: "Make your move",
     body: "Drag to swap, or tap two neighbouring tiles. Match 3 or more of the same type to activate them.",
   },
   {
-    title: "SWORDS STRIKE",
+    title: "Your first attack",
     body: "Match ⚔️ swords for melee damage or purple fireballs for spell damage. Make the highlighted swap to attack.",
   },
   {
-    title: "WATCH YOUR POSITION",
+    title: "Keep your ground",
     body: "Time and enemy hits push you toward the skull ☠. Defeating an enemy moves you forward. Reach the skull and the run ends.",
   },
   {
-    title: "SHIELDS GUARD",
+    title: "Raise your guard",
     body: "Match 🛡️ shields to gain guard charges. They block regular enemy hits. Make the highlighted match.",
   },
   {
-    title: "KEYS OPEN CHESTS",
-    body: "Match 🔑 keys to save them for chests. A chest costs one key and gives resources and items. Keys reset after each run.",
+    title: "Keys open chests",
+    body: "Save keys for the chests along the road. Each chest costs one key. Unused keys reset after a run.",
   },
   {
-    title: "UPGRADE AT CAMP",
+    title: "Build your caravan",
     body: "Keep all collected 🪵 wood, 🪨 stone and 💎 gems, even if you lose. Spend them at camp on permanent upgrades and items.",
   },
   {
-    title: "YOU'RE READY",
-    body: "You have the basics. Make smart matches, watch the enemy, and keep moving. Try a run!",
+    title: "One more trick",
+    body: "Match 4 to create a ×2 tile, or 5+ for ×3. Match it later to multiply that group's reward. Random ×2 tiles appear too.",
   },
 ];
 // step 4's second beat, after the scripted strike clangs off the guard
 const BLOCKED_COPY = {
-  title: "BLOCKED!",
+  title: "Hit blocked",
   body: "Blocked! Guard charges took the hit for you. Match more shields to refill them.",
 };
 
@@ -344,8 +345,8 @@ export class Tutorial {
     mk(0, h.y, h.x, h.h);
     mk(h.x + h.w, h.y, vw - h.x - h.w, h.h);
     const ring = this.keep(this.g.add.graphics().setDepth(92).setAlpha(0));
-    ring.lineStyle(3, 0xffe08a, 0.9);
-    ring.strokeRoundedRect(h.x, h.y, h.w, h.h, 10);
+    ring.lineStyle(2, 0xf1d395, 0.9);
+    ring.strokeRoundedRect(h.x, h.y, h.w, h.h, 12);
     this.g.tweens.add({ targets: ring, alpha: 0.85, duration: 300 });
   }
 
@@ -356,22 +357,22 @@ export class Tutorial {
     const w = Math.min(600, vw - 40);
     const pad = 20;
     const titleT = this.g.add.text(0, 0, copy.title, {
-      fontFamily: "monospace",
+      fontFamily: UI_FONT,
       fontStyle: "bold",
-      fontSize: "21px",
-      color: "#ffe08a",
+      fontSize: "23px",
+      color: UI.gold,
     });
     const bodyT = this.g.add.text(0, 0, copy.body, {
       fontFamily: EMOJI_FONT,
-      fontSize: "16px",
-      color: "#dfe3ea",
-      lineSpacing: 6,
+      fontSize: "17px",
+      color: UI.text,
+      lineSpacing: 5,
       wordWrap: { width: w - pad * 2 },
     });
-    const dotsT = this.g.add.text(0, 0, Array.from({ length: STEPS }, (_, i) => (i <= this.step ? "●" : "○")).join(" "), {
-      fontFamily: "monospace",
-      fontSize: "11px",
-      color: "#8a6d3a",
+    const dotsT = this.g.add.text(0, 0, `${this.step + 1} / ${STEPS}`, {
+      fontFamily: UI_FONT,
+      fontSize: "14px",
+      color: UI.muted,
     });
     const hH = pad + titleT.height + 10 + bodyT.height + 14 + 16 + pad;
     // sit clear of the spotlight: below it when it's in the top half, above it otherwise
@@ -381,23 +382,27 @@ export class Tutorial {
     else cy = Math.max(hH / 2 + 14, hole.y - 18 - hH / 2);
     const cont = this.keep(this.g.add.container(vw / 2, cy).setDepth(94));
     const gfx = this.g.add.graphics();
-    gfx.fillStyle(0x0e1015, 0.96);
-    gfx.fillRoundedRect(-w / 2, -hH / 2, w, hH, 12);
-    gfx.lineStyle(2, 0x8a6d3a, 0.9);
-    gfx.strokeRoundedRect(-w / 2, -hH / 2, w, hH, 12);
+    gfx.fillStyle(0x080e14, .25);
+    gfx.fillRoundedRect(-w / 2, -hH / 2 + 5, w, hH, 20);
+    gfx.fillStyle(UI.panel, 0.98);
+    gfx.fillRoundedRect(-w / 2, -hH / 2, w, hH, 20);
+    gfx.lineStyle(1, UI.border, 1);
+    gfx.strokeRoundedRect(-w / 2, -hH / 2, w, hH, 20);
+    gfx.fillStyle(0xf1d395, .8);
+    gfx.fillRoundedRect(-w / 2 + pad, hH / 2 - 8, (w - pad * 2) * (this.step + 1) / STEPS, 3, 2);
     titleT.setPosition(-w / 2 + pad, -hH / 2 + pad);
     bodyT.setPosition(-w / 2 + pad, titleT.y + titleT.height + 10);
     dotsT.setPosition(-w / 2 + pad, hH / 2 - pad + 4).setOrigin(0, 1);
     cont.add([gfx, titleT, bodyT, dotsT]);
     if (tap) {
       const tapT = this.g.add
-        .text(w / 2 - pad, hH / 2 - pad + 4, "tap to continue ▸", { fontFamily: "monospace", fontSize: "13px", color: "#9aa0ab" })
+        .text(w / 2 - pad, hH / 2 - pad + 4, "Tap to continue →", { fontFamily: UI_FONT, fontSize: "15px", color: UI.gold })
         .setOrigin(1, 1);
       cont.add(tapT);
-      this.g.tweens.add({ targets: tapT, alpha: 0.35, duration: 700, yoyo: true, repeat: -1 });
+      this.g.tweens.add({ targets: tapT, alpha: 0.8, duration: 1000, yoyo: true, repeat: -1 });
     }
-    cont.setScale(0.94).setAlpha(0);
-    this.g.tweens.add({ targets: cont, scale: 1, alpha: 1, duration: 240, ease: "Back.easeOut" });
+    cont.setY(cy + 6).setAlpha(0);
+    this.g.tweens.add({ targets: cont, y: cy, alpha: 1, duration: 180, ease: "Cubic.easeOut" });
   }
 
   /** Slim one-line strip pinned to the top of the screen (over the lane's sky,
@@ -419,10 +424,10 @@ export class Tutorial {
     const bh = t.height + 20;
     const cont = this.keep(this.g.add.container(vw / 2, (portrait ? 56 : 10) + bh / 2).setDepth(94));
     const gfx = this.g.add.graphics();
-    gfx.fillStyle(0x0e1015, 0.92);
-    gfx.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 10);
-    gfx.lineStyle(2, 0x8a6d3a, 0.9);
-    gfx.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 10);
+    gfx.fillStyle(UI.panel, 0.98);
+    gfx.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 14);
+    gfx.lineStyle(1, UI.border, 1);
+    gfx.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 14);
     cont.add([gfx, t]);
     cont.setAlpha(0);
     this.g.tweens.add({ targets: cont, alpha: 1, duration: 240 });
@@ -461,12 +466,12 @@ export class Tutorial {
     const vw = this.g.scale.width;
     const t = this.keep(
       this.g.add
-        .text(vw - 14, 12, "skip tutorial ✕", {
-          fontFamily: "monospace",
-          fontSize: "14px",
-          color: "#9aa0ab",
-          backgroundColor: "rgba(20,23,31,0.9)",
-          padding: { x: 10, y: 6 },
+        .text(vw - 12, 12, "Skip intro ×", {
+          fontFamily: UI_FONT,
+          fontSize: "15px",
+          color: UI.text,
+          backgroundColor: "rgba(37,46,52,0.96)",
+          padding: { x: 12, y: 12 },
         })
         .setOrigin(1, 0)
         .setDepth(97),

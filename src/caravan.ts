@@ -1,4 +1,4 @@
-import { BLACKSMITH_COST, WIZARD_COST, canAfford, wizardAvailable, roadOpen, nextBiome, BIOME_LABELS, saveMeta, campQuestFocus, type MetaState } from "./meta";
+import { BLACKSMITH_COST, WIZARD_COST, canAfford, forgeCost, forgeCap, wizardAvailable, roadOpen, nextBiome, BIOME_LABELS, saveMeta, campQuestFocus, type MetaState } from "./meta";
 import { itemById } from "./items";
 import { campGoal } from "./run-advice";
 import { createCampDialogue } from "./camp-dialogue";
@@ -11,6 +11,7 @@ import { petCampPose } from "./companion-motion";
 import { showCompanionCollection } from "./companion-collection";
 import { createCampAtmosphere } from "./camp-atmosphere";
 import { createCaravanSmoke } from "./caravan-smoke";
+import { caravanMilestones, drawCaravanMilestones } from "./caravan-progress";
 
 type Service = "shop" | "forge" | "magic" | "quests";
 type Actions = Record<Service | "start" | "menu", () => void> & { travel?: () => void; routes?: () => void; previewZone?: () => void; canTalk?: () => boolean; introEnded?: () => void };
@@ -28,7 +29,10 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
   root.innerHTML = `
     <header class="caravan-header"><div><strong>CAMP</strong><span class="caravan-zone"></span></div><div class="caravan-resources"></div><button class="caravan-motion" aria-label="Pause camp animation">Ⅱ</button><button class="caravan-menu" aria-label="Open menu">☰</button></header>
     <div class="caravan-environment"><canvas class="caravan-scenery" aria-hidden="true"></canvas><div class="caravan-vehicle"><canvas class="caravan-art" aria-hidden="true"></canvas></div><canvas class="caravan-atmosphere" aria-hidden="true"></canvas><p class="caravan-announcement" role="status" aria-live="polite"></p></div>
-    <footer class="caravan-prep"><h2>Get ready for the next run</h2><button class="caravan-goal"><strong></strong><span></span><progress></progress></button><div class="caravan-services"></div><p class="caravan-packed"></p><button class="caravan-travel" hidden></button><button class="caravan-start"><canvas class="caravan-start-scene" width="112" height="60" aria-hidden="true"></canvas><span class="caravan-start-label">Start run<small>The road is waiting</small></span><span class="caravan-start-arrow" aria-hidden="true">➜</span></button></footer>`;
+    <footer class="caravan-prep">
+      <div class="caravan-prep-info"><h2>Get ready for the next run</h2><button class="caravan-goal"><strong></strong><span></span><progress></progress></button><button class="caravan-quest-summary"><strong>Quests</strong><span></span><progress></progress></button><p class="caravan-packed"></p><button class="caravan-travel" hidden></button></div>
+      <div class="caravan-prep-actions"><div class="caravan-services"></div><button class="caravan-start"><canvas class="caravan-start-scene" width="112" height="60" aria-hidden="true"></canvas><span class="caravan-start-label">Start run<small>The road is waiting</small></span><span class="caravan-start-arrow" aria-hidden="true">➜</span></button></div>
+    </footer>`;
   root.querySelector(".caravan-zone")!.textContent = environment.label;
   if (actions.routes) {
     const label = root.querySelector(".caravan-zone")!.parentElement!;
@@ -46,6 +50,12 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     });
   }
   const viewport = root.querySelector<HTMLElement>(".caravan-environment")!;
+  const journeyButton = document.createElement("button");
+  journeyButton.className = "caravan-journey";
+  journeyButton.setAttribute("aria-haspopup", "dialog");
+  journeyButton.onclick = () => { if (!dialogue.active) actions.routes?.(); };
+  journeyButton.hidden = !actions.routes;
+  viewport.append(journeyButton);
   const vehicle = root.querySelector<HTMLElement>(".caravan-vehicle")!;
   const art = root.querySelector<HTMLCanvasElement>(".caravan-art")!;
   const scenery = root.querySelector<HTMLCanvasElement>(".caravan-scenery")!;
@@ -99,6 +109,7 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
   root.querySelector(".caravan-menu")!.addEventListener("click", actions.menu);
   root.querySelector(".caravan-start")!.addEventListener("click", () => { if (!dialogue.active) actions.start(); });
   root.querySelector(".caravan-goal")!.addEventListener("click", () => { const goal = campGoal(meta); if (goal) actions[goal.service](); });
+  root.querySelector(".caravan-quest-summary")!.addEventListener("click", actions.quests);
   root.querySelector(".caravan-travel")!.addEventListener("click", () => actions.travel?.());
   for (const name of ["pointerdown", "pointerup", "pointermove", "mousedown", "mouseup", "touchstart", "touchend", "click", "wheel"]) root.addEventListener(name, e => e.stopPropagation());
   const stations = new Map<Service, HTMLButtonElement>();
@@ -136,8 +147,10 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     const w = viewport.clientWidth, h = viewport.clientHeight;
     scenery.width = Math.max(1, Math.round(w)); scenery.height = Math.max(1, Math.round(h));
     weatherCanvas.width = scenery.width; weatherCanvas.height = scenery.height;
-    const portraitScale = root.clientHeight > root.clientWidth ? .85 : 1;
-    const baseWidth = Math.max(1, Math.min(w * .98, (h - 24) * 480 / 370, 830) * portraitScale);
+    const portrait = root.clientHeight > root.clientWidth;
+    // Wide, shallow scenery can crop the art's transparent sky without shrinking the crew.
+    const visibleArtHeight = portrait ? 370 : grown ? 334 : 287;
+    const baseWidth = Math.max(1, Math.min(w * .98, (h - 24) * 480 / visibleArtHeight, 830) * (portrait ? .85 : 1));
     const width = baseWidth * .92;
     // Keep the player readable while giving the smaller wagon more breathing room.
     playerScale = baseWidth / 480;
@@ -155,7 +168,13 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     noticeUntil = performance.now() + 6000;
   };
   const refresh = () => {
+    const milestones = caravanMilestones(meta), earned = milestones.filter(m => m.earned).length;
+    journeyButton.textContent = `Journey · ${meta.clearedBiomes.length}/4 roads →`;
+    journeyButton.title = `${earned}/${milestones.length} caravan milestones. View your journey.`;
     const forgeReady = !meta.blacksmithHired && canAfford(meta, BLACKSMITH_COST);
+    const swordCost = forgeCost(meta.swordLevel);
+    const swordMaxed = meta.swordLevel >= forgeCap(meta.biome);
+    const swordReady = meta.blacksmithHired && !swordMaxed && canAfford(meta, { ore: swordCost });
     const goal = campGoal(meta);
     const goalButton = root.querySelector<HTMLButtonElement>(".caravan-goal")!;
     goalButton.hidden = !goal;
@@ -170,6 +189,7 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     const next = meta.blacksmithHired || meta.wizardHired;
     if (next !== grown) {
       grown = next;
+      fit();
       if (grown) announce("Your caravan has expanded. Welcome aboard!");
     }
     root.classList.toggle("is-expanded", grown);
@@ -181,6 +201,17 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     root.querySelector(".caravan-resources")!.textContent = `🪵 ${meta.wood}  🪨 ${meta.ore}  💎 ${meta.treasure}`;
     const focus=campQuestFocus(meta);
     const progressNews=meta.progressNotice.quests.length+meta.progressNotice.achievements.length;
+    const summary = root.querySelector<HTMLButtonElement>(".caravan-quest-summary")!;
+    summary.querySelector("strong")!.textContent = progressNews ? "Rewards collected ✓" : "Quests";
+    summary.querySelector("span")!.textContent = focus
+      ? `${focus.quest.shortLabel} · ${focus.progress.have}/${focus.progress.need}` : "View achievements";
+    summary.title = focus ? `${focus.quest.label}: ${focus.progress.have}/${focus.progress.need}` : "Quests & achievements";
+    const summaryMeter = summary.querySelector("progress")!;
+    summaryMeter.hidden = !focus;
+    if (focus) {
+      summaryMeter.max = focus.progress.need; summaryMeter.value = focus.progress.have;
+      summaryMeter.setAttribute("aria-label", summary.title);
+    }
     const questMeter=shortcuts.get("quests")!.querySelector("progress")!;
     questMeter.hidden=!focus;
     if(focus) {
@@ -192,31 +223,42 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
         ? `${focus.quest.shortLabel} · ${focus.progress.have}/${focus.progress.need}`
         : "Complete · View achievements"],
       shop: [meta.peddlerArrived ? "Item shop" : "Meet the merchant", meta.peddlerArrived ? "Pack for your run" : "Bring back your first gem"],
-      forge: [meta.blacksmithHired ? "Sword upgrades" : "Unlock forge", meta.blacksmithHired ? `Sword level ${meta.swordLevel}` : forgeReady ? "Ready to build" : `${BLACKSMITH_COST.wood} wood · ${BLACKSMITH_COST.ore} stone`],
+      forge: [meta.blacksmithHired ? swordReady ? "Upgrade sword" : "Sword upgrades" : "Unlock forge", meta.blacksmithHired
+        ? swordMaxed ? `Level ${meta.swordLevel} · Area max` : swordReady ? "↑ Upgrade ready" : `Level ${meta.swordLevel} · Need ${swordCost - meta.ore} stone`
+        : forgeReady ? "Ready to build" : `${BLACKSMITH_COST.wood} wood · ${BLACKSMITH_COST.ore} stone`],
       magic: [meta.wizardHired ? "Magic upgrades" : wizardAvailable(meta.biome) ? "Recruit mage" : "Unknown traveler", meta.wizardHired ? `Spell level ${meta.staffLevel}` : wizardAvailable(meta.biome) ? `${WIZARD_COST.wood} wood · ${WIZARD_COST.ore} stone · ${WIZARD_COST.treasure} gems` : "Keep exploring"],
     };
     for (const [id, b] of shortcuts) {
       const [title, detail] = labels[id];
       b.querySelector("strong")!.textContent = title; b.querySelector("small")!.textContent = detail;
+      if (id === "forge" && swordReady) b.querySelector("small")!.innerHTML = '<span class="caravan-ready-full">↑ Upgrade ready</span><span class="caravan-ready-short" aria-hidden="true">↑ Ready</span>';
+      const description = id === "forge" && swordReady
+        ? `${title}. Upgrade ready: level ${meta.swordLevel} to ${meta.swordLevel + 1} for ${swordCost} stone.`
+        : `${title}. ${detail}`;
+      b.title = description; b.setAttribute("aria-label", description);
       b.querySelector(".caravan-icon")!.textContent = id === "magic" && !meta.wizardHired && !wizardAvailable(meta.biome) ? "?" : glyphs[id];
       const station = stations.get(id)!;
-      station.setAttribute("aria-label", `${title}. ${detail}`); station.title = `${title} · ${detail}`;
+      station.setAttribute("aria-label", description); station.title = description;
       station.querySelector("span")!.textContent = title;
       station.classList.toggle("is-locked", id === "forge" && !meta.blacksmithHired || id === "magic" && !meta.wizardHired);
-      const ready = id === "quests" && progressNews > 0 || goal?.ready && goal.service === id || id === "forge" && forgeReady
+      const ready = id === "quests" && progressNews > 0 || goal?.ready && goal.service === id || id === "forge" && (forgeReady || swordReady)
         || id === "magic" && !meta.wizardHired && wizardAvailable(meta.biome) && canAfford(meta, WIZARD_COST);
       b.classList.toggle("is-ready", ready); station.classList.toggle("is-ready", ready);
       b.classList.toggle("is-build-ready", id === "forge" && forgeReady);
       station.classList.toggle("is-build-ready", id === "forge" && forgeReady);
+      b.classList.toggle("is-upgrade-ready", id === "forge" && swordReady);
+      station.classList.toggle("is-upgrade-ready", id === "forge" && swordReady);
     }
     stations.get("magic")!.hidden = !grown;
     const items = meta.stockedItems.map(id => itemById(id)?.name).filter(Boolean);
     const roadTip: Record<string, string> = {
       forest: "Watch the bushes · ambushers carry extra supplies",
-      snow: "Match beside ice to free the tiles",
+      snow: "Tap ice three times or match beside it",
       dungeon: "Key matches unlock bonus treasure",
     };
-    root.querySelector(".caravan-packed")!.textContent = items.length ? `Packed ${items.length}/3 · ${items.join(", ")}` : roadTip[meta.biome] ?? "Keep every resource you collect, even if the run ends";
+    const packed = root.querySelector<HTMLElement>(".caravan-packed")!;
+    packed.textContent = items.length ? `Packed ${items.length}/3 · ${items.join(", ")}` : roadTip[meta.biome] ?? "Keep every resource you collect, even if the run ends";
+    packed.title = packed.textContent;
   };
   const imageReady = (im: HTMLImageElement) => im.complete && im.naturalWidth > 0;
   const sprite = (row: number, x: number, feet: number, size: number, period: number) => {
@@ -232,9 +274,11 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     if (now - last < 33) return;
     const dt = Math.min(.1, (now-last)/1000); last = now;
     const visible = !document.hidden && root.style.visibility !== "hidden" && !root.classList.contains("is-departing");
-    dialogue.tick(dt, visible && !collection && (actions.canTalk?.() ?? true), imageReady(hero) && imageReady(grown ? expanded : starter) && imageReady(crew));
+    const paused = root.classList.contains("is-system-paused");
+    const animating = moving && !paused;
+    if (!paused) dialogue.tick(dt, visible && !collection && (actions.canTalk?.() ?? true), imageReady(hero) && imageReady(grown ? expanded : starter) && imageReady(crew));
     if (!visible) return;
-    if (moving) time += dt;
+    if (animating) time += dt;
     const buttonTime = moving && !root.classList.contains("is-serving") ? time : 0;
     startArt.clearRect(0,0,112,60);startArt.imageSmoothingEnabled=false;
     // A tiny playable-world vignette makes the departure feel like an invitation.
@@ -249,8 +293,8 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     if(imageReady(hero))drawPlayerFrame(startArt,preparePlayerSheet(hero),buttonTime?48+Math.floor(buttonTime*12)%8:playerIdleFrame(0),-7,-15,108,86);
     const petEnv=viewport.getBoundingClientRect(), petCart=vehicle.getBoundingClientRect();
     const petLayout={width:scenery.width,height:scenery.height,cart:{x:petCart.left-petEnv.left,y:petCart.top-petEnv.top,width:petCart.width,expanded:grown}};
-    // Match the wagon's live scale, including resizing and its expansion animation.
-    const petScale=petCart.width/art.width, petSize=44*petScale, petTargetSize=Math.max(44,petSize);
+    // Give companions more presence while following the wagon's live resize/zoom scale.
+    const petScale=petCart.width/art.width*1.35, petSize=44*petScale, petTargetSize=Math.max(44,petSize);
     viewport.style.setProperty("--camp-pet-size",`${petSize}px`);
     for(const {def,button,ctx} of companions) {
       button.hidden=dialogue.active;ctx.clearRect(0,0,44,44);ctx.imageSmoothingEnabled=false;
@@ -266,8 +310,8 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     const w = scenery.width, h = scenery.height;
     const envBounds=viewport.getBoundingClientRect(), cartBounds=vehicle.getBoundingClientRect();
     const shelter={x:cartBounds.left-envBounds.left,y:cartBounds.top-envBounds.top,width:cartBounds.width,expanded:grown};
-    atmosphere.update(dt,w,h,shelter,moving);
-    smoke.update(dt,meta.blacksmithHired && imageReady(expanded),moving,
+    atmosphere.update(dt,w,h,shelter,animating);
+    smoke.update(dt,meta.blacksmithHired && imageReady(expanded),animating,
       atmosphere.wind() / Math.max(.1, shelter.width / 480));
     bg.imageSmoothingEnabled = false;
     bg.fillStyle = "#719aae"; bg.fillRect(0,0,w,h);
@@ -345,6 +389,7 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     if(imageReady(im)) {
       a.drawImage(im,rect.x,rect.y,rect.w,rect.h);
       drawCaravanWeather(a,meta.biome,grown);
+      drawCaravanMilestones(a,meta,grown,time);
     }
     if (grown) {
       if(meta.peddlerArrived) sprite(0,151,287,67,14);

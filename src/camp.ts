@@ -15,6 +15,8 @@
  */
 
 import Phaser from "phaser";
+import { caravanJourney } from "./caravan-progress";
+import { haptic } from "./haptics";
 import { preloadPlayer, createPlayerAnimations, PLAYER_TEXTURE, PLAYER_DENSITY, PLAYER_ORIGIN } from "./player-art";
 import { openCampPanel, type PanelCard } from "./camp-ui";
 import type { CampNpc } from "./camp-npc-view";
@@ -1437,6 +1439,7 @@ export class CampScene extends Phaser.Scene {
               saveMeta(this.meta);
               this.refreshResources();
               this.sfx("coin3", 0.55);
+              haptic("reward");
               refresh(this.npcReaction("purchase", false));
             },
           },
@@ -1534,10 +1537,6 @@ export class CampScene extends Phaser.Scene {
   private openMenu() {
     const caravanIntro = this.villageHub?.root.classList.contains("is-intro");
     if (this.scene.isActive("menu") || this.editMode || this.panelOpen || (this.cutscene && !caravanIntro) || this.departing) return;
-    if (this.villageHub) {
-      this.villageHub.root.style.visibility = "hidden";
-      this.events.once(Phaser.Scenes.Events.RESUME, () => { if (this.villageHub) this.villageHub.root.style.visibility = ""; });
-    }
     this.scene.launch("menu", { from: "camp" });
     this.scene.pause();
   }
@@ -1627,6 +1626,7 @@ export class CampScene extends Phaser.Scene {
 
   private hireSmith() {
     if (!unlockForge(this.meta)) return;
+    haptic("reward");
     this.refreshResources();
     this.npcReaction("smith");
     this.sfx("pouch", 0.6);
@@ -1707,7 +1707,7 @@ export class CampScene extends Phaser.Scene {
       "✦ SPELL UPGRADES",
       [
         `Spell bonus: +${lvl * SPELL_BONUS_PER_LEVEL} → +${(lvl + 1) * SPELL_BONUS_PER_LEVEL} damage`,
-        `Upgrades available in this area: ${cap - lvl}`,
+        afford ? `Ready to upgrade to sword level ${lvl + 1}` : `Need ${cost - this.meta.ore} more stone to upgrade`,
         ``,
         `Resources:  🪨 ${this.meta.ore}`,
       ],
@@ -1725,6 +1725,7 @@ export class CampScene extends Phaser.Scene {
     saveMeta(this.meta);
     this.refreshResources();
     this.npcReaction("mage");
+    haptic("reward");
     this.sfx("pouch", 0.6);
     for (const m of this.mageMark) m.destroy(); // the "?" is answered
     this.mageMark = [];
@@ -1742,6 +1743,7 @@ export class CampScene extends Phaser.Scene {
     saveMeta(this.meta);
     this.refreshResources();
     this.npcReaction("staff");
+    haptic("reward");
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.staffLevel >= studyCap(this.meta.biome);
     this.toast(atPeak ? `Spells maxed for this area · +${this.meta.staffLevel * SPELL_BONUS_PER_LEVEL} spell damage` : `Spells improved · level ${this.meta.staffLevel}`);
@@ -1787,8 +1789,8 @@ export class CampScene extends Phaser.Scene {
         `Resources:  🪨 ${this.meta.ore}`,
       ],
       [
-        { label: `FORGE  🪨${cost}`, enabled: afford, cb: () => this.forgeUpgrade(cost) },
-        { label: "not yet" },
+        { label: `Upgrade sword · 🪨 ${cost}`, enabled: afford, cb: () => this.forgeUpgrade(cost) },
+        { label: "Close" },
       ],
       "forge",
     );
@@ -1800,6 +1802,7 @@ export class CampScene extends Phaser.Scene {
     saveMeta(this.meta);
     this.refreshResources();
     this.npcReaction("sword");
+    haptic("reward");
     this.sfx("pickup", 0.65);
     const atPeak = this.meta.swordLevel >= forgeCap(this.meta.biome);
     this.toast(atPeak ? "Sword maxed. One match defeats regular enemies in this area." : `blade sharpened — level ${this.meta.swordLevel} ⚔`);
@@ -1853,23 +1856,35 @@ export class CampScene extends Phaser.Scene {
     const unlocked = unlockedBiomes(this.meta);
     this.panelOpen = true;
     this.closeNativePanel = openCampPanel(this, {
-      title: "Choose a road", subtitle: "Revisit any unlocked area", kind: "routes",
+      title: "Your journey", subtitle: this.meta.debugZonesUnlocked ? "Debug · All zones unlocked" : `${this.meta.clearedBiomes.length} of ${BIOME_ORDER.length} roads cleared · Choose your next stop`, kind: "routes",
+      journey: caravanJourney(this.meta),
       cards: BIOME_ORDER.map((biome, index) => {
         const here = biome === this.meta.biome, available = unlocked.includes(biome);
         const pets = COMPANIONS.filter(pet => pet.biome === biome);
         const quests = QUEST_POOLS[biome];
         const cleared = this.meta.clearedBiomes.includes(biome);
         return {
-          title: BIOME_LABELS[biome], tag: here ? "Current camp" : cleared ? "Road cleared" : available ? "Ready to explore" : "Locked",
+          title: available ? BIOME_LABELS[biome] : "Uncharted road", tag: here ? "Current camp" : cleared ? "Road cleared" : available ? "Ready to explore" : "Locked",
           lines: available
             ? [`Pets ${pets.filter(pet => this.meta.companions.includes(pet.id)).length}/${pets.length} · Quests ${quests.filter(q => this.meta.questsRewarded.includes(q.id)).length}/${quests.length}`]
-            : [`Defeat the final boss in ${BIOME_LABELS[BIOME_ORDER[index - 1]]} to open this road.`],
+            : [unlocked.includes(BIOME_ORDER[index - 1]) ? `Defeat the final boss in ${BIOME_LABELS[BIOME_ORDER[index - 1]]} to open this road.` : "Keep clearing roads to discover what lies ahead."],
           action: { label: here ? "Here" : available ? "Travel →" : "Locked", enabled: available && !here && !this.meta.activeRun,
             closeAfter: true, run: () => this.travelTo(biome) },
         };
       }),
       footer: this.meta.activeRun ? "Finish or end your current run before traveling."
         : "Your crew, pets, packed items and upgrades come with you. Each area's quest progress stays saved.",
+      actions: import.meta.env.DEV ? [{
+        label: this.meta.debugZonesUnlocked ? "Debug · All zones unlocked ✓" : "Debug · Unlock all zones",
+        secondary: true, enabled: !this.meta.debugZonesUnlocked,
+        run: () => {
+          if (!import.meta.env.DEV) return;
+          this.meta.debugZonesUnlocked = true;
+          saveMeta(this.meta);
+          this.closePanel();
+          this.openRoutes();
+        },
+      }] : undefined,
       onClose: () => { this.closePanel(); this.refreshResources(); },
     });
   }
@@ -1911,6 +1926,7 @@ export class CampScene extends Phaser.Scene {
   /** Head out: the hero jogs off toward the portal, the day fades, the run begins. */
   private depart() {
     if (this.departing || this.editMode || this.panelOpen || this.cutscene) return;
+    haptic("tap");
     prepareCampProgress(this.meta);
     acknowledgeProgress(this.meta);
     this.departing = true;

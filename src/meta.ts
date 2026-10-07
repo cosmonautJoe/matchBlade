@@ -34,6 +34,8 @@ export interface MetaState {
   // the caravan's current stop; the quest board + both scenes' art route off this
   biome: string;
   clearedBiomes: string[];
+  /** Set by the development area picker; grants travel without recording boss victories. */
+  debugZonesUnlocked?: boolean;
   zoneStats: Record<string, ZoneStats>;
   activeRun?: import("./run-save").RunCheckpoint;
   // banked resources (keys are per-run tension — they don't bank)
@@ -155,9 +157,10 @@ export function migrateMeta(parsed: Partial<MetaState>): MetaState {
   // Hiring the smith now includes the first improvement, including existing saves.
   if (m.blacksmithHired) m.swordLevel = Math.max(1, m.swordLevel);
   m.clearedBiomes = Array.isArray(parsed.clearedBiomes) ? [...parsed.clearedBiomes] : [];
+  m.debugZonesUnlocked = parsed.debugZonesUnlocked === true;
   const visited = BIOME_ORDER.indexOf(m.biome as typeof BIOME_ORDER[number]);
   for (const [i, biome] of BIOME_ORDER.entries()) {
-    if ((i < visited || (!Array.isArray(parsed.clearedBiomes) && QUEST_POOLS[biome].every(q => m.questsRewarded.includes(q.id)))) && !m.clearedBiomes.includes(biome))
+    if (((!m.debugZonesUnlocked && i < visited) || (!Array.isArray(parsed.clearedBiomes) && QUEST_POOLS[biome].every(q => m.questsRewarded.includes(q.id)))) && !m.clearedBiomes.includes(biome))
       m.clearedBiomes.push(biome);
   }
   return m;
@@ -527,6 +530,7 @@ export function roadOpen(m: MetaState): boolean {
 
 /** Cleared roads and the next reachable stop are always available to revisit. */
 export function unlockedBiomes(m: MetaState): string[] {
+  if (m.debugZonesUnlocked) return [...BIOME_ORDER];
   let furthest = Math.max(0, BIOME_ORDER.indexOf(m.biome as typeof BIOME_ORDER[number]));
   for (const biome of m.clearedBiomes) {
     const i = BIOME_ORDER.indexOf(biome as typeof BIOME_ORDER[number]);

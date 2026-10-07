@@ -28,7 +28,7 @@ export function activeItemEffects(run: RunState, buffs: RunCheckpoint["buffs"], 
   });
   if (zone?.marks.length && run.biome === "snow") effects.push({
     id: "zone-patches", icon: "❄️", name: "Ice", status: String(zone.marks.length),
-    detail: "Ice holds a tile in place. Match beside it, or through it, to break the ice.",
+    detail: "Tap a frozen tile three times to break its ice. Matching beside it or through it breaks the ice immediately.",
   });
   const add = (id: string, status: string, name?: string) => {
     const item = itemById(id)!;

@@ -1,0 +1,15 @@
+:root {
+  --mb-panel: #252e34; --mb-panel-raised: #303b43; --mb-edge: #66727a;
+  --mb-text: #f3f3ee; --mb-muted: #c4cdd2; --mb-gold: #f1d395;
+  --mb-font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.mb-panel-overlay .mb-panel { background: var(--mb-panel); border-color: var(--mb-edge); border-radius: 22px; }
+.mb-panel .mb-panel-header, .mb-panel .mb-panel-footer { background: #2b353c; border-color: #4f5b63; }
+.mb-panel-overlay .mb-panel h2 { color: var(--mb-gold); letter-spacing: -.025em; }
+.mb-panel .mb-card { background: var(--mb-panel-raised); border-color: #53616a; border-radius: 16px; }
+.mb-panel .mb-description { color: var(--mb-text); }
+.mb-panel .mb-subtitle, .mb-panel .mb-footer-copy { color: var(--mb-muted); }
+.mb-panel .mb-action { border-radius: 13px; transition: background-color 140ms, transform 140ms; }
+.mb-panel .mb-action:active:not(:disabled) { transform: translateY(1px); }
+.mb-panel .mb-action--secondary { color: var(--mb-text); background: #37444e; border-color: var(--mb-edge); }
+.mb-panel .mb-action--secondary:hover:not(:disabled) { background: #46545f; }

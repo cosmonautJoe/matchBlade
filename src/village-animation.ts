@@ -211,7 +211,7 @@ export function animateVillage(map: HTMLElement, art: HTMLImageElement, motionBu
   const tick = (now: number) => {
     if(destroyed) return;
     if(visible && !document.hidden && enabled && now-last>=1000/24) {
-      const delta = Math.min((now-last)/1000, .1);
+      const delta = map.closest(".is-system-paused") ? 0 : Math.min((now-last)/1000, .1);
       elapsed += delta;
       if(player.complete && player.naturalWidth && art.complete && art.naturalWidth) arrival = Math.min(arrivalDuration,arrival+delta);
       last=now; draw();

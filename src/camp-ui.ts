@@ -1,6 +1,9 @@
 import Phaser from "phaser";
 import "./camp-ui.css";
-import { createCampNpcView, campNpcCaption, type CampNpc } from "./camp-npc-view";
+import "./ui-theme";
+import { renderJourney } from "./journey-view";
+import type { CaravanJourney } from "./caravan-progress";
+import { createCampNpcView, campNpcCaption, campNpcFocus, type CampNpc } from "./camp-npc-view";
 
 export interface PanelAction {
   label: string;
@@ -28,6 +31,7 @@ export interface CampPanel {
   actions?: PanelAction[];
   tabs?: PanelAction[];
   animateNpc?: boolean;
+  journey?: CaravanJourney;
   onClose: () => void;
 }
 
@@ -50,14 +54,16 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
     // Keep the modal input shield until camera and camp agree on the final frame.
     dialog.inert = true;
     merchantView.close(done, (progress, from, to) => {
-      const portrait = overlay.clientHeight > overlay.clientWidth;
-      const x = portrait ? 0 : (to.right - from.right) * progress;
-      const y = portrait ? (to.bottom - from.bottom) * progress : 0;
+      const landscape = overlay.classList.contains("is-landscape-service");
+      const direction = overlay.classList.contains("is-drawer-left") ? -1 : 1;
+      const x = landscape ? direction * (dialog.offsetWidth + 24) * progress : 0;
+      const y = landscape ? 0 : (to.bottom - from.bottom) * progress;
       dialog.style.transform = `translate(${x}px, ${y}px)`;
-      dialog.style.opacity = String(1 - Math.max(0, (progress - .8) / .2));
+      dialog.style.opacity = String(1 - Math.max(0, (progress - (landscape ? .45 : .8)) / (landscape ? .55 : .2)));
     });
   };
   overlay.className = `mb-panel-overlay${npc ? " mb-panel-overlay--npc" : ""}`;
+  overlay.classList.toggle("is-service-animated", model.animateNpc ?? !model.reply);
   const dialog = document.createElement("section");
   dialog.className = `mb-panel mb-panel--${model.kind ?? "upgrade"}${npc ? " mb-panel--npc" : ""}`;
   dialog.setAttribute("role", "dialog");
@@ -110,6 +116,7 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
     dialog.append(tabs);
   }
   const content = el("div", "mb-panel-content");
+  if (model.journey) content.append(renderJourney(model.journey));
   if (model.reply) {
     const reply = el("aside", "mb-npc-reply");
     reply.setAttribute("role", "status");
@@ -187,8 +194,8 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   });
   document.getElementById("game")!.append(overlay);
-  // Use the camp's exact divider, including its header and safe areas. Services
-  // replace the preparation area without moving the scene/panel boundary.
+  // Portrait uses its existing divider. Landscape floats a drawer over the full
+  // camp and keeps the scenery's exact bounds, including the header and safe areas.
   const environment = camp?.querySelector<HTMLElement>(".caravan-environment");
   const prep = camp?.querySelector<HTMLElement>(".caravan-prep");
   const syncBounds = () => {
@@ -202,7 +209,18 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
       right: `${parent.right - Math.max(e.right, p.right)}px`,
       bottom: `${parent.bottom - Math.max(e.bottom, p.bottom)}px`,
     });
-    overlay.style.setProperty("--npc-panel-size", `${landscape ? p.width : p.height}px`);
+    const wagon = camp?.querySelector<HTMLElement>(".caravan-vehicle")?.getBoundingClientRect();
+    const focus = campNpcFocus(npc, camp?.classList.contains("is-expanded") ?? false);
+    const npcX = wagon ? wagon.left + focus[0] * wagon.width / 480 : e.left + e.width / 2;
+    const drawerLeft = npcX > e.left + e.width / 2;
+    // Use the available side of the scene without covering the selected crew member.
+    const npcClearance = Math.max(28, (wagon?.width ?? 0) * .085);
+    const drawerRoom = (drawerLeft ? npcX - e.left : e.right - npcX) - npcClearance - 12;
+    const drawerWidth = Math.min(680, Math.max(360, e.width * .48), Math.max(1, drawerRoom));
+    overlay.style.setProperty("--npc-panel-size", `${landscape ? drawerWidth : p.height}px`);
+    overlay.style.setProperty("--npc-scene-height", `${e.height}px`);
+    overlay.classList.toggle("is-landscape-service", landscape);
+    overlay.classList.toggle("is-drawer-left", landscape && drawerLeft);
   };
   const layoutObserver = new ResizeObserver(syncBounds);
   if (environment && prep) { layoutObserver.observe(environment); layoutObserver.observe(prep); syncBounds(); }

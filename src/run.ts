@@ -107,7 +107,7 @@ export const BLOCK_PUSHBACK = 0.05;
 // The potion tile, drunk on tap: a stride of ground regained + a swig of guard.
 export const POTION_GROUND = 0.12;
 export const POTION_GUARD = 2; // charges
-export const ADVANCE_PER_KILL = 0.36; // pressure removed (hero surge) per kill
+export const ADVANCE_PER_KILL = 0.60; // pressure removed (hero surge) per kill
 // Damage per match now runs 5 / 7 / 9 (for 3 / 4 / 5+ swords). Base HP sits ~one
 // strong combo so early foes fall fast; a couple of small matches also do it.
 export const ENEMY_BASE_HP = 9;
@@ -351,21 +351,25 @@ export function dealDamage(s: RunState, damage: number, force = false, splashDam
 }
 
 /** Apply one cascade's cleared-tile counts. Returns what happened (for juice). */
-export function applyMatches(s: RunState, counts: Record<number, number>, empowered?: { type: number; count: number }): MatchOutcome {
+export function applyMatches(s: RunState, counts: Record<number, number>, empowered?: import("./empowered").PowerBonus | import("./empowered").PowerBonus[]): MatchOutcome {
   const n = (t: number) => counts[t] ?? 0;
+  const bonuses = empowered ? Array.isArray(empowered) ? empowered : [empowered] : [];
+  const copies = (p: import("./empowered").PowerBonus) => p.multiplier === 3 ? 2 : 1;
+  const extra = (type: number) => Math.min(n(type) * 2, bonuses.filter(p => p.type === type).reduce((sum,p) => sum + p.count * copies(p), 0));
   const mult = Math.max(1, s.resMult); // Merchant's Ledger doubles the haul (keys stay per-match — they're tension)
   // Keys pay per MATCH, not per tile: a 3-match banks one, a 5-match two,
   // two separate 3-matches in one wave two. (round(n/3): 3,4->1  5,6->2)
   const perMatch = (tiles: number) => tiles >= 3 ? Math.round(tiles / 3) : 0;
-  const gained: Resources = { wood: n(WOOD) * mult, ore: n(ORE) * mult, treasure: n(TREASURE) * mult, keys: perMatch(n(KEY)) };
+  const gained: Resources = { wood: (n(WOOD) + extra(WOOD)) * mult, ore: (n(ORE) + extra(ORE)) * mult,
+    treasure: (n(TREASURE) + extra(TREASURE)) * mult,
+    keys: perMatch(n(KEY)) + bonuses.filter(p => p.type === KEY).reduce((sum,p) => sum + perMatch(p.count) * copies(p), 0) };
   // Fixed companion extras are paid once per cascade, outside item multipliers.
   if (n(WOOD) >= PET.hazel.matchSize && s.companions?.includes("hazel")) gained.wood += PET.hazel.wood;
   if (n(ORE) >= PET.flint.matchSize && s.companions?.includes("flint")) gained.ore += PET.flint.stone;
 
   // Shields reward the BIGGER match: 3 tiles -> 1 charge, then +1 per extra
   // tile (4 -> 2, 5 -> 3, 6 -> 4, ...). Working for the long swap pays off.
-  const extra = (type: number) => empowered?.type === type ? Math.min(n(type), empowered.count) : 0;
-  const guard = (n(SHIELD) >= 3 ? n(SHIELD) - 2 : 0) + Math.max(0, extra(SHIELD) - 2)
+  const guard = (n(SHIELD) >= 3 ? n(SHIELD) - 2 : 0) + bonuses.filter(p => p.type === SHIELD).reduce((sum,p) => sum + Math.max(0, p.count - 2) * copies(p), 0)
     + (n(SHIELD) >= PET.flurry.matchSize && s.companions?.includes("flurry") ? PET.flurry.guard : 0);
   s.block += guard;
   s.resources.wood += gained.wood;
@@ -388,10 +392,10 @@ export function applyMatches(s: RunState, counts: Record<number, number>, empowe
   if (rawHits.length && swords >= 3) rawHits[0] += s.swordBonus; // forged edge bites harder
   const pM = physMult(defense);
   let hits = rawHits.map((h) => Math.max(1, Math.round(h * pM))); // even glancing blows land 1
-  if (extra(SWORD) >= 3 && hits.length) {
-    const bonus = swordHits(whetted ? Math.max(5, extra(SWORD)) : extra(SWORD));
+  for (const charge of bonuses.filter(p => p.type === SWORD && p.count >= 3 && hits.length)) {
+    const bonus = swordHits(whetted ? Math.max(5, charge.count) : charge.count);
     bonus[0] += s.swordBonus;
-    bonus.forEach((h, i) => { hits[Math.min(i, hits.length - 1)] += Math.max(1, Math.round(h * pM)); });
+    bonus.forEach((h, i) => { hits[Math.min(i, hits.length - 1)] += Math.max(1, Math.round(h * pM)) * copies(charge); });
   }
   let swordMod: DamageMod = !hits.length || pM === 1 ? "none" : pM < 1 ? "resist" : "weak";
   // the peak blade SUNDERS: one felling stroke, defense be damned (never bosses)
@@ -411,9 +415,9 @@ export function applyMatches(s: RunState, counts: Record<number, number>, empowe
     const hit = (targetDefense: Defense): { dmg: number; mod: DamageMod } => {
       const sM = spellMult(targetDefense);
       let dmg = Math.max(1, Math.round(raw * sM));
-      if (extra(STAFF) >= 3) {
-        const count = extra(STAFF), bonusTier = Math.min(5, count) as 3 | 4 | 5;
-        dmg += Math.max(1, Math.round((SPELL_DMG[bonusTier] + Math.max(0, count - 5) * SPELL_EXTRA + s.spellBonus) * sM));
+      for (const charge of bonuses.filter(p => p.type === STAFF && p.count >= 3)) {
+        const count = charge.count, bonusTier = Math.min(5, count) as 3 | 4 | 5;
+        dmg += Math.max(1, Math.round((SPELL_DMG[bonusTier] + Math.max(0, count - 5) * SPELL_EXTRA + s.spellBonus) * sM)) * copies(charge);
       }
       if (s.companions?.includes("hush")) dmg += Math.max(PET.hush.minDamage, Math.round(dmg * PET.hush.damagePercent / 100));
       return { dmg, mod: sM === 1 ? "none" : sM < 1 ? "resist" : "weak" };

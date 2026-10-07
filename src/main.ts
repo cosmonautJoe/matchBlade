@@ -19,13 +19,14 @@
  */
 
 import Phaser from "phaser";
+import { buzz, haptic, initHaptics, stopHaptics } from "./haptics";
 import { TILE_KEYS, TILE_TEXTURE_DENSITY, preloadTileArt, prepareTileArt } from "./tile-art";
 import { tileClearBurst, tileVisual, liftTile, settleTile, decoratePotion } from "./tile-feedback";
 import { TileShatter } from "./tile-shatter";
 import { tileEffectsEnabled, TILE_EFFECTS_CHANGED } from "./tile-effects";
 import { TileSwapPreview, dragSwapTarget } from "./tile-drag";
-import { newEmpowered, empoweredMatch, reflowEmpowered, type EmpoweredState } from "./empowered";
-import { decorateEmpowered, empoweredBurst } from "./empowered-art";
+import { newEmpowered, planEmpowered, randomEmpower, itemPowerBonuses, reflowEmpowered, type EmpoweredState } from "./empowered";
+import { decorateEmpowered, empoweredBurst, empoweredGather } from "./empowered-art";
 import { newRescueState, rollRescue, companionById, companionKillRewards, rescueOptions, payForRescue, type RescueState } from "./companions";
 import { showCompanionRescue } from "./companion-view";
 import { offerRoadFork, chooseRoad, newRoadFork, roadOptions, ROAD_FORK_BONUS } from "./road-fork";
@@ -118,11 +119,14 @@ import { readCheckpoint, type RunCheckpoint } from "./run-save";
 import { malgrimArena, malgrimToken } from "./malgrim-art";
 import { gorrachArena, gorrachToken, gorrachTimingFrame } from "./gorrach-art";
 import { bossArenaArt, frostCrystal, type BossTheme } from "./boss-arena-art";
+import { iceCracks, frozenTile, iceBurst, frostSpike, frostHeart, frostMist, frozenBoardArt } from "./frost-art";
+import { forestBoardArt } from "./forest-board-art";
+import { delveBoardArt, DELVE_FRAME_FOOTER } from "./delve-board-art";
 import { createBossFinale } from "./boss-finales";
 import { BOSS_FOR_BIOME, SLIME_SCALES, SLIME_GAPS, restoreSlimeProgress, slimeBeats, type SlimeProgress } from "./slime-boss";
 import { createSlimeBossArena } from "./slime-boss-arena";
 import { showChestReward } from "./chest-reward";
-import { restoreZoneFeatures, seedZonePatches, resolveZoneMatches, iceLocked, thawIfStuck, reflowIce, useZoneSupply } from "./zone-features";
+import { restoreZoneFeatures, seedZonePatches, resolveZoneMatches, iceLocked, tapIce, thawIfStuck, reflowIce, useZoneSupply } from "./zone-features";
 
 // ---- layout ---------------------------------------------------------------
 // The centre column (runner lane over the match board) is authored in these fixed
@@ -557,34 +561,11 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
-// --- haptics ---------------------------------------------------------------
-// navigator.vibrate covers Android & most browsers. iOS Safari has NO Vibration
-// API, but (17.4+) fires a light haptic when an <input switch> toggles, so we
-// keep a hidden one and click it as a fallback. Native-app haptics (Capacitor)
-// would be the reliable iPhone route later.
-let hapticSwitch: HTMLElement | null = null;
-function initHaptics() {
-  if (hapticSwitch || typeof document === "undefined") return;
-  const label = document.createElement("label");
-  label.setAttribute("aria-hidden", "true");
-  label.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;opacity:0;pointer-events:none;overflow:hidden";
-  const input = document.createElement("input");
-  input.type = "checkbox";
-  input.setAttribute("switch", ""); // Safari 17.4+ switch control
-  label.appendChild(input);
-  document.body.appendChild(label);
-  hapticSwitch = label;
-}
-function buzz(ms = 14) {
-  if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") navigator.vibrate(ms);
-  else hapticSwitch?.click(); // iOS 17.4+ fallback (fixed light tap)
-}
-
 class GameScene extends Phaser.Scene {
   // board
   private recovered: RunCheckpoint | null = null;
   private empowered: EmpoweredState = newEmpowered();
-  private empoweredTile: Phaser.GameObjects.Container | null = null;
+  private empoweredTiles = new Map<number, Phaser.GameObjects.Container>();
   private rescue: RescueState = newRescueState();
   private rescueView: ReturnType<typeof showCompanionRescue> | null = null;
   private forkView: ReturnType<typeof showRoadFork> | null = null;
@@ -594,6 +575,12 @@ class GameScene extends Phaser.Scene {
   private grid: number[][] = [];
   private zoneArt!: Phaser.GameObjects.Graphics;
   private zoneArtSignature = "";
+  private boardAtmosphere: {
+    root: Phaser.GameObjects.Container;
+    resize: (cols: number, rows: number) => void;
+    syncCache?: (locks: number, caches: number) => void;
+    reactToMatch?: (cells: readonly Coord[], cascade: number) => void;
+  } | null = null;
   private tiles: (Phaser.GameObjects.Container | null)[][] = [];
   private pressedTile: Phaser.GameObjects.Container | null = null;
   private swapPreview!: TileSwapPreview;
@@ -682,6 +669,7 @@ class GameScene extends Phaser.Scene {
   private failedBoardReflow = "";
   private get boardWidth() { return this.boardCols * TILE; }
   private get boardHeight() { return this.boardRows * TILE; }
+  private get boardFrameHeight() { return this.boardHeight + (this.run.biome === "dungeon" ? DELVE_FRAME_FOOTER : 0); }
   private get boardCenter() { return GRID_X + this.boardWidth / 2; }
   private portraitLaneTop = 0;
   private portraitBoardBottom = 0;
@@ -864,7 +852,7 @@ class GameScene extends Phaser.Scene {
   create() {
     this.recovered = this.devJumpBoss ? null : readCheckpoint(loadMeta());
     this.empowered = structuredClone(this.recovered?.empowered ?? newEmpowered());
-    this.empoweredTile = null;
+    this.empoweredTiles.clear();
     this.rescue = structuredClone(this.recovered?.rescue ?? newRescueState());
     this.rescueView = null;
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => { this.rescueView?.destroy(); this.rescueView = null; });
@@ -978,6 +966,7 @@ class GameScene extends Phaser.Scene {
     this.buildPanels();
     this.centerBox = this.add.container(0, 0);
     this.puzzleBox = this.add.container(0, 0);
+    this.boardAtmosphere = null;
     this.buildLane();
     this.buildBoard();
     const onTileEffects = () => {
@@ -990,6 +979,11 @@ class GameScene extends Phaser.Scene {
     this.combatReadout = createCombatReadout();
     this.activeEffects = createActiveEffects();
     const hideEffects = () => this.activeEffects?.show(false);
+    this.events.on(Phaser.Scenes.Events.PAUSE, stopHaptics);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      stopHaptics();
+      this.events.off(Phaser.Scenes.Events.PAUSE, stopHaptics);
+    });
     this.events.on(Phaser.Scenes.Events.PAUSE, hideEffects);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off(Phaser.Scenes.Events.PAUSE, hideEffects);
@@ -1323,12 +1317,12 @@ class GameScene extends Phaser.Scene {
     const laneHudHeight = 40; // fixed-size enemy label, guard and sound controls
     const laneActionHeight = 160; // design pixels: actors, overhead HP bars and floor
     const roomHeight = uh - topReserve - minFooterHeight - progressGap;
-    const boardAspect = this.boardHeight / this.boardWidth;
+    const boardAspect = this.boardFrameHeight / this.boardWidth;
     const boardSize = Math.max(1, Math.min(uw - 12,
       (roomHeight - minLaneHeight) / boardAspect,
       (roomHeight - laneHudHeight) / (boardAspect + laneActionHeight / GRID_W)));
     const puzzleScale = boardSize / this.boardWidth;
-    const boardHeight = this.boardHeight * puzzleScale;
+    const boardHeight = this.boardFrameHeight * puzzleScale;
     const s = boardSize / GRID_W;
     this.centerScale = s;
     const cw = boardSize;
@@ -1389,13 +1383,13 @@ class GameScene extends Phaser.Scene {
     const gap = 16;
     // Fit the 10×5 board and runner into the entire centre column with square tiles.
     const available = Math.max(100, w - leftW - rightW - 8);
-    const aspect = this.boardHeight / this.boardWidth;
+    const aspect = this.boardFrameHeight / this.boardWidth;
     // While a swap or challenge finishes, a deferred square board needs more cue room.
     const cueHeader = this.boardCols === 7 ? 60 : 0;
     const boardSize = Math.min(available, (h - gap - 16 - cueHeader) / (aspect + 180 / GRID_W), (h - gap - 100 - cueHeader) / aspect);
     const scale = boardSize / GRID_W;
     const puzzleScale = boardSize / this.boardWidth;
-    const boardHeight = this.boardHeight * puzzleScale;
+    const boardHeight = this.boardFrameHeight * puzzleScale;
     const laneHeight = Math.max(84, 180 * scale);
     const totalHeight = cueHeader + laneHeight + gap + boardHeight;
     const shellWidth = leftW + boardSize + rightW + 8;
@@ -1804,6 +1798,9 @@ class GameScene extends Phaser.Scene {
 
     // ground band the hero runs along
     this.floor = this.inBox(this.add.tileSprite(CXC, GROUND_Y + FLOOR_H / 2, UI_W, FLOOR_H, this.world.groundKey)).setTileScale(FLOOR_SCALE);
+    if (this.run.biome === "snow") {
+      this.inBox(frostMist(this, UI_W, 120, .82).setPosition(GRID_X, GROUND_Y - 100), false);
+    }
 
     // wet runs read overcast: a cool wash over the backdrop, under the characters
     if (this.rainy) this.laneRainWash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0x0a1626, 0.16));
@@ -1931,31 +1928,36 @@ class GameScene extends Phaser.Scene {
 
   // --- board ---
   private syncEmpoweredCell() {
-    if (!this.empoweredTile) return;
-    for (let r=0;r<this.tiles.length;r++) for(let c=0;c<this.tiles[r].length;c++)
-      if(this.tiles[r][c]===this.empoweredTile) {this.empowered.cell={r,c};return;}
+    for (const charge of this.empowered.charges) {
+      const tile = this.empoweredTiles.get(charge.id);
+      if (!tile) continue;
+      for (let r=0;r<this.tiles.length;r++) for(let c=0;c<this.tiles[r].length;c++)
+        if(this.tiles[r][c]===tile) charge.cell={r,c};
+    }
   }
 
   private maybeEmpower() {
-    if(this.empowered.type>=0 || this.empowered.moves<this.empowered.nextAt) return;
-    const choices:Coord[]=[];
-    for(let r=0;r<this.boardRows;r++) for(let c=0;c<this.boardCols;c++)
-      if(this.grid[r][c]>=SWORD && this.grid[r][c]<=SHIELD && !this.isIceLocked({r,c})) choices.push({r,c});
-    if(!choices.length)return;
-    const cell=choices[Math.floor(Math.random()*choices.length)], tile=this.tiles[cell.r][cell.c];
-    if(!tile)return;
-    this.empowered.cell=cell;this.empowered.type=this.grid[cell.r][cell.c];this.empowered.layouts={};
-    this.empoweredTile=tile;decorateEmpowered(this,tile,this.empowered.type);
-    this.sfx("pickup",.28,1.3);
+    if (this.tutorial?.active || this.empowered.moves < this.empowered.nextAt || this.empowered.charges.some(c => c.random)) return;
+    this.syncEmpoweredCell();
+    const charge = randomEmpower(this.empowered, this.grid, cell => this.isIceLocked(cell));
+    if (!charge?.cell) return;
+    const tile = this.tiles[charge.cell.r][charge.cell.c]!;
+    this.empoweredTiles.set(charge.id, tile);
+    decorateEmpowered(this, tile, charge.type, 2);
+    this.sfx("pickup", .28, 1.3);
     this.writeCheckpoint(true);
   }
 
-  private consumeEmpowered() {
+  private consumeEmpowered(ids: number[]) {
     this.syncEmpoweredCell();
-    const cell=this.empowered.cell;
-    if(cell) empoweredBurst(this,this.puzzleBox,this.xFor(cell.c),this.yFor(cell.r),this.empowered.type);
-    this.empoweredTile=null;this.empowered.cell=null;this.empowered.type=-1;this.empowered.layouts={};
-    this.empowered.nextAt=this.empowered.moves+6+Math.floor(Math.random()*3);
+    for (const charge of this.empowered.charges.filter(c => ids.includes(c.id))) {
+      const cell=charge.cell;
+      if(cell) empoweredBurst(this,this.puzzleBox,this.xFor(cell.c),this.yFor(cell.r),charge.type,charge.multiplier ?? 2);
+      if(charge.random) this.empowered.nextAt = this.empowered.moves + 6 + Math.floor(Math.random() * 3);
+      this.empoweredTiles.delete(charge.id);
+    }
+    this.empowered.charges=this.empowered.charges.filter(c => !ids.includes(c.id));
+    this.empowered.layouts={};
     this.sfx("spell",.35,1.2);buzz(22);
   }
 
@@ -1971,7 +1973,7 @@ class GameScene extends Phaser.Scene {
     if (!next) { this.failedBoardReflow = attempt; return; }
     this.syncEmpoweredCell();
     reflowEmpowered(this.empowered, this.grid, next.grid);
-    this.empoweredTile = null;
+    this.empoweredTiles.clear();
     this.down = null;
     this.clearSelection();
     this.clearHint();
@@ -1981,12 +1983,20 @@ class GameScene extends Phaser.Scene {
     this.tiles = this.grid.map((row, r) => row.map((type, c) => this.makeTile(r, c, type)));
     this.boardFrame.setPosition(this.boardCenter, GRID_Y + this.boardHeight / 2)
       .setSize(this.boardWidth + 8, this.boardHeight + 8);
+    this.boardAtmosphere?.resize(this.boardCols, this.boardRows);
     this.idleBoardTime = 0; this.idleHintShown = false;
     reflowIce(this.run.biome, this.run.zone!, this.grid);
   }
 
   private buildBoard() {
     this.boardFrame = this.inBox(this.add.rectangle(this.boardCenter, GRID_Y + this.boardHeight / 2, this.boardWidth + 8, this.boardHeight + 8, 0x0e1015).setStrokeStyle(2, 0x2a2d38));
+    const atmosphere = this.run.biome === "snow" ? frozenBoardArt : this.run.biome === "forest" ? forestBoardArt
+      : this.run.biome === "dungeon" ? delveBoardArt : null;
+    if (atmosphere) {
+      this.boardAtmosphere = atmosphere(this, this.boardCols, this.boardRows, TILE);
+      this.inBox(this.boardAtmosphere.root.setPosition(GRID_X, GRID_Y), true);
+      this.boardAtmosphere.syncCache?.(this.run.zone!.locks, this.run.zone!.caches);
+    }
     this.grid = this.recovered ? structuredClone(this.recovered.grid) : makeInitialGrid(Math.random, this.boardCols, this.boardRows);
     this.tiles = Array.from({ length: this.boardRows }, () => Array<Phaser.GameObjects.Container | null>(this.boardCols).fill(null));
     for (let r = 0; r < this.boardRows; r++)
@@ -2004,8 +2014,9 @@ class GameScene extends Phaser.Scene {
     this.syncTileShine(tile);
     tile.once("destroy", () => this.tweens.killTweensOf([tile, visual]));
     if (type === POTION) tile.setData("potionCue", decoratePotion(this, tile));
-    if (!this.empoweredTile && this.empowered.type === type && this.empowered.cell?.r === r && this.empowered.cell?.c === c) {
-      this.empoweredTile = tile; decorateEmpowered(this, tile, type);
+    const charge = this.empowered.charges.find(p => p.type === type && p.cell?.r === r && p.cell?.c === c);
+    if (charge && !this.empoweredTiles.has(charge.id)) {
+      this.empoweredTiles.set(charge.id, tile); decorateEmpowered(this, tile, type, charge.multiplier ?? 2);
     }
     return tile;
   }
@@ -2048,7 +2059,7 @@ class GameScene extends Phaser.Scene {
         this.swapPreview.cancel(true);
         this.down = { coord, x: p.x, y: p.y, pointerId: p.id, dragged: false };
         this.releaseTilePress();
-        this.pressedTile = this.tiles[coord.r][coord.c];
+        this.pressedTile = this.isIceLocked(coord) ? null : this.tiles[coord.r][coord.c];
         if (this.pressedTile) liftTile(this, this.pressedTile, true);
       }
       else this.clearSelection();
@@ -2072,7 +2083,22 @@ class GameScene extends Phaser.Scene {
         else this.clearSelection();
         return;
       }
-      if (this.isIceLocked(coord)) { this.clearSelection(); this.notice("Match beside the ice to break it", "#b7e8ff"); return; }
+      if (this.isIceLocked(coord)) {
+        this.clearSelection();
+        const released = this.cellAt(p.x, p.y);
+        if (released?.r !== coord.r || released.c !== coord.c) return;
+        const hit = tapIce(this.run.biome, this.run.zone!, this.boardCols, coord);
+        if (hit) {
+          this.inBox(iceBurst(this, this.xFor(coord.c), this.yFor(coord.r), 36, hit.broken ? 1 : .35), true);
+          this.sfx(hit.broken ? "block2" : "block1", hit.broken ? .4 : .25, 1 + hit.hits * .12);
+          buzz(hit.broken ? 18 : 8);
+          this.drawZonePatches();
+          this.updatePotionCues();
+          this.refreshHud();
+          this.writeCheckpoint(true);
+        }
+        return;
+      }
       if (this.grid[coord.r][coord.c] === POTION) {
         this.clearSelection();
         void this.drinkPotionAt(coord);
@@ -2084,6 +2110,7 @@ class GameScene extends Phaser.Scene {
         this.selected = coord;
         this.selection.setPosition(this.xFor(coord.c), this.yFor(coord.r)).setVisible(true);
         this.sfx("swap", 0.12, 1.2);
+        haptic("tap");
       }
     });
     this.input.on("pointerupoutside", (p: Phaser.Input.Pointer) => {
@@ -2147,19 +2174,19 @@ class GameScene extends Phaser.Scene {
   }
 
   private drawZonePatches() {
+    this.boardAtmosphere?.root.setVisible(!this.chestActive && !this.arenaActive);
     this.zoneArt.setVisible(!this.chestActive && !this.arenaActive && !this.tutorial?.active && !this.run.over);
     const state = this.run.zone!;
-    const signature = `${this.run.biome}:${this.boardCols}:${state.marks.join(",")}`;
+    this.boardAtmosphere?.syncCache?.(state.locks, state.caches);
+    const signature = `${this.run.biome}:${this.boardCols}:${state.marks.map(i => `${i}:${state.iceHits[i] ?? 0}`).join(",")}`;
     if (signature === this.zoneArtSignature) return;
     this.zoneArtSignature = signature;
+    this.puzzleBox.bringToTop(this.zoneArt);
     const g = this.zoneArt.clear();
     for (const i of state.marks) {
       const x = this.xFor(i % this.boardCols), y = this.yFor(Math.floor(i / this.boardCols));
       if (this.run.biome === "snow") {
-        g.fillStyle(0xb6e8ff,.18).fillRoundedRect(x-39,y-39,78,78,8);
-        g.lineStyle(3,0xb6e8ff,.95).strokeRoundedRect(x-39,y-39,78,78,8);
-        g.lineStyle(2,0xe4f7ff,.85).strokePoints([{x:x-36,y:y-18},{x:x-23,y:y-9},{x:x-29,y:y+8}],false);
-        g.fillStyle(0xe4f7ff,.8).fillTriangle(x+18,y-38,x+37,y-38,x+37,y-20);
+        frozenTile(g, x, y, 78, state.iceHits[i] ?? 0);
       }
     }
   }
@@ -2744,7 +2771,7 @@ class GameScene extends Phaser.Scene {
       this.clearSelection(); return;
     }
     if (this.isIceLocked(a) || this.isIceLocked(b)) {
-      this.clearSelection(); this.notice("Match beside the ice to break it", "#b7e8ff"); return;
+      this.clearSelection(); this.notice("Tap ice three times or match beside it", "#b7e8ff"); return;
     }
     const ta = this.tiles[a.r][a.c];
     const tb = this.tiles[b.r][b.c];
@@ -2758,6 +2785,7 @@ class GameScene extends Phaser.Scene {
     this.clearHint(); // a move settles the board — any hint is stale now
     swap(this.grid, a, b);
     const makesMatch = findMatches(this.grid).length > 0;
+    if (makesMatch) haptic("tap");
     if (!makesMatch) this.sfx("swap", 0.4, 0.85); // "nope" only on an illegal swap
     this.tiles[a.r][a.c] = tb;
     this.tiles[b.r][b.c] = ta;
@@ -2774,14 +2802,14 @@ class GameScene extends Phaser.Scene {
 
     this.idleBoardTime = 0;
     this.idleHintShown = false;
-    await this.resolve();
+    await this.resolve(this.tutorial?.active ? [] : [b, a]);
     if (!this.tutorial?.active) this.empowered.moves++;
     if (!this.run.over && !hasPossibleMove(this.grid)) await this.animatedReshuffle("no moves left — fresh tiles");
     this.tutorial?.onBoardSettled();
     this.busy = false;
   }
 
-  private async resolve() {
+  private async resolve(swapped: Coord[] = []) {
     let depth = 0; // cascade depth — rising pitch on the match pop
     while (!this.run.over && !this.runCompleteShown) {
       const matches = findMatches(this.grid);
@@ -2800,13 +2828,29 @@ class GameScene extends Phaser.Scene {
           counts[this.grid[cell.r][cell.c]] = (counts[this.grid[cell.r][cell.c]] ?? 0) + 1;
         }
 
-      const zoneReward = resolveZoneMatches(this.run.biome, this.run.zone!, this.boardCols,
-        [...cleared].map(key => { const [r,c] = key.split(",").map(Number); return {r,c}; }), counts[KEY] ?? 0);
+      const clearedCells = [...cleared].map(key => { const [r, c] = key.split(",").map(Number); return { r, c }; });
+      this.boardAtmosphere?.reactToMatch?.(clearedCells, depth);
+      const zoneReward = resolveZoneMatches(this.run.biome, this.run.zone!, this.boardCols, clearedCells, counts[KEY] ?? 0);
+      for (const i of zoneReward.removed) this.inBox(iceBurst(this, this.xFor(i % this.boardCols), this.yFor(Math.floor(i / this.boardCols)), 36), true);
       this.drawZonePatches();
       this.syncEmpoweredCell();
-      const power = empoweredMatch(matches, this.empowered.cell);
-      if (power && this.empoweredTile) this.consumeEmpowered();
-      buzz(depth > 1 ? 22 : 14); // haptic tick as the tiles shatter (deeper cascade = longer buzz on Android)
+      const power = planEmpowered(matches, this.empowered, depth === 1 ? swapped : []);
+      if (power.consume.length) this.consumeEmpowered(power.consume);
+      // Keep one tile from each deliberate large match. Its glow travels with gravity.
+      const retained = new Set(power.create.map(p => `${p.cell.r},${p.cell.c}`));
+      for (const earned of power.create) {
+        const tile = this.tiles[earned.cell.r][earned.cell.c];
+        if (!tile) continue;
+        const id = this.empowered.nextId++;
+        this.empowered.charges.push({ id, type: earned.type, cell: { ...earned.cell }, multiplier: earned.multiplier });
+        this.empowered.layouts = {};
+        this.empoweredTiles.set(id, tile);
+        decorateEmpowered(this, tile, earned.type, earned.multiplier);
+        empoweredGather(this, this.puzzleBox, earned.cells.map(c => ({ x: this.xFor(c.c), y: this.yFor(c.r) })),
+          { x: this.xFor(earned.cell.c), y: this.yFor(earned.cell.r) }, earned.type, earned.multiplier);
+      }
+      if (power.create.length) this.sfx("pickup", .35, 1.3);
+      haptic(depth > 1 || cleared.size >= 4 ? "combo" : "match");
       const fades: Promise<void>[] = [];
       // every match pays out visibly WHERE it happened — group the cleared cells
       const resCells: { x: number; y: number }[] = []; // resources/keys -> gold score
@@ -2826,6 +2870,7 @@ class GameScene extends Phaser.Scene {
         else if (ty === SHIELD) shdCells.push(at);
         if (ty === SWORD) swordCells.push(at);
         else if (ty === STAFF) staffCells.push(at);
+        if (retained.has(key)) return;
         const t = this.tiles[r][c];
         if (t) fades.push(this.shatter(t, ty));
         this.tiles[r][c] = null;
@@ -2835,7 +2880,7 @@ class GameScene extends Phaser.Scene {
 
       const scoreBefore = this.run.score;
       const sporesBefore = this.run.enemy?.spores ?? 0;
-      const outcome = applyMatches(this.run, counts, power);
+      const outcome = applyMatches(this.run, counts, power.bonus);
       if (sporesBefore > 0 && (counts[STAFF] ?? 0) >= 3) this.notice("Spores cleared", "#c4efab");
       const centroid = (cells: { x: number; y: number }[]) => ({
         x: cells.reduce((s, p) => s + p.x, 0) / cells.length,
@@ -2869,6 +2914,7 @@ class GameScene extends Phaser.Scene {
         this.run.resources.treasure += zoneReward.gems;
         this.run.score += zoneReward.gems * 2;
         this.notice(`🔓 Cache opened · +${zoneReward.gems} gems`, "#ffe0a0");
+        haptic("reward");
         this.sfx("pickup", .45);
       } else if (zoneReward.removed.length) this.notice("Ice broken", "#b7e8ff");
       this.refreshHud();
@@ -3698,7 +3744,7 @@ class GameScene extends Phaser.Scene {
   /** The Cindermage falls: flash, quake, treasure bounty, and a chest rolls in next. */
   private bossSpoils(x: number) {
     this.hideBossBar();
-    buzz(40);
+    haptic("victory");
     this.cameras.main.shake(420, 0.012);
     this.sfx("coin_pour", 0.6);
     const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xfff0d8, 0.85).setDepth(40));
@@ -4109,8 +4155,15 @@ class GameScene extends Phaser.Scene {
       const R=this.arenaRect();
       this.aReg(this.inBox(this.add.text(R.cx,R.cy,"DEFENCE BROKEN",{fontFamily:"system-ui, sans-serif",fontSize:"32px",fontStyle:"bold",color:"#ffe0a3"}).setOrigin(.5).setDepth(52)));
     }
-    if (this.boss.arena === "rimes" && this.arenaWard < 3)
-      this.frostSurface("Ice broken", "", `${this.arenaWard} / 3`);
+    if (this.boss.arena === "rimes") {
+      this.frostSurface(this.arenaWard < 3 ? "Ice broken" : "Heart shattered", "", `${this.arenaWard} / 3`);
+      const R = this.arenaRect();
+      const x = R.cx, y = R.y + 104 + (R.h - 150) / 2;
+      const aftershock = this.aReg(this.inBox(this.add.graphics().setDepth(44), true));
+      iceCracks(aftershock, x, y, Math.min(300, R.h - 185), 2);
+      this.tweens.add({ targets: aftershock, alpha: 0, duration: 1100 });
+      this.aReg(this.inBox(iceBurst(this, x, y, 110), true));
+    }
     if (taunt)
       this.time.delayedCall(950, () => {
         if (gen === this.arenaGen && this.arenaActive) this.notice(taunt, this.boss.accent);
@@ -4147,6 +4200,7 @@ class GameScene extends Phaser.Scene {
   private bossReact() {
     if (!this.orc || this.orcDying) return;
     const k = this.boss.key;
+    if (this.boss.arena === "rimes") this.aReg(this.inBox(iceBurst(this, this.orc.x, GROUND_Y - 50, 35), false));
     if (this.boss.hasHurt) {
       this.orc.play(`${k}-hurt`).once("animationcomplete", () => {
         if (this.orc && this.orcAnim === k && !this.orcDying) this.orc.play(`${k}-idle`);
@@ -4163,6 +4217,21 @@ class GameScene extends Phaser.Scene {
   private bossSwing() {
     if (!this.orc || this.orcDying) return;
     const k = this.boss.key;
+    if (this.boss.arena === "rimes") {
+      const frost = this.aReg(this.inBox(this.add.graphics().setDepth(28), false));
+      frost.fillStyle(0x8bdcf4, .22).fillEllipse(this.orc.x, GROUND_Y - 2, 120, 17);
+      frost.lineStyle(2, 0xdcfaff, .7).lineBetween(this.orc.x - 54, GROUND_Y - 4, this.orc.x + 54, GROUND_Y - 4);
+      this.tweens.add({ targets: frost, alpha: 0, duration: 700, onComplete: () => frost.destroy() });
+      for (let i = 0; i < 5; i++) {
+        const x = this.orc.x - 50 + i * 25;
+        const spike = this.aReg(this.inBox(this.add.image(x, GROUND_Y + 2, frostSpike(this)).setOrigin(.5, 1)
+          .setDisplaySize(15, 26 + i % 2 * 12).setFlipY(true).setAlpha(.8).setDepth(29), false));
+        const sy = spike.scaleY;
+        spike.scaleY = 0;
+        this.tweens.add({ targets: spike, scaleY: sy, duration: 160, delay: i * 35, ease: "Back.easeOut" });
+        this.tweens.add({ targets: spike, alpha: 0, duration: 400, delay: 300, onComplete: () => spike.destroy() });
+      }
+    }
     if (this.boss.arena === "goring") {
       const dust = this.aReg(this.inBox(this.add.particles(this.orc.x, GROUND_Y - 3, "spark", {
         speedX: { min: -85, max: 65 }, speedY: { min: -45, max: -12 }, gravityY: 100,
@@ -4521,7 +4590,7 @@ class GameScene extends Phaser.Scene {
     this.hero.setTint(times > 1 ? 0xff6a4a : 0xffa060);
     this.time.delayedCall(times > 1 ? 300 : 200, () => this.hero.clearTint());
     this.sfx(this.pick(["hit1", "hit2", "hit3"]), 0.5, times > 1 ? 0.85 : 1);
-    buzz(times > 1 ? 40 : 24);
+    haptic("damage");
     void net;
     // a heavy blow bleeds the screen red, so the difference is felt, not read
     if (times > 1) {
@@ -5659,7 +5728,7 @@ class GameScene extends Phaser.Scene {
 
   // ================= THE THREE RIMES (snow boss arena) =================
   // The Hoarfrost Warden never moves from where he plants his feet. He works on
-  // the pit instead: he seals it, he tests you with sigils, and at the last he
+  // the pit instead: he seals it, he calls a blizzard, and at the last he
   // opens his own frozen heart — for as long as the ring lets you reach it.
 
   private rimesIntro(gen: number) {
@@ -5682,29 +5751,32 @@ class GameScene extends Phaser.Scene {
     let cleared = 0;
     let freeze = 0; // 0..1 — the seal closing
     let done = false;
-    type Plate = { kind: "gold" | "blue" | "red"; obj: Phaser.GameObjects.Image; x: number; y: number; taps: number; cut?: { destroy: () => void } };
+    type Plate = { kind: "gold" | "blue" | "red"; obj: Phaser.GameObjects.Image; damage: Phaser.GameObjects.Graphics; x: number; y: number; taps: number; cut?: { destroy: () => void } };
     const plates = new Set<Plate>();
 
     const label = this.frostSurface("Break the ice", "Gold: tap · Blue: swipe · Red: avoid", `0 / ${RIME_PLATES_TO_CLEAR}`);
     const MW = R.w - 60;
     this.aReg(this.inBox(this.add.rectangle(R.cx, R.y + 111, MW + 6, 12, 0x0a0b0f, 0.85).setDepth(48)));
     const meter = this.aReg(this.inBox(this.add.rectangle(R.cx - MW / 2, R.y + 111, MW, 7, G_BLUE).setOrigin(0, 0.5).setScale(0, 1).setDepth(49)));
+    const frostEdge = this.aReg(this.inBox(this.add.graphics().setDepth(41), true));
+    const paintPlate = (pl: Plate) => {
+      const g = pl.damage.clear();
+      if (pl.kind !== "gold") return;
+      iceCracks(g, 0, 0, 86, RIME_PLATE_TAPS - pl.taps);
+      g.fillStyle(0x061723, .9).fillRoundedRect(-26, 47, 52, 15, 6);
+      for (let i = 0; i < RIME_PLATE_TAPS; i++) g.fillStyle(i < pl.taps ? 0xffdea0 : 0x42525a)
+        .fillRoundedRect(-18 + i * 14, 51, 9, 7, 2);
+    };
+    const removePlate = (pl: Plate) => {
+      plates.delete(pl); pl.cut?.destroy();
+      this.tweens.killTweensOf(pl.obj);
+      pl.obj.destroy(); pl.damage.destroy();
+    };
 
     const shatter = (pl: Plate) => {
       if (done || !plates.has(pl)) return;
-      const burst = this.inBox(
-        this.add
-          .particles(pl.x, pl.y, "spark", {
-            speed: { min: 90, max: 300 }, lifespan: { min: 180, max: 420 },
-            scale: { start: 1.1, end: 0 }, blendMode: "ADD", tint: 0xbfe8ff, emitting: false,
-          })
-          .setDepth(46),
-      );
-      burst.explode(16);
-      this.time.delayedCall(600, () => burst.destroy());
-      plates.delete(pl);
-      pl.cut?.destroy();
-      pl.obj.destroy();
+      this.aReg(this.inBox(iceBurst(this, pl.x, pl.y, 48), true));
+      removePlate(pl);
       this.sfx("block2", 0.4, 1.3);
       cleared++;
       label.setText(`${cleared} / ${RIME_PLATES_TO_CLEAR}`);
@@ -5725,7 +5797,7 @@ class GameScene extends Phaser.Scene {
     };
 
     const spawnPlate = () => {
-      if (done || plates.size >= RIME_MAX_PLATES) return;
+      if (done || gen !== this.arenaGen || !this.arenaActive || this.run.over || plates.size >= RIME_MAX_PLATES) return;
       let x = 0, y = 0, room = false;
       for (let attempt = 0; attempt < 20; attempt++) {
         x = R.x + 90 + Math.random() * (R.w - 180);
@@ -5745,14 +5817,17 @@ class GameScene extends Phaser.Scene {
             .setInteractive({ useHandCursor: true }),
         ),
       );
-      const pl: Plate = { kind, obj, x, y, taps: RIME_PLATE_TAPS };
+      const damage = this.aReg(this.inBox(this.add.graphics({ x, y }).setDepth(46), true));
+      const pl: Plate = { kind, obj, damage, x, y, taps: RIME_PLATE_TAPS };
       plates.add(pl);
+      paintPlate(pl);
       if (kind === "blue") {
+        obj.setVisible(false).disableInteractive(); // the swipe node supplies its own crystal
         // a blue plate carries its grain: cut that way and it splits
         const dir = (["up", "down", "left", "right"] as SwipeDir[])[(Math.random() * 4) | 0];
         pl.cut = this.swipeNode(x, y, 40, dir, () => shatter(pl), () => {
           this.arenaWardMissed = true;
-          plates.delete(pl); pl.obj.destroy();
+          removePlate(pl);
           this.notice("wrong way", "#ff8a6a");
           this.sfx("swing1", 0.3);
         });
@@ -5760,11 +5835,11 @@ class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: obj, scale: .78, duration: 220, ease: "Back.easeOut" });
       this.sfx("swap", 0.22, 1.5);
       obj.on("pointerdown", () => {
-        if (done || gen !== this.arenaGen) return;
+        if (done || gen !== this.arenaGen || !this.arenaActive || this.run.over || !plates.has(pl)) return;
         if (pl.kind === "red") {
           // ✖ — the one plate that never wanted touching
-          plates.delete(pl);
-          obj.destroy();
+          this.aReg(this.inBox(iceBurst(this, x, y, 36), true));
+          removePlate(pl);
           if (this.bellForgives()) return;
           this.arenaWardMissed = true;
           this.notice("not the red ones", "#ff8a6a");
@@ -5775,9 +5850,12 @@ class GameScene extends Phaser.Scene {
         if (pl.kind !== "gold") return; // blue is resolved by its cut node
         pl.taps--;
         this.sfx(this.pick(["hit1", "hit2"]), 0.35, 1.4 + (RIME_PLATE_TAPS - pl.taps) * 0.12);
+        this.tweens.killTweensOf(obj);
+        obj.setScale(.78);
         this.tweens.add({ targets: obj, scaleX: 0.67, scaleY: .88, duration: 70, yoyo: true });
         if (pl.taps > 0) {
-          obj.setTint(pl.taps === 2 ? 0xc4ecff : 0x87bdd5);
+          paintPlate(pl);
+          this.aReg(this.inBox(iceBurst(this, x, y, 32, .35), true));
           return;
         }
         shatter(pl);
@@ -5795,6 +5873,13 @@ class GameScene extends Phaser.Scene {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
           freeze += (60 / RIME_FREEZE_MS) * (1 + 0.5 * Math.max(0, plates.size - 1));
           meter.scaleX = Math.min(1, freeze);
+          meter.setFillStyle(freeze > .75 ? 0xffbc87 : 0x8ddeed);
+          frostEdge.clear();
+          for (let i = 0; i < 12; i++) {
+            const x = R.x + 24 + i * (R.w - 48) / 11, height = (14 + i * 17 % 42) * freeze;
+            frostEdge.fillStyle(0xb1e6f6, .12 + freeze * .22)
+              .fillTriangle(x - 12, R.y + R.h - 8, x + 12, R.y + R.h - 8, x - 3, R.y + R.h - 8 - height);
+          }
           if (freeze < 1) return;
           // sealed: he closes his fist, the pit re-crusts and the thaw starts over
           freeze = 0.3;
@@ -5802,11 +5887,7 @@ class GameScene extends Phaser.Scene {
           this.bossSwing();
           this.notice("the seal closes", "#ff8a6a");
           this.arenaStrikeHero();
-          for (const pl of plates) {
-            pl.cut?.destroy();
-            pl.obj.destroy();
-          }
-          plates.clear();
+          for (const pl of plates) removePlate(pl);
           spawnPlate();
           spawnPlate();
         },
@@ -5815,7 +5896,7 @@ class GameScene extends Phaser.Scene {
   }
 
   /**
-   * STAGE 2 · DODGE THE ICE (reaction: dodge RED, tap GOLD, hold BLUE)
+   * STAGE 2 · DODGE THE ICE (reaction: dodge RED, tap GOLD)
    *
    * A blizzard takes the pit. RED icicle columns telegraph, then fall — your
    * scout is a token you drag clear of them. GOLD warmth-motes drift through and
@@ -5841,10 +5922,18 @@ class GameScene extends Phaser.Scene {
     // your scout, dragged along the floor of the pit
     const floorY = R.y + R.h - 74;
     const iceFloor = this.aReg(this.inBox(this.add.graphics().setDepth(41)));
-    iceFloor.fillStyle(0x7fb7ca,.4).fillRoundedRect(R.x+22,floorY+3,R.w-44,22,8);
+    iceFloor.fillStyle(0x06202c,.9).fillRoundedRect(R.x+22,floorY+3,R.w-44,28,8);
+    iceFloor.fillGradientStyle(0xa4deed,0xa4deed,0x24485e,0x24485e,.55).fillRoundedRect(R.x+22,floorY+3,R.w-44,24,8);
     iceFloor.lineStyle(3,0xe1f8ff,.7).lineBetween(R.x+30,floorY+3,R.x+R.w-30,floorY+3);
     for(let x=R.x+50;x<R.x+R.w-40;x+=69)
       iceFloor.lineStyle(2,0x204d68,.8).strokePoints([{x,y:floorY+6},{x:x+9,y:floorY+12},{x:x+5,y:floorY+20}]);
+    const wind = this.aReg(this.inBox(this.add.graphics().setDepth(41), true));
+    for (let i = 0; i < 9; i++) {
+      const x = R.x + 65 + i * 89 % (R.w - 130), y = R.y + 141 + i * 53 % (R.h - 250);
+      wind.lineStyle(i % 3 ? 1 : 2, 0xc5efff, .1 + round * .04).lineBetween(x, y, x + 29, y + 6);
+    }
+    this.tweens.add({ targets: wind, x: -32, y: 7, alpha: .3, duration: 750 - round * 100, yoyo: true, repeat: -1 });
+    const shadow = this.aReg(this.inBox(this.add.ellipse(R.cx, floorY + 3, 60, 13, 0x03121e, .65).setDepth(42), true));
     const tok = this.aReg(
       this.inBox(this.add.sprite(R.cx, floorY, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(2.2 / PLAYER_DENSITY).setDepth(46).play("hero-idle")),
     );
@@ -5866,14 +5955,17 @@ class GameScene extends Phaser.Scene {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
           const y = R.y + 151 + Math.random() * (R.h - 301);
           const node = this.goldNode(R.x + R.w + 40, y, 30, () => {
+            if (done || gen !== this.arenaGen || !this.arenaActive || this.run.over) return;
             caught++;
             tally.setText(`${caught} / ${cfg.motes}`);
             this.sfx("pickup", 0.4, 1.2);
+            const warmth = this.aReg(this.inBox(this.add.ellipse(tok.x, floorY - 24, 70, 88, 0xffd386, .25).setDepth(43), true));
+            this.tweens.add({ targets: warmth, alpha: 0, scale: 1.25, duration: 420, onComplete: () => warmth.destroy() });
             if (caught >= cfg.motes && !done) {
               done = true;
               this.arenaDealsDone++;
               this.drainBossBar();
-              this.time.delayedCall(500, () => {
+              this.aTimer(this.time.delayedCall(500, () => {
                 if (gen !== this.arenaGen || this.run.over || !this.arenaActive) return;
                 if (round + 1 >= ROUNDS.length) {
                   const c = BOSS_STAGES.hoarfrost[2];
@@ -5884,9 +5976,14 @@ class GameScene extends Phaser.Scene {
                   this.notice("the storm deepens", "#8ff4ff");
                   this.rimeWhiteout(gen, round + 1);
                 }
-              });
+              }));
             }
           });
+          const halo = this.add.image(0, 0, "orb").setTint(0xffc568).setBlendMode(Phaser.BlendModes.ADD).setDisplaySize(105, 105).setAlpha(.28);
+          node.addAt(halo, 0);
+          const trail = this.add.graphics();
+          for (let i = 0; i < 4; i++) trail.fillStyle(0xffd68b, .25 - i * .045).fillCircle(28 + i * 11, 4 + Math.sin(i) * 5, 3 - i * .4);
+          node.addAt(trail, 0);
           this.tweens.add({
             targets: node,
             x: R.x - 40,
@@ -5905,32 +6002,41 @@ class GameScene extends Phaser.Scene {
         loop: true,
         callback: () => {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
+          this.bossSwing();
           for (let c = 0; c < cfg.cols; c++) {
             const cx = R.x + 90 + Math.random() * (R.w - 180);
-            const tell = this.aReg(
-                this.inBox(this.add.rectangle(cx, R.y + (R.h + 105) / 2 - 20, 78, R.h - 145, G_RED, 0.16).setStrokeStyle(2, G_RED_EDGE, 0.7).setDepth(41)),
-            );
-            this.tweens.add({ targets: tell, alpha: 0.5, duration: cfg.tellMs / 3, yoyo: true, repeat: 1 });
-            this.time.delayedCall(cfg.tellMs, () => {
-              if (done || gen !== this.arenaGen || !this.arenaActive) return;
+            const tell = this.aReg(this.inBox(this.add.graphics().setDepth(42), true));
+            // Exactly the same 104px width as the landing collision, with a quiet column
+            // and a strong footprint so the floor tells the player where to move.
+            tell.fillStyle(0xf47588, .12).fillRect(cx - 52, R.y + 126, 104, floorY - R.y - 119);
+            tell.lineStyle(2, 0xff9baa, .6).lineBetween(cx - 52, R.y + 132, cx - 52, floorY + 8);
+            tell.lineBetween(cx + 52, R.y + 132, cx + 52, floorY + 8);
+            tell.fillStyle(0xa83c57, .75).fillRoundedRect(cx - 52, floorY - 5, 104, 19, 5);
+            for (let i = 0; i < 6; i++) tell.lineStyle(3, 0xffb7bd, .6).lineBetween(cx - 45 + i * 16, floorY + 10, cx - 36 + i * 16, floorY - 1);
+            const warning = this.aReg(this.inBox(this.add.rectangle(cx, floorY - 7, 104, 4, 0xffc0c7).setScale(0, 1).setDepth(44), true));
+            this.tweens.add({ targets: warning, scaleX: 1, duration: cfg.tellMs, ease: "Linear" });
+            const spike = this.aReg(this.inBox(this.add.image(cx, R.y + 137, frostSpike(this)).setOrigin(.5, 0).setDisplaySize(51, 108).setDepth(47).setAlpha(.5), true));
+            this.tweens.add({ targets: spike, alpha: 1, duration: cfg.tellMs });
+            this.aTimer(this.time.delayedCall(cfg.tellMs, () => {
+              if (done || gen !== this.arenaGen || !this.arenaActive || this.run.over) return;
               tell.destroy();
-              const spike = this.aReg(
-                this.inBox(this.add.image(cx, R.y + 157, frostCrystal(this,"red")).setDisplaySize(64, 112).setDepth(47)),
-              );
+              warning.destroy();
               this.sfx("fireball1", 0.3, 1.5);
               this.tweens.add({
                 targets: spike,
-                y: floorY - 20,
+                y: floorY - 99,
                 duration: 260,
                 ease: "Quad.easeIn",
                 onComplete: () => {
+                  if (done || gen !== this.arenaGen || !this.arenaActive || this.run.over) return;
                   this.cameras.main.shake(140, 0.005);
                   this.sfx("hit1", 0.35, 1.4);
+                  this.aReg(this.inBox(iceBurst(this, cx, floorY, 38, .75), true));
                   if (Math.abs(tok.x - cx) < 52 && !this.bellForgives()) fail("the ice finds you", ARENA_RED_STRIKES);
                   this.tweens.add({ targets: spike, alpha: 0, duration: 260, onComplete: () => spike.destroy() });
                 },
               });
-            });
+            }));
           }
         },
       }),
@@ -5954,6 +6060,7 @@ class GameScene extends Phaser.Scene {
           } else {
             tok.play("hero-idle",true);
           }
+          shadow.x = tok.x;
         },
       }),
     );
@@ -5977,25 +6084,60 @@ class GameScene extends Phaser.Scene {
 
     const tally = this.frostSurface("The frozen heart", "Strike when the gap faces the arrow", `0 / ${HEART_HITS}`);
     // the strike line: your blade comes from here, so the gap must be HERE
-    this.aReg(this.inBox(this.add.rectangle(CX - RAD - 90, CY, 120, 5, G_GOLD, 0.5).setDepth(41)));
-    this.aReg(this.inBox(this.add.text(CX - RAD - 152, CY, "▶", { fontFamily: EMOJI_FONT, fontSize: "34px", color: "#ffd24a" }).setOrigin(0.5).setDepth(42)));
-
-    this.aReg(this.inBox(this.add.circle(CX, CY, RAD, 0x000000, 0).setStrokeStyle(2, 0x30538f, 0.7).setDepth(40)));
+    const bladeX = Math.max(R.x + 43, CX - RAD - 91);
+    const blade = this.aReg(this.inBox(this.add.graphics().setDepth(46), true));
+    blade.fillStyle(0x0a1a28, .9).fillRoundedRect(bladeX - 23, CY - 24, 49, 48, 9);
+    blade.lineStyle(2, 0x8da7af, .6).strokeRoundedRect(bladeX - 23, CY - 24, 49, 48, 9);
+    blade.fillStyle(0xffdd93).fillTriangle(bladeX + 19, CY, bladeX - 9, CY - 11, bladeX - 9, CY + 11);
+    blade.fillStyle(0xffffff, .65).fillTriangle(bladeX + 19, CY, bladeX - 9, CY - 11, bladeX - 9, CY);
+    const beam = this.aReg(this.inBox(this.add.graphics().setDepth(42), true));
+    const ring = this.aReg(this.inBox(this.add.graphics().setDepth(44), true));
+    const fracture = this.aReg(this.inBox(this.add.graphics().setDepth(46), true));
+    const cooldown = this.aReg(this.inBox(this.add.graphics().setDepth(47), true));
+    this.aReg(this.inBox(this.add.ellipse(CX, CY + RAD + 23, RAD * 1.65, 24, 0x020b16, .55).setDepth(41), true));
     const core = this.aReg(
-      this.inBox(this.add.image(CX, CY, frostCrystal(this,"gold")).setDisplaySize(106,106).setDepth(44).setInteractive({ useHandCursor: true })),
+      this.inBox(this.add.image(CX, CY, frostHeart(this)).setDisplaySize(106,106).setDepth(44).setInteractive({ useHandCursor: true })),
     );
     const glow = this.aReg(this.inBox(this.add.image(CX, CY, "orb").setBlendMode(Phaser.BlendModes.ADD).setTint(G_GOLD).setScale(2.4).setAlpha(0.5).setDepth(43)));
-    this.tweens.add({ targets: glow, scale: 3, alpha: 0.22, duration: 900, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
 
     const shards: Phaser.GameObjects.Image[] = [];
     for (let i = 0; i < HEART_SHARDS; i++)
-      shards.push(this.aReg(this.inBox(this.add.image(CX, CY, frostCrystal(this,"red")).setDisplaySize(30,64).setDepth(45))));
+      shards.push(this.aReg(this.inBox(this.add.image(CX, CY, frostSpike(this)).setDisplaySize(27,57).setDepth(45))));
+    // Container children render in insertion order, regardless of their scene depth.
+    this.puzzleBox.bringToTop(fracture);
+    this.puzzleBox.bringToTop(cooldown);
 
     const gapHalf = () => lerp(HEART_GAP_FROM, HEART_GAP_TO, hits / Math.max(1, HEART_HITS - 1));
     const spin = () => lerp(HEART_SPIN_FROM, HEART_SPIN_TO, Math.min(1, hits / 3));
     const place = () => {
       const g = gapHalf();
       const span = 360 - 2 * g;
+      const open = Math.abs(Phaser.Math.Angle.ShortestBetween(gapAngle, STRIKE)) <= g;
+      const ready = open && this.time.now >= lockedUntil;
+      const from = Phaser.Math.DegToRad(gapAngle + g), to = Phaser.Math.DegToRad(gapAngle + 360 - g);
+      ring.clear();
+      ring.lineStyle(24, 0x2b536f, .95).beginPath().arc(CX, CY, RAD, from, to).strokePath();
+      ring.lineStyle(14, 0x9fdcef, .6).beginPath().arc(CX, CY, RAD, from, to).strokePath();
+      ring.lineStyle(2, 0xe0faff, .9).beginPath().arc(CX, CY, RAD + 11, from, to).strokePath();
+      ring.lineStyle(2, 0x5284a3, .9).beginPath().arc(CX, CY, RAD - 11, from, to).strokePath();
+      for (const angle of [from, to]) {
+        const x = CX + Math.cos(angle) * RAD, y = CY + Math.sin(angle) * RAD;
+        ring.fillStyle(0xe1fbff).fillCircle(x, y, 5);
+      }
+      beam.clear();
+      beam.lineStyle(2, ready ? 0xffe3a2 : 0x849cad, ready ? .85 : .35).lineBetween(bladeX + 27, CY, CX - RAD - 16, CY);
+      if (ready) {
+        beam.fillStyle(0xffd990, .13).fillTriangle(bladeX + 20, CY, CX, CY - 23, CX, CY + 23);
+        beam.lineStyle(4, 0xffe8b3, .8).lineBetween(bladeX + 20, CY, CX, CY);
+      }
+      core.setTint(ready ? 0xffffff : 0x7a96ac);
+      glow.setAlpha(ready ? .65 : .16).setScale(ready ? 2.8 + Math.sin(this.time.now / 110) * .12 : 2.1);
+      blade.setAlpha(this.time.now < lockedUntil ? .4 : 1);
+      cooldown.clear();
+      if (this.time.now < lockedUntil) {
+        const left = (lockedUntil - this.time.now) / HEART_LOCK_MS;
+        cooldown.lineStyle(4, 0xb4d2df, .8).beginPath().arc(CX, CY, 64, -Math.PI / 2, -Math.PI / 2 + left * Math.PI * 2).strokePath();
+      }
       for (let i = 0; i < HEART_SHARDS; i++) {
         const a = gapAngle + g + ((i + 0.5) * span) / HEART_SHARDS;
         const rad = Phaser.Math.DegToRad(a);
@@ -6012,9 +6154,6 @@ class GameScene extends Phaser.Scene {
           if (done || gen !== this.arenaGen || !this.arenaActive) return;
           gapAngle = (gapAngle + dir * spin() * 0.016 + 360) % 360;
           place();
-          // the core brightens as the opening swings past your blade
-          const open = Math.abs(Phaser.Math.Angle.ShortestBetween(gapAngle, STRIKE)) <= gapHalf();
-          core.setTint(open ? 0xffffff : 0x596e85);
         },
       }),
     );
@@ -6024,7 +6163,6 @@ class GameScene extends Phaser.Scene {
       if (this.time.now < lockedUntil) {
         // say so — a dead tap with no answer reads as a broken button
         this.sfx("swap", 0.2, 0.6);
-        this.floatChip(CX, CY - 80, "blade still locked", { size: 15, tint: [0xd0d4dc, 0xb9c0cc, 0x8a8f98, 0x6a707c], stroke: "#14171f" });
         return;
       }
       const open = Math.abs(Phaser.Math.Angle.ShortestBetween(gapAngle, STRIKE)) <= gapHalf();
@@ -6038,6 +6176,7 @@ class GameScene extends Phaser.Scene {
         this.notice("Hit blocked · wait for the gap", "#ff8a6a");
         this.cameras.main.shake(200, 0.007);
         this.tweens.add({ targets: shards, alpha: 0.5, duration: 120, yoyo: true });
+        this.aReg(this.inBox(iceBurst(this, CX - RAD, CY, 32, .55), true));
         this.arenaStrikeHero(ARENA_RED_STRIKES);
         return;
       }
@@ -6050,16 +6189,13 @@ class GameScene extends Phaser.Scene {
       this.bossReact();
       this.arenaDealsDone++;
       this.drainBossBar();
-      const burst = this.inBox(
-        this.add
-          .particles(CX, CY, "spark", {
-            speed: { min: 120, max: 340 }, lifespan: { min: 200, max: 500 },
-            scale: { start: 1.4, end: 0 }, blendMode: "ADD", tint: 0xbfe8ff, emitting: false,
-          })
-          .setDepth(47),
-      );
-      burst.explode(26);
-      this.time.delayedCall(700, () => burst.destroy());
+      iceCracks(fracture.clear(), CX, CY, 94, Math.min(2, hits));
+      this.aReg(this.inBox(iceBurst(this, CX, CY, 60), true));
+      const slash = this.aReg(this.inBox(this.add.graphics().setDepth(51), true));
+      slash.fillStyle(0xfff6d3, .95).fillTriangle(bladeX + 16, CY, CX + 65, CY - 6, CX + 45, CY + 8);
+      this.tweens.add({ targets: slash, alpha: 0, duration: 220, onComplete: () => slash.destroy() });
+      this.tweens.killTweensOf(core);
+      core.setDisplaySize(106, 106);
       this.tweens.add({ targets: core, scale: 0.7, duration: 120, yoyo: true });
       if (hits >= HEART_HITS) {
         done = true;
@@ -6237,6 +6373,7 @@ class GameScene extends Phaser.Scene {
       }
 
       if (net > 0) {
+        haptic("damage");
         if (slowMotion) this.heroKnock = Math.max(this.heroKnock, KNOCK_MISS * 1.35);
         this.cameras.main.shake((isBoss ? 260 : 150) * (slowMotion ? 1.35 : 1), isBoss ? 0.009 : 0.006);
         this.hero.setTint(isBoss ? 0xffa060 : 0xff8888); // seared vs. slimed
@@ -6507,6 +6644,7 @@ class GameScene extends Phaser.Scene {
       const cancel = () => resolve(false);
       const finish = () => {
         if (!this.awaitingChest || this.run.over) return;
+        haptic("tap");
         this.awaitingChest = false;
         big.disableInteractive();
         prompt.destroy();
@@ -6574,6 +6712,7 @@ class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: flash, fillAlpha: 0, duration: 260, ease: "Quad.easeOut", onComplete: () => flash.destroy() });
     this.cameras.main.shake(280, 0.011);
     this.sfx("chest_creak", 0.7);
+    haptic("reward");
     this.sfx("coin_pour", 0.85);
     const mkRay = (alpha: number, scale: number, angle: number) =>
       add(this.add.image(CX, CY - 14, "godray").setDepth(61).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0).setScale(0.4).setAngle(angle).setData("a", alpha).setData("s", scale));
@@ -6788,7 +6927,7 @@ class GameScene extends Phaser.Scene {
   /** Dev: rig a clean 2-step cascade (clear 3 -> a tile drops to make the next 3) to preview combo pacing. */
   public debugCombo() {
     if (this.busy || this.run.over || this.chestActive) return;
-    this.empowered = newEmpowered(); this.empoweredTile = null;
+    this.empowered = newEmpowered(); this.empoweredTiles.clear();
     this.busy = true;
     const P = SWORD; // 0
     const Q = 2; // shield
@@ -7040,6 +7179,8 @@ class GameScene extends Phaser.Scene {
   /** Lodestone: rip every wood + ore tile into the pack, then let the board settle. */
   private async lodestonePull() {
     this.busy = true;
+    this.syncEmpoweredCell();
+    const charged = this.empowered.charges.filter(p => p.cell && (p.type === WOOD || p.type === ORE));
     const counts: Record<number, number> = {};
     const cells: Coord[] = [];
     for (let r = 0; r < this.boardRows; r++)
@@ -7051,6 +7192,7 @@ class GameScene extends Phaser.Scene {
       return;
     }
     this.sfx("coin_pour", 0.5);
+    if (charged.length) this.consumeEmpowered(charged.map(p => p.id));
     buzz(20);
     const fades: Promise<void>[] = [];
     for (const cell of cells) {
@@ -7062,7 +7204,7 @@ class GameScene extends Phaser.Scene {
       this.grid[cell.r][cell.c] = EMPTY;
     }
     await Promise.all(fades);
-    const outcome = applyMatches(this.run, counts);
+    const outcome = applyMatches(this.run, counts, itemPowerBonuses(charged, counts));
     this.notice(`+${outcome.gained.wood} 🪵  +${outcome.gained.ore} 🪨`, "#fff2b0");
     this.refreshHud();
     await this.collapse();
@@ -7119,10 +7261,8 @@ class GameScene extends Phaser.Scene {
   private async detonate(center: Coord) {
     this.busy = true;
     this.syncEmpoweredCell();
-    const charged=this.empowered.cell;
-    const detonatesPower=!!charged && Math.abs(charged.r-center.r)<=SAPPER_RADIUS && Math.abs(charged.c-center.c)<=SAPPER_RADIUS;
-    const poweredType=detonatesPower?this.empowered.type:-1;
-    if(detonatesPower)this.consumeEmpowered();
+    const charged=this.empowered.charges.filter(p => p.cell && Math.abs(p.cell.r-center.r)<=SAPPER_RADIUS && Math.abs(p.cell.c-center.c)<=SAPPER_RADIUS);
+    if(charged.length)this.consumeEmpowered(charged.map(p => p.id));
     const counts: Record<number, number> = {};
     const fades: Promise<void>[] = [];
     this.sfx("fireball1", 0.6, 0.9);
@@ -7143,7 +7283,7 @@ class GameScene extends Phaser.Scene {
         this.grid[r][c] = EMPTY;
       }
     await Promise.all(fades);
-    const outcome = applyMatches(this.run, counts, poweredType>=0?{type:poweredType,count:counts[poweredType]??0}:undefined);
+    const outcome = applyMatches(this.run, counts, itemPowerBonuses(charged, counts));
     await this.tutorial?.onCascade(counts);
     for (let i = 0; i < (counts[POTION] ?? 0); i++) drinkPotion(this.run);
     if (outcome.damage > 0) await this.onCombat(outcome, outcome.swords);
@@ -7158,7 +7298,8 @@ class GameScene extends Phaser.Scene {
   private async prismConvert(srcType: number) {
     this.busy = true;
     this.syncEmpoweredCell();
-    if(this.empowered.type===srcType)this.empowered.type=SWORD;
+    for (const charge of this.empowered.charges) if(charge.type===srcType) charge.type=SWORD;
+    this.empowered.layouts={};
     this.sfx("spell", 0.6);
     this.boardFlash(0.22);
     const converts: Coord[] = [];
@@ -7166,7 +7307,7 @@ class GameScene extends Phaser.Scene {
       for (let c = 0; c < this.boardCols; c++) if (this.grid[r][c] === srcType) converts.push({ r, c });
     for (const { r, c } of converts) {
       this.grid[r][c] = SWORD;
-      if(this.tiles[r][c]===this.empoweredTile)this.empoweredTile=null;
+      for (const [id,tile] of this.empoweredTiles) if(this.tiles[r][c]===tile)this.empoweredTiles.delete(id);
       this.tiles[r][c]?.destroy();
       const t = this.makeTile(r, c, SWORD);
       this.tiles[r][c] = t;
@@ -7657,7 +7798,9 @@ class GameScene extends Phaser.Scene {
   private moveTo(t: Phaser.GameObjects.Container, r: number, c: number): Promise<void> {
     this.tweens.killTweensOf(t);
     return new Promise((res) => {
-      this.tweens.add({ targets: t, x: this.xFor(c), y: this.yFor(r), duration: 105, ease: "Quad.easeOut", onComplete: () => {
+      // Replacements below ice fade in with their drop. A separate fade would
+      // be canceled by killTweensOf above, leaving full cells invisible.
+      this.tweens.add({ targets: t, x: this.xFor(c), y: this.yFor(r), alpha: 1, duration: 105, ease: "Quad.easeOut", onComplete: () => {
         if (t.scene) settleTile(this, t);
         res();
       } });
@@ -8702,10 +8845,7 @@ class GameScene extends Phaser.Scene {
           this.grid[r][c] = type;
           const t = this.makeTile(r, c, type);
           t.y = this.yFor(top === 0 ? r - spawned : top);
-          if (top > 0) {
-            t.setAlpha(0);
-            this.tweens.add({targets:t,alpha:1,duration:150});
-          }
+          if (top > 0) t.setAlpha(0);
           this.tiles[r][c] = t;
           anims.push(this.moveTo(t, r, c));
         }
@@ -8717,7 +8857,7 @@ class GameScene extends Phaser.Scene {
     this.clearSelection();
     this.syncEmpoweredCell();
     const oldGrid=this.grid;
-    this.empoweredTile=null;
+    this.empoweredTiles.clear();
     for (let r = 0; r < this.boardRows; r++)
       for (let c = 0; c < this.boardCols; c++) {
         this.tiles[r][c]?.destroy();
@@ -8744,7 +8884,9 @@ Phaser.GameObjects.Text.prototype.updateText = function () {
 const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
-  backgroundColor: "#0a0b0f",
+  // The page supplies the dark backdrop. Transparency lets the pause menu's
+  // canvas sit above the DOM caravan without replacing it with the legacy camp.
+  transparent: true,
   pixelArt: true,
   // RESIZE: canvas fills the #game element (100vw x 100vh); the scene re-lays-out on resize
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
@@ -8813,7 +8955,7 @@ window.addEventListener("orientationchange", () =>
   }, 120),
 );
 
-initHaptics(); // set up the iOS haptic fallback element
+game.events.once(Phaser.Core.Events.DESTROY, initHaptics());
 
 // Dev-only handle for debugging; stripped from production builds.
 if (import.meta.env.DEV) (globalThis as unknown as { __mbGame: Phaser.Game }).__mbGame = game;

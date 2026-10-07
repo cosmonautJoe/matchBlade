@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { findMatches, hasPossibleMove, swap, type Coord } from "./board";
 import { bossArenaArt, type ArenaBounds, type BossTheme } from "./boss-arena-art";
+import { iceBurst } from "./frost-art";
 
 type FinaleOptions = {
   scene: Phaser.Scene; rect: ArenaBounds; theme: BossTheme; kind: "shells" | "rimes";
@@ -104,11 +105,19 @@ export function createBossFinale(o: FinaleOptions) {
     const left=(R.w-cols*cell)/2, top=R.h-48-rows*cell;
     const guardian=add(scene.add.sprite(R.w/2,top+6,`${o.bossKey}-idle`).setOrigin(.5,o.bossOrigin).setScale(Math.min(.9,(top-103)/92)).setFlipX(o.flip).play(`${o.bossKey}-idle`));
     const bed=add(scene.add.graphics());
-    bed.fillStyle(0x28627a,.7).fillRoundedRect(left-8,top-6,cols*cell+16,rows*cell+12,12);
+    bed.fillStyle(0x020e1c).fillRoundedRect(left-10,top-8,cols*cell+20,rows*cell+16,12);
+    bed.fillGradientStyle(0x1b5670,0x21455c,0x0a2337,0x103649,1).fillRoundedRect(left-7,top-5,cols*cell+14,rows*cell+10,10);
+    bed.lineStyle(3,0xacdfe9,.8).strokeRoundedRect(left-9,top-7,cols*cell+18,rows*cell+14,11);
+    const goal=add(scene.add.ellipse(R.w/2,top-2,Math.min(160,cell*2),12,0xb8f0ff,.4));
+    scene.tweens.add({targets:goal,alpha:.16,scaleX:.85,duration:1300,yoyo:true,repeat:-1,ease:"Sine.easeInOut"});
     const types=["tile-sword","tile-staff","tile-shield","tile-key"];
     let grid:number[][]=[], busy=false, selected:Coord|null=null, down:Coord|null=null, matches=0;
     const tiles:Phaser.GameObjects.Image[][]=Array.from({length:rows},()=>[]);
     const sources=[(rows-1)*cols+cols/2-1,(rows-1)*cols+cols/2];
+    for(const n of sources){
+      const x=left+(n%cols+.5)*cell;
+      bed.fillStyle(0xffdea4,.9).fillTriangle(x,top+rows*cell+3,x-7,top+rows*cell+12,x+7,top+rows*cell+12);
+    }
     const cracks=new Set<number>(sources);
     let connected=new Set<number>();
     const newGrid=()=>{
@@ -129,11 +138,18 @@ export function createBossFinale(o: FinaleOptions) {
       for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
         const n=r*cols+c,x=left+c*cell,y=top+r*cell;
         ice.fillStyle(0x9edced,cracks.has(n)?.07:.24).fillRoundedRect(x+4,y+4,cell-8,cell-8,5);
-        ice.lineStyle(2,0xb9efff,.35).strokeRoundedRect(x+4,y+4,cell-8,cell-8,5);
+        ice.lineStyle(2,0xb9efff,connected.has(n)?.7:.35).strokeRoundedRect(x+4,y+4,cell-8,cell-8,5);
+        if(!cracks.has(n)){
+          ice.fillStyle(0xe7fbff,.22).fillTriangle(x+6,y+6,x+cell*.36,y+6,x+6,y+cell*.3);
+          ice.fillStyle(0x72bbd5,.22).fillTriangle(x+cell-6,y+cell-6,x+cell*.7,y+cell-6,x+cell-6,y+cell*.6);
+        }
         if(cracks.has(n)){
-          ice.lineStyle(connected.has(n)?4:2,connected.has(n)?0xe0fbff:0x73bed8,.95);
-          ice.strokePoints([{x:x+cell*.5,y},{x:x+cell*.37,y:y+cell*.36},{x:x+cell*.61,y:y+cell*.65},{x:x+cell*.5,y:y+cell}]);
-          for(const next of [n+1])if(c<cols-1&&cracks.has(next))ice.lineBetween(x+cell*.5,y+cell*.5,x+cell*1.5,y+cell*.5);
+          const path=[{x:x+cell*.5,y},{x:x+cell*.37,y:y+cell*.36},{x:x+cell*.5,y:y+cell*.5},{x:x+cell*.61,y:y+cell*.65},{x:x+cell*.5,y:y+cell}];
+          for(const [width,color,alpha] of [[9,0x061c2d,.9],[6,connected.has(n)?0x8ae0f5:0x4c91af,.5],[2,connected.has(n)?0xedfdff:0x82c3db,1]]){
+            ice.lineStyle(width,color,alpha).strokePoints(path);
+            if(c<cols-1&&cracks.has(n+1))ice.lineBetween(x+cell*.5,y+cell*.5,x+cell*1.5,y+cell*.5);
+          }
+          ice.lineStyle(1,0xb7f1ff,.7).strokePoints([{x:x+cell*.37,y:y+cell*.36},{x:x+cell*.2,y:y+cell*.3},{x:x+cell*.09,y:y+cell*.13}]);
         }
       }
       const reached=rows-1-Math.min(...[...connected].map(n=>Math.floor(n/cols)));
@@ -146,11 +162,16 @@ export function createBossFinale(o: FinaleOptions) {
       const hits=findMatches(grid);
       if(!hits.length){busy=false;if(!hasPossibleMove(grid)){newGrid();for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)tiles[r][c].setTexture(types[grid[r][c]]);}return;}
       const cleared=new Set(hits.flatMap(m=>m.cells.map(p=>p.r*cols+p.c)));
-      for(const n of cleared){const r=Math.floor(n/cols),c=n%cols;cracks.add(n);grid[r][c]=-1;burst(left+(c+.5)*cell,top+(r+.5)*cell,0xb9edff);tiles[r][c].setAlpha(.15);}
+      for(const n of cleared){const r=Math.floor(n/cols),c=n%cols;cracks.add(n);grid[r][c]=-1;add(iceBurst(scene,left+(c+.5)*cell,top+(r+.5)*cell,cell*.35,.7));tiles[r][c].setAlpha(.15);}
       o.sound("block2");
       if(paint()){
-        guardian.play(`${o.bossKey}-hurt`);scene.tweens.add({targets:guardian,y:guardian.y+60,alpha:0,duration:700});
-        for(const row of tiles)for(const tile of row)scene.tweens.add({targets:tile,y:tile.y+25,alpha:.2,duration:650});
+        guardian.play(`${o.bossKey}-hurt`);scene.tweens.add({targets:guardian,y:guardian.y+60,alpha:0,duration:700,ease:"Quad.easeIn"});
+        scene.tweens.add({targets:ice,alpha:0,duration:480});
+        for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+          const tile=tiles[r][c];
+          scene.tweens.add({targets:tile,y:tile.y+35,angle:(c%2?1:-1)*8,alpha:0,duration:500,delay:(rows-r-1)*70,ease:"Quad.easeIn"});
+        }
+        add(iceBurst(scene,R.w/2,top+6,95));
         complete();return;
       }
       later(260,()=>{
@@ -172,7 +193,9 @@ export function createBossFinale(o: FinaleOptions) {
       matches++;
       if(matches%4===0){
         guardian.play(`${o.bossKey}-attack`).once("animationcomplete",()=>live()&&guardian.play(`${o.bossKey}-idle`));
-        later(650,()=>{o.hurt();burst(R.w/2,top,0xe0f8ff);});
+        const cast=add(scene.add.ellipse(R.w/2,top,cell*1.3,18,0xa1e7ff,.5));
+        scene.tweens.add({targets:cast,scaleX:1.65,alpha:0,duration:650,onComplete:()=>cast.destroy()});
+        later(650,()=>{o.hurt();add(iceBurst(scene,R.w/2,top,65));});
       }
       busy=true;const ta=tiles[a.r][a.c],tb=tiles[b.r][b.c];tiles[a.r][a.c]=tb;tiles[b.r][b.c]=ta;
       scene.tweens.add({targets:ta,x:left+(b.c+.5)*cell,y:top+(b.r+.5)*cell,duration:160});

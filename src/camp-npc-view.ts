@@ -1,6 +1,14 @@
 type ExitFrame = (progress: number, from: DOMRect, to: DOMRect) => void;
 export type CampNpc = "shop" | "quests" | "forge" | "magic" | "unknown";
 
+/** NPC centers in the caravan's shared 480px artwork coordinates. */
+export function campNpcFocus(npc: CampNpc, grown: boolean): [number, number] {
+  return npc === "quests" ? (grown ? [318, 158] : [302, 244])
+    : npc === "forge" ? (grown ? [335, 260] : [428, 273])
+    : npc === "magic" || npc === "unknown" ? (grown ? [180, 158] : [384, 210])
+    : (grown ? [151, 260] : [147, 239]);
+}
+
 export function campNpcCaption(npc: CampNpc, camp: HTMLElement) {
   switch (npc) {
     case "quests": return { name: "The guide", detail: "Quests & achievements" };
@@ -28,6 +36,7 @@ export function createCampNpcView(camp: HTMLElement, host: HTMLElement, npc: Cam
   const ctx = canvas.getContext("2d")!;
   const started = performance.now();
   const duration = animate ? 420 : 0;
+  const landscape = matchMedia("(orientation: landscape)");
   let frame = 0, last = 0;
   let camera = { scale: 1, x: 0, y: 0 };
   let cartBounds: { left: number; top: number; width: number; height: number } | null = null;
@@ -65,22 +74,19 @@ export function createCampNpcView(camp: HTMLElement, host: HTMLElement, npc: Cam
     const grown = camp.classList.contains("is-expanded");
     const wagonScale = wagon.width / 480;
     const x = wagon.left - env.left, y = wagon.top - env.top;
-    const focus = npc === "quests" ? (grown ? [318, 158] : [302, 244])
-      : npc === "forge" ? (grown ? [335, 260] : [428, 273])
-      : npc === "magic" || npc === "unknown" ? (grown ? [180, 158] : [384, 210])
-      : (grown ? [151, 260] : [147, 239]);
+    const focus = campNpcFocus(npc, grown);
     const npcX = x + focus[0] * wagonScale;
     const npcY = y + focus[1] * wagonScale;
     // Keep surrounding caravan details in frame rather than filling it with the NPC.
-    const zoom = Math.max(1, Math.min(1.6, Math.min(w / 320, h / 260) / wagonScale));
+    const zoom = landscape.matches ? 1 : Math.max(1, Math.min(1.6, Math.min(w / 320, h / 260) / wagonScale));
     const t = duration ? Math.min(1, (now - started) / duration) : 1;
     const ease = 1 - Math.pow(1 - t, 3);
     let scale = 1 + (zoom - 1) * ease;
     const initialX = env.left - bounds.left, initialY = env.top - bounds.top;
     // Avoid exposing empty canvas past the scenery on the rightmost workspaces.
     const targetX = Math.min(0, Math.max(w - env.width * zoom, w * .5 - npcX * zoom));
-    let tx = initialX + (targetX - initialX) * ease;
-    let ty = initialY + (h * .47 - npcY * zoom - initialY) * ease;
+    let tx = landscape.matches ? initialX : initialX + (targetX - initialX) * ease;
+    let ty = landscape.matches ? initialY : initialY + (h * .47 - npcY * zoom - initialY) * ease;
     if (exit) {
       scale = exit.camera.scale + (1 - exit.camera.scale) * exitEase;
       tx = exit.camera.x + (env.left - exit.camera.x) * exitEase - bounds.left;
