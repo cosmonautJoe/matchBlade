@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { decoratePotionSheen } from "./potion-sheen";
+import { setTileGrabbed } from "./tile-grab";
 
 /** Local accents clear quickly and stay close to their tile, leaving the fight readable. */
 export function tileClearBurst(scene: Phaser.Scene, parent: Phaser.GameObjects.Container, x: number, y: number, type: number) {
@@ -88,6 +89,7 @@ export function decoratePotion(scene: Phaser.Scene, tile: Phaser.GameObjects.Con
 }
 
 export function liftTile(scene: Phaser.Scene, tile: Phaser.GameObjects.Container, lifted: boolean) {
+  setTileGrabbed(scene, tile, lifted);
   const visual = tileVisual(tile);
   scene.tweens.killTweensOf(visual);
   scene.tweens.add({ targets: visual, y: lifted ? -4 : 0, scale: lifted ? 1.045 : 1,

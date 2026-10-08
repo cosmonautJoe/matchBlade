@@ -19,6 +19,8 @@ import { caravanJourney } from "./caravan-progress";
 import { haptic } from "./haptics";
 import { preloadPlayer, createPlayerAnimations, PLAYER_TEXTURE, PLAYER_DENSITY, PLAYER_ORIGIN } from "./player-art";
 import { openCampPanel, type PanelCard } from "./camp-ui";
+import { prepareResourceIcons, type ResourceCost } from "./ui-resources";
+import { preloadTileArt } from "./tile-art";
 import type { CampNpc } from "./camp-npc-view";
 import { createVillageHub } from "./village-hub";
 import { createCaravan } from "./caravan";
@@ -479,6 +481,7 @@ export class CampScene extends Phaser.Scene {
   }
 
   preload() {
+    preloadTileArt(this);
     const biome = biomeDef(loadMeta().biome);
     const img = (key: string, file: string) => {
       if (!this.textures.exists(key)) this.load.image(key, file);
@@ -527,6 +530,7 @@ export class CampScene extends Phaser.Scene {
   }
 
   create() {
+    prepareResourceIcons(this);
     this.departing = false;
     this.campFocus = -130;
     this.parallax = [];
@@ -1429,7 +1433,8 @@ export class CampScene extends Phaser.Scene {
           tag: `${item.zone ? `${item.zone[0].toUpperCase()}${item.zone.slice(1)} gear` : item.bossAid ? "Boss item" : "Run item"} · ${item.tier}`,
           lines: [item.desc, item.hint],
           action: {
-            label: !room ? "Pack full" : afford ? `Buy · 💎 ${price}` : `Need 💎 ${price}`,
+            label: !room ? "Pack full" : afford ? "Buy item" : "Not enough gems",
+            cost: { treasure: price },
             enabled: room && afford,
             run: () => {
               if (this.meta.stockedItems.length >= MAX_STOCKED || !canAfford(this.meta, { treasure: price })) return;
@@ -1450,10 +1455,11 @@ export class CampScene extends Phaser.Scene {
     this.closeNativePanel = openCampPanel(this, {
       title: "Item shop", kind: "shop",
       reply,
-      subtitle: `💎 ${this.meta.treasure} gems · ${stocked.length}/${MAX_STOCKED} packed`,
+      subtitle: `${stocked.length} of ${MAX_STOCKED} items packed`,
+      wallet: { treasure: this.meta.treasure },
       cards, footer: pack ? `Next run: ${pack}` : "Pack up to three items for your next run.",
       actions: [{
-        label: `Refresh · 💎 ${PEDDLER_REROLL}`, secondary: true,
+        label: "Refresh stock", cost: { treasure: PEDDLER_REROLL }, secondary: true,
         enabled: this.meta.treasure >= PEDDLER_REROLL && this.shopOffers.length > 0,
         run: () => {
           if (!canAfford(this.meta, { treasure: PEDDLER_REROLL })) return;
@@ -1567,22 +1573,18 @@ export class CampScene extends Phaser.Scene {
   }
 
   /** Simple modal panel: dim veil + title + lines + buttons. One at a time. */
-  private panel(title: string, lines: string[], buttons: { label: string; enabled?: boolean; cb?: () => void }[], npc?: CampNpc) {
+  private panel(title: string, lines: string[], buttons: { label: string; cost?: ResourceCost; enabled?: boolean; cb?: () => void }[], npc?: CampNpc) {
     this.closePanel();
     this.panelOpen = true;
-    const costs: string[] = [];
-    for (const [glyph, name, have] of [["🪵", "wood", this.meta.wood], ["🪨", "stone", this.meta.ore], ["💎", "gems", this.meta.treasure]] as const) {
-      const match = buttons[0]?.label.match(new RegExp(`${glyph}\\s*(\\d+)`));
-      if (match) costs.push(`${glyph} ${have} / ${match[1]} ${name}`);
-    }
-    const cards: PanelCard[] = [{ title: "", lines: lines.filter((line) => !!line && (!costs.length || !line.startsWith("Resources:"))) }];
-    if (costs.length) cards.push({ title: "Materials", tag: "You have / needed", lines: costs });
+    const cost = buttons.find(button => button.cost)?.cost;
+    const cards: PanelCard[] = [{ title: "", lines: lines.filter(line => !!line && !line.startsWith("Resources:")),
+      requirements: cost ? { cost, have: this.meta } : undefined }];
     this.closeNativePanel = openCampPanel(this, {
       title, kind: "upgrade", npc,
       subtitle: npc === "unknown" || npc === "shop" ? "Your growing caravan" : "Permanent camp upgrades",
       cards,
       actions: buttons.map((b) => ({
-        label: b.cb ? b.label : "Back to camp", enabled: b.enabled,
+        label: b.cb ? b.label : "Back to camp", cost: b.cost, enabled: b.enabled,
         secondary: !b.cb, closeAfter: true,
         run: () => { this.closePanel(); b.cb?.(); },
       })),
@@ -1608,16 +1610,15 @@ export class CampScene extends Phaser.Scene {
     }
     const afford = canAfford(this.meta, BLACKSMITH_COST);
     this.panel(
-      "WREN · SWORD UPGRADES",
+      "Build the forge",
       [
         `Set up the forge and get sword level 1 straight away.`,
         `A basic sword match will deal 10 damage instead of 5, before enemy defenses.`,
-        `Bring 🪵 ${BLACKSMITH_COST.wood} and 🪨 ${BLACKSMITH_COST.ore} to unlock the forge.`,
         ``,
         `Resources:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}`,
       ],
       [
-        { label: `HIRE  🪵${BLACKSMITH_COST.wood} 🪨${BLACKSMITH_COST.ore}`, enabled: afford, cb: () => this.hireSmith() },
+        { label: "Build forge", cost: BLACKSMITH_COST, enabled: afford, cb: () => this.hireSmith() },
         { label: "maybe later" },
       ],
       "forge",
@@ -1668,7 +1669,7 @@ export class CampScene extends Phaser.Scene {
     if (!this.meta.wizardHired) {
       const afford = canAfford(this.meta, WIZARD_COST);
       this.panel(
-        "ALDWIN · SPELL UPGRADES",
+        "Recruit Aldwin",
         [
           `I can upgrade the damage from your fireball matches.`,
           `Hire me to unlock permanent spell upgrades.`,
@@ -1677,7 +1678,7 @@ export class CampScene extends Phaser.Scene {
           `Resources:  🪵 ${this.meta.wood}   🪨 ${this.meta.ore}   💎 ${this.meta.treasure}`,
         ],
         [
-          { label: `HIRE  🪵${WIZARD_COST.wood} 🪨${WIZARD_COST.ore} 💎${WIZARD_COST.treasure}`, enabled: afford, cb: () => this.hireWizard() },
+          { label: "Recruit", cost: WIZARD_COST, enabled: afford, cb: () => this.hireWizard() },
           { label: "later" },
         ],
         "magic",
@@ -1688,9 +1689,9 @@ export class CampScene extends Phaser.Scene {
     const cap = studyCap(this.meta.biome);
     if (lvl >= cap) {
       this.panel(
-        "✦ SPELL UPGRADES",
+        "Spell upgrades",
         [
-          `Staff level ${lvl} · area maximum reached`,
+          `Spell level ${lvl} · area maximum reached`,
           `Spell damage bonus: +${lvl * SPELL_BONUS_PER_LEVEL}`,
           ``,
           `You have all the spell upgrades for this area.`,
@@ -1704,15 +1705,15 @@ export class CampScene extends Phaser.Scene {
     const cost = studyCost(lvl);
     const afford = canAfford(this.meta, { ore: cost });
     this.panel(
-      "✦ SPELL UPGRADES",
+      "Spell upgrades",
       [
         `Spell bonus: +${lvl * SPELL_BONUS_PER_LEVEL} → +${(lvl + 1) * SPELL_BONUS_PER_LEVEL} damage`,
-        afford ? `Ready to upgrade to sword level ${lvl + 1}` : `Need ${cost - this.meta.ore} more stone to upgrade`,
+        afford ? `Ready for spell level ${lvl + 1}` : `Need ${cost - this.meta.ore} more stone to upgrade`,
         ``,
         `Resources:  🪨 ${this.meta.ore}`,
       ],
       [
-        { label: `STUDY  🪨${cost}`, enabled: afford, cb: () => this.studyUpgrade(cost) },
+        { label: "Upgrade spell", cost: { ore: cost }, enabled: afford, cb: () => this.studyUpgrade(cost) },
         { label: "not yet" },
       ],
       "magic",
@@ -1761,7 +1762,7 @@ export class CampScene extends Phaser.Scene {
     const cap = forgeCap(this.meta.biome);
     if (lvl >= cap) {
       this.panel(
-        "⚒ SWORD UPGRADES",
+        "Sword upgrades",
         [
           `Sword level ${lvl} · area maximum reached`,
           `One sword match now defeats any regular enemy here.`,
@@ -1781,7 +1782,7 @@ export class CampScene extends Phaser.Scene {
         ? `Level ${lvl + 1}: one sword match defeats regular enemies`
         : `Basic sword match: ${5 + lvl * SWORD_BONUS_PER_LEVEL} → ${5 + (lvl + 1) * SWORD_BONUS_PER_LEVEL} damage, before enemy defenses`;
     this.panel(
-      "⚒ SWORD UPGRADES",
+      "Sword upgrades",
       [
         nextNote,
         `Upgrades available in this area: ${cap - lvl}`,
@@ -1789,7 +1790,7 @@ export class CampScene extends Phaser.Scene {
         `Resources:  🪨 ${this.meta.ore}`,
       ],
       [
-        { label: `Upgrade sword · 🪨 ${cost}`, enabled: afford, cb: () => this.forgeUpgrade(cost) },
+        { label: "Upgrade sword", cost: { ore: cost }, enabled: afford, cb: () => this.forgeUpgrade(cost) },
         { label: "Close" },
       ],
       "forge",
@@ -1824,15 +1825,15 @@ export class CampScene extends Phaser.Scene {
     })) : currentQuests(this.meta).map((aq) => {
       const q = questById(aq.id)!;
       const progress = questProgress(this.meta, aq);
-      return { title: q.label, icon: "▤", tag: "Tracking automatically", lines: [`Reward · 💎 ${q.reward}`], progress };
+      return { title: q.label, icon: "▤", tag: "Tracking automatically", lines: [], reward: { treasure: q.reward }, progress };
     });
     if (tab === "quests") {
       if (!cards.length) cards.push({ title: "All caught up", icon: "✓", lines: ["Every quest in this area is complete. Keep exploring for more."] });
       for (const q of currentPool(this.meta).filter(q => !this.meta.active.some(a=>a.id===q.id) && !this.meta.questsRewarded.includes(q.id)).slice(0, 2))
-        cards.push({title:q.label,icon:"·",tag:"Up next",lines:[`Starts automatically when a quest slot opens · 💎 ${q.reward}`]});
+        cards.push({title:q.label,icon:"·",tag:"Up next",lines:["Starts automatically when a quest slot opens"],reward:{treasure:q.reward}});
       for (const id of this.meta.questsRewarded.filter(id => currentPool(this.meta).some(q => q.id === id)).slice(-3).reverse()) {
         const q=questById(id)!;
-        cards.push({title:q.label,icon:"✓",tag:"Completed",lines:[`💎 ${q.reward} already collected`]});
+        cards.push({title:q.label,icon:"✓",tag:"Completed",lines:[],reward:{treasure:q.reward},rewardLabel:"Collected"});
       }
     }
     this.closeNativePanel = openCampPanel(this, {

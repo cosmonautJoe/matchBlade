@@ -1,6 +1,7 @@
 import { companionById, type CompanionId, type RescuePayment } from "./companions";
 import type { PetPose } from "./companion-motion";
 import "./companions.css";
+import { resourceAmounts } from "./ui-resources";
 
 /** Small hand-built pixel silhouettes, shared by the rescue and campsite. */
 export function drawCompanion(ctx: CanvasRenderingContext2D, id: CompanionId, x: number, feet: number, scale: number, time: number,
@@ -129,6 +130,8 @@ export function showCompanionRescue(id: CompanionId, alreadyRescued: boolean,
   const title=root.querySelector("h2")!, copy=root.querySelector<HTMLElement>(".rescue-copy")!, benefit=root.querySelector<HTMLElement>(".rescue-benefit")!;
   const options=root.querySelector<HTMLElement>(".rescue-options")!, next=root.querySelector<HTMLButtonElement>(".rescue-continue")!;
   const payments=[...options.querySelectorAll<HTMLButtonElement>("button")];
+  payments[0].replaceChildren(document.createTextNode("Unlock cage"), resourceAmounts({ keys: 1 }));
+  payments[1].replaceChildren(document.createTextNode("Make a lever"), resourceAmounts({ wood: 3 }));
   const ctx=root.querySelector("canvas")!.getContext("2d")!;
   let freed=alreadyRescued, frame=0, destroyed=false;
   const update=()=>{
@@ -139,7 +142,7 @@ export function showCompanionRescue(id: CompanionId, alreadyRescued: boolean,
     options.hidden=freed; next.textContent=freed?"Back to the road →":"Leave for now";
     next.classList.toggle("is-secondary",!freed);
     payments[0].disabled=freed || pack.keys<1;payments[1].disabled=freed || pack.wood<3;
-    options.querySelector("small")!.textContent=`Keys: ${pack.keys} · Wood: ${pack.wood} (bag + camp)`;
+    options.querySelector("small")!.replaceChildren(resourceAmounts(pack), document.createTextNode("Available · bag + camp"));
   };
   for(const button of payments)button.onclick=()=>{
     if(freed)return;

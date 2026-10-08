@@ -4,6 +4,7 @@ import "./ui-theme";
 import { renderJourney } from "./journey-view";
 import type { CaravanJourney } from "./caravan-progress";
 import { createCampNpcView, campNpcCaption, campNpcFocus, type CampNpc } from "./camp-npc-view";
+import { prepareResourceIcons, resourceAmounts, resourceRequirements, resourceText, type ResourceCost } from "./ui-resources";
 
 export interface PanelAction {
   label: string;
@@ -11,6 +12,7 @@ export interface PanelAction {
   secondary?: boolean;
   run?: () => void;
   closeAfter?: boolean;
+  cost?: ResourceCost;
 }
 export interface PanelCard {
   title: string;
@@ -19,13 +21,18 @@ export interface PanelCard {
   lines: string[];
   progress?: { have: number; need: number };
   action?: PanelAction;
+  reward?: ResourceCost;
+  rewardLabel?: string;
+  requirements?: { cost: ResourceCost; have: ResourceCost };
 }
 export interface CampPanel {
   title: string;
   subtitle: string;
-  kind?: "shop" | "quests" | "upgrade" | "routes";
+  kind?: "shop" | "quests" | "upgrade" | "routes" | "results";
   npc?: CampNpc;
   cards: PanelCard[];
+  content?: HTMLElement;
+  wallet?: ResourceCost;
   footer?: string;
   reply?: { speaker: string; text: string };
   actions?: PanelAction[];
@@ -37,6 +44,7 @@ export interface CampPanel {
 
 /** Native text and scrolling stay at CSS-pixel size, independent of the pixel-art canvas. */
 export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void {
+  prepareResourceIcons(scene);
   const previousFocus = document.activeElement as HTMLElement | null;
   const overlay = document.createElement("div");
   const isShop = model.kind === "shop";
@@ -91,7 +99,9 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
     const button = document.createElement("button");
     button.type = "button";
     button.className = `mb-action${def.secondary ? " mb-action--secondary" : ""}`;
-    button.textContent = def.label;
+    const label = el("span", "mb-action-label", def.label);
+    if (def.label) button.append(label);
+    if (def.cost) { button.classList.add("mb-action--priced"); button.append(resourceAmounts(def.cost)); }
     button.disabled = def.enabled === false;
     button.addEventListener("click", () => {
       if (closing) return;
@@ -103,6 +113,11 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
   const header = el("header", "mb-panel-header");
   const heading = el("div", "mb-heading");
   heading.append(el("h2", "", model.title), el("p", "mb-subtitle", model.subtitle));
+  if (model.wallet) {
+    const wallet = resourceAmounts(model.wallet); wallet.classList.add("mb-panel-wallet");
+    wallet.setAttribute("role", "group"); wallet.setAttribute("aria-label", "Your supplies");
+    heading.append(wallet);
+  }
   const close = action({ label: "✕", secondary: true, run: requestClose });
   close.classList.add("mb-close");
   close.setAttribute("aria-label", "Close panel");
@@ -158,19 +173,30 @@ export function openCampPanel(scene: Phaser.Scene, model: CampPanel): () => void
     names.append(el("h3", "", card.title));
     top.append(names);
     article.append(top);
-    for (const line of card.lines.filter(Boolean)) article.append(el("p", "mb-description", line));
+    for (const line of card.lines.filter(Boolean)) {
+      const text = el("p", "mb-description"); resourceText(text, line); article.append(text);
+    }
+    if (card.requirements) article.append(resourceRequirements(card.requirements.cost, card.requirements.have));
+    if (card.reward) {
+      const reward = el("div", "mb-card-reward");
+      reward.append(el("span", "", card.rewardLabel ?? "Reward"), resourceAmounts(card.reward));
+      article.append(reward);
+    }
     if (card.progress) {
       const { have, need } = card.progress;
       const meter = document.createElement("progress");
       meter.max = Math.max(1, need);
       meter.value = Math.min(have, need);
       meter.setAttribute("aria-label", card.title);
-      article.append(el("p", "mb-progress-label", `${have} / ${need}`), meter);
+      const label = el("p", "mb-progress-label");
+      label.append(el("span", "", "Progress"), el("strong", "", `${Math.min(have, need).toLocaleString()} / ${need.toLocaleString()}`));
+      article.append(label, meter);
     }
     if (card.action) article.append(action(card.action));
     cards.append(article);
   }
-  content.append(cards);
+  if (model.content) content.append(model.content);
+  if (model.cards.length) content.append(cards);
   dialog.append(content);
   const footer = el("footer", "mb-panel-footer");
   if (model.footer) footer.append(el("p", "mb-footer-copy", model.footer));

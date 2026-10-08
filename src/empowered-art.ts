@@ -1,18 +1,27 @@
 import Phaser from "phaser";
+import { tileEffectsEnabled } from "./tile-effects";
 
 export const POWER_COLORS = [0xffc56c, 0xda9cff, 0x8ce5ff, 0xead084, 0x9ae9ef, 0xf3d29f, 0xcad5e7];
+export const EMPOWER_GATHER_MS = 280;
 
 /** Decoration belongs to the tile, so gravity and swaps carry the whole effect. */
-export function decorateEmpowered(scene: Phaser.Scene, tile: Phaser.GameObjects.Container, type: number, multiplier: 2 | 3 = 2) {
+export function decorateEmpowered(scene: Phaser.Scene, tile: Phaser.GameObjects.Container, type: number, multiplier: 2 | 3 = 2, birthDelay = 0) {
   if (tile.getData("empowered")) return;
   tile.setData("empowered", multiplier);
   const color = POWER_COLORS[type] ?? POWER_COLORS[0];
   const aura = scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD);
   const rim = scene.add.graphics();
-  const plate = scene.add.rectangle(23, 25, 31, 23, multiplier === 3 ? 0x654821 : 0x15131e, .95).setStrokeStyle(1, multiplier === 3 ? 0xffe3a0 : color, .8);
-  const badge = scene.add.text(23, 25, `×${multiplier}`, { fontFamily: '"Pixelify Sans", monospace', fontSize: "20px", fontStyle: "bold", color: "#fff8dc", stroke: "#161523", strokeThickness: 2 }).setOrigin(.5);
+  const plate = scene.add.rectangle(0, 0, 31, 23, multiplier === 3 ? 0x654821 : 0x15131e, .95).setStrokeStyle(1, multiplier === 3 ? 0xffe3a0 : color, .8);
+  const badge = scene.add.text(0, 0, `×${multiplier}`, { fontFamily: '"Pixelify Sans", monospace', fontSize: "20px", fontStyle: "bold", color: "#fff8dc", stroke: "#161523", strokeThickness: 2 }).setOrigin(.5).setResolution(3);
+  const stamp = scene.add.container(23, 25, [plate, badge]);
+  const decoration = scene.add.container(0, 0, [aura, rim, stamp]);
   const visual = (tile.getData("visual") ?? tile) as Phaser.GameObjects.Container;
-  visual.add([aura, rim, plate, badge]);
+  visual.add(decoration);
+  if (birthDelay > 0) {
+    decoration.setAlpha(0); stamp.setScale(.4);
+    scene.tweens.add({ targets: decoration, alpha: 1, delay: birthDelay, duration: 100 });
+    scene.tweens.add({ targets: stamp, scale: 1, delay: birthDelay, duration: 220, ease: "Back.easeOut" });
+  }
   const shine = tile.getData("shine") as Phaser.GameObjects.Sprite | undefined;
   shine?.destroy(); tile.setData("shine", null);
   const phase = { t: 0 };
@@ -32,7 +41,7 @@ export function decorateEmpowered(scene: Phaser.Scene, tile: Phaser.GameObjects.
   };
   draw();
   const tween = scene.tweens.add({ targets: phase, t: 1, duration: 2300, repeat: -1, onUpdate: draw });
-  tile.once("destroy", () => tween.remove());
+  tile.once("destroy", () => { tween.remove(); scene.tweens.killTweensOf([decoration, stamp]); });
 }
 
 export function empoweredBurst(scene: Phaser.Scene, parent: Phaser.GameObjects.Container, x: number, y: number, type: number, multiplier: 2 | 3 = 2) {
@@ -53,22 +62,67 @@ export function empoweredBurst(scene: Phaser.Scene, parent: Phaser.GameObjects.C
 
 /** The cleared match folds into its surviving tile: an earned, readable upgrade. */
 export function empoweredGather(scene: Phaser.Scene, parent: Phaser.GameObjects.Container,
-  cells: { x: number; y: number }[], target: { x: number; y: number }, type: number, multiplier: 2 | 3 = 2) {
-  const color = POWER_COLORS[type];
-  for (const cell of cells) {
-    if (cell.x === target.x && cell.y === target.y) continue;
-    const spark = scene.add.circle(cell.x, cell.y, 6, color).setBlendMode(Phaser.BlendModes.ADD).setDepth(75);
-    parent.add(spark);
-    scene.tweens.add({ targets: spark, x: target.x, y: target.y, scale: .35, duration: 170,
-      ease: "Cubic.easeIn", onComplete: () => spark.destroy() });
-  }
-  const ring = scene.add.circle(target.x, target.y, 50).setStrokeStyle(3, color).setDepth(75);
-  parent.add(ring);
-  scene.tweens.add({ targets: ring, scale: .78, alpha: 0, duration: 230, onComplete: () => ring.destroy() });
-  const label = scene.add.text(target.x, target.y - 34, `CHARGED ×${multiplier}`, {
-    fontFamily: '"Pixelify Sans", sans-serif', fontSize: "21px", fontStyle: "bold",
-    color: "#fff2cf", stroke: "#1b2029", strokeThickness: 4,
-  }).setOrigin(.5).setDepth(76);
-  parent.add(label);
-  scene.tweens.add({ targets: label, y: target.y - 72, alpha: 0, delay: 260, duration: 520, onComplete: () => label.destroy() });
+  cells: { x: number; y: number }[], target: Phaser.GameObjects.Container, type: number, multiplier: 2 | 3 = 2): Promise<void> {
+  if (!tileEffectsEnabled()) return Promise.resolve();
+  const color = POWER_COLORS[type], accent = multiplier === 3 ? 0xffd77a : color;
+  const sources = cells.filter(cell => cell.x !== target.x || cell.y !== target.y);
+  const ink = scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD);
+  parent.add(ink);
+  return new Promise(resolve => {
+    const phase = { ms: 0 };
+    let finished = false, tween: Phaser.Tweens.Tween | undefined;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      tween?.remove(); ink.destroy();
+      target.off("destroy", finish);
+      scene.events.off(Phaser.Scenes.Events.SHUTDOWN, finish);
+      resolve();
+    };
+    const draw = () => {
+      ink.clear();
+      const x = target.x, y = target.y;
+      for (const [i, cell] of sources.entries()) {
+        const delay = Math.min(i * 10, 80);
+        const u = Phaser.Math.Clamp((phase.ms - delay) / (EMPOWER_GATHER_MS - 20 - delay), 0, 1);
+        const dx = x - cell.x, dy = y - cell.y, length = Math.max(1, Math.hypot(dx, dy));
+        const bend = Math.min(45, length * .2) * (i % 2 ? -1 : 1);
+        const mx = (cell.x + x) / 2 - dy / length * bend, my = (cell.y + y) / 2 + dx / length * bend;
+        const point = (t: number) => ({ x: (1-t)**2*cell.x+2*(1-t)*t*mx+t*t*x, y: (1-t)**2*cell.y+2*(1-t)*t*my+t*t*y });
+        if (u >= 1) continue;
+        const head = u * u;
+        const fade = Math.min(1, u * 8 + .15) * Math.min(1, (1-u) * 7);
+        // Curved, tapered streams carry light out of the exact tiles that cleared.
+        for (let tail = 7; tail >= 0; tail--) {
+          const p = point(Math.max(0, head - tail * .032));
+          const strength = (8-tail)/8;
+          ink.fillStyle(accent, fade * strength * .12).fillCircle(p.x, p.y, 8 * strength);
+          ink.fillStyle(tail ? color : 0xfffae8, fade * strength).fillCircle(p.x, p.y, (tail ? 2.4 : 3.7) * strength);
+        }
+        ink.fillStyle(color, Math.max(0, 1-phase.ms/150) * .18).fillCircle(cell.x, cell.y, 26);
+      }
+      const gather = Math.min(1, phase.ms / EMPOWER_GATHER_MS);
+      if (phase.ms < EMPOWER_GATHER_MS) {
+        const r = 49 - gather * 12;
+        ink.lineStyle(2, accent, .2 + gather * .5).strokeRoundedRect(x-r, y-r, r*2, r*2, 10);
+        ink.fillStyle(color, gather * .09).fillCircle(x, y, 26);
+      } else {
+        resolve(); // The board can fall as soon as the charge arrives; the halo follows its tile.
+        const t = Math.min(1, (phase.ms - EMPOWER_GATHER_MS) / 200);
+        const r = 38 + t * 17;
+        ink.lineStyle(3 * (1-t) + .5, accent, (1-t) * .8).strokeRoundedRect(x-r, y-r, r*2, r*2, 10);
+        ink.fillStyle(0xfff5dc, (1-t)**2 * .22).fillRoundedRect(x-35,y-35,70,70,8);
+        for (let i = 0; i < (multiplier === 3 ? 8 : 4); i++) {
+          const angle = i * Math.PI * 2 / (multiplier === 3 ? 8 : 4) + Math.PI/4;
+          const cx = x + Math.cos(angle)*r, cy = y + Math.sin(angle)*r, size = (1-t)*5;
+          ink.lineStyle(1.5, accent, 1-t).lineBetween(cx-size,cy,cx+size,cy).lineBetween(cx,cy-size,cx,cy+size);
+        }
+      }
+    };
+    draw();
+    tween = scene.tweens.add({ targets: phase, ms: EMPOWER_GATHER_MS + 200, duration: EMPOWER_GATHER_MS + 200,
+      onUpdate: draw, onComplete: finish });
+    target.once("destroy", finish);
+    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, finish);
+  });
 }

@@ -6,7 +6,8 @@
 .mb-panel-overlay .mb-panel { background: var(--mb-panel); border-color: var(--mb-edge); border-radius: 22px; }
 .mb-panel .mb-panel-header, .mb-panel .mb-panel-footer { background: #2b353c; border-color: #4f5b63; }
 .mb-panel-overlay .mb-panel h2 { color: var(--mb-gold); letter-spacing: -.025em; }
-.mb-panel .mb-card { background: var(--mb-panel-raised); border-color: #53616a; border-radius: 16px; }
+.mb-panel:not(.mb-panel--npc) .mb-card,
+.mb-panel--npc:not(.mb-panel--shop) .mb-card { background: var(--mb-panel-raised); border-color: #53616a; border-radius: 16px; }
 .mb-panel .mb-description { color: var(--mb-text); }
 .mb-panel .mb-subtitle, .mb-panel .mb-footer-copy { color: var(--mb-muted); }
 .mb-panel .mb-action { border-radius: 13px; transition: background-color 140ms, transform 140ms; }

@@ -1,5 +1,6 @@
 import { roadOptions, ROAD_FORK_BONUS, ROAD_FORK_ENEMIES, type RoadChoice } from "./road-fork";
 import "./road-fork.css";
+import { resourceAmounts } from "./ui-resources";
 
 /** A pocket-sized map, drawn on a fixed pixel grid to suit the game art. */
 function drawFork(ctx: CanvasRenderingContext2D, biome: string, selected?: RoadChoice) {
@@ -58,7 +59,7 @@ export function showRoadFork(biome: string, onChoose: (choice: RoadChoice) => vo
     const button = document.createElement("button"); button.type = "button"; button.dataset.path = def.id;
     const name = document.createElement("strong"), reward = document.createElement("span"), duration = document.createElement("small");
     name.textContent = def.name;
-    reward.textContent = `${def.icon} +${ROAD_FORK_BONUS} ${def.resource} per enemy`;
+    reward.append(resourceAmounts({ [def.id]: ROAD_FORK_BONUS }), ` bonus ${def.resource} per enemy`);
     duration.textContent = `Next ${ROAD_FORK_ENEMIES} enemies`;
     button.append(name, reward, duration);
     const highlight = () => { if (!selected) drawFork(ctx, biome, def.id); };

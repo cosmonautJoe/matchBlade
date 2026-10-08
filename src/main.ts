@@ -21,13 +21,19 @@
 import Phaser from "phaser";
 import { buzz, haptic, initHaptics, stopHaptics } from "./haptics";
 import { TILE_KEYS, TILE_TEXTURE_DENSITY, preloadTileArt, prepareTileArt } from "./tile-art";
+import { prepareResourceIcons } from "./ui-resources";
+import { swordStyle, spellStyle } from "./weapon-style";
+import { swordUpgradeSlash, swordUpgradeImpact } from "./sword-upgrade-fx";
+import { upgradeFireball, spellUpgradeCharge, spellUpgradeImpact } from "./spell-upgrade-fx";
+import { createCompanionAssists } from "./companion-assist";
+import { createEnemyWear, finishingBlow, type EnemyWear } from "./enemy-feedback";
 import { tileClearBurst, tileVisual, liftTile, settleTile, decoratePotion } from "./tile-feedback";
 import { TileShatter } from "./tile-shatter";
 import { tileEffectsEnabled, TILE_EFFECTS_CHANGED } from "./tile-effects";
 import { TileSwapPreview, dragSwapTarget } from "./tile-drag";
 import { newEmpowered, planEmpowered, randomEmpower, itemPowerBonuses, reflowEmpowered, type EmpoweredState } from "./empowered";
-import { decorateEmpowered, empoweredBurst, empoweredGather } from "./empowered-art";
-import { newRescueState, rollRescue, companionById, companionKillRewards, rescueOptions, payForRescue, type RescueState } from "./companions";
+import { decorateEmpowered, empoweredBurst, empoweredGather, EMPOWER_GATHER_MS } from "./empowered-art";
+import { newRescueState, rollRescue, companionById, companionKillRewards, rescueOptions, payForRescue, COMPANION_BALANCE as PET, type RescueState } from "./companions";
 import { showCompanionRescue } from "./companion-view";
 import { offerRoadFork, chooseRoad, newRoadFork, roadOptions, ROAD_FORK_BONUS } from "./road-fork";
 import { showRoadFork } from "./road-fork-view";
@@ -83,6 +89,8 @@ import {
   BOSS_BOUNTY,
   BOSS_SURGE,
   RUN_COMPLETE_AT,
+  SWORD_BONUS_PER_LEVEL,
+  SPELL_BONUS_PER_LEVEL,
 } from "./run";
 import {
   type ItemDef,
@@ -590,6 +598,9 @@ class GameScene extends Phaser.Scene {
   private selected: Coord | null = null;
   private selection!: Phaser.GameObjects.Rectangle;
   private bestCascade = 0;
+  private companionAssists?: ReturnType<typeof createCompanionAssists>;
+  private enemyWear = new WeakMap<Phaser.GameObjects.Sprite, EnemyWear>();
+  private finishers = new WeakMap<Phaser.GameObjects.Sprite, "sword" | "magic">();
   private idleBoardTime = 0;
   private idleHintShown = false;
 
@@ -649,7 +660,7 @@ class GameScene extends Phaser.Scene {
   private enemyHpBar!: Phaser.GameObjects.Rectangle;
   private enemyHpBg!: Phaser.GameObjects.Rectangle;
   private scoreText!: Phaser.GameObjects.Text;
-  private resIcons: Phaser.GameObjects.Text[] = []; // 🪵 🪨 💎 🔑 icons (left panel)
+  private resIcons: Phaser.GameObjects.Image[] = []; // same resource art as the board and camp menus
   private resVals: Phaser.GameObjects.Text[] = []; // matching counts, positioned tight to each icon
   private resourceChrome!: Phaser.GameObjects.Graphics;
   private overShown = false;
@@ -949,6 +960,7 @@ class GameScene extends Phaser.Scene {
     this.holdTimer = null;
     this.holdShown = false;
     prepareTileArt(this);
+    prepareResourceIcons(this);
     this.tileShatter = new TileShatter(this);
     this.buildTilePolish();
     this.buildChestArt();
@@ -968,6 +980,7 @@ class GameScene extends Phaser.Scene {
     this.puzzleBox = this.add.container(0, 0);
     this.boardAtmosphere = null;
     this.buildLane();
+    this.companionAssists = createCompanionAssists(this, this.centerBox, this.hero, GROUND_Y);
     this.buildBoard();
     const onTileEffects = () => {
       for (const row of this.tiles) for (const tile of row) if (tile?.scene) this.syncTileShine(tile);
@@ -1075,7 +1088,11 @@ class GameScene extends Phaser.Scene {
         x: this.heroXForPressure(),
         duration: INTRO_MS - 40, // arrive just before the slime, so enterFight's idle looks right
         ease: "Sine.easeOut",
-        onComplete: () => (this.heroLockX = false),
+        onComplete: () => {
+          this.heroLockX = false;
+          if (!this.recovered && this.run.killed === 0 && this.canShowCompanions() && this.run.companions?.includes("moss"))
+            this.companionAssists?.show("moss", "guard", PET.moss.startGuard);
+        },
       });
     }
 
@@ -1486,8 +1503,10 @@ class GameScene extends Phaser.Scene {
         const x = x0 + pad + (itemW + resourceGap) * i;
         chrome.fillStyle(0x29343b, .95).fillRoundedRect(x, y0 + 5, itemW, 36, 7);
         chrome.lineStyle(1, 0x53616a, .55).strokeRoundedRect(x, y0 + 5, itemW, 36, 7);
+        this.tweens.killTweensOf(this.resIcons[i]);
         this.resIcons[i].setVisible(true).setOrigin(.5).setPosition(x + (compact ? 14 : 17), topY)
-          .setFontSize(compact ? 20 : 22);
+          .setDisplaySize(compact ? 22 : 26, compact ? 22 : 26);
+        this.resIcons[i].setData("hudScale", this.resIcons[i].scaleX);
         this.resVals[i].setVisible(true).setOrigin(1, .5).setPosition(x + itemW - (compact ? 5 : 7), topY)
           .setFontSize(20).setData("hudWidth", itemW - (compact ? 32 : 40));
       }
@@ -1551,7 +1570,9 @@ class GameScene extends Phaser.Scene {
       const row = Math.floor(i / 2);
       const x = lLeft + 8 + col * colW;
       const y = Math.round(topY + row * rowH);
-      this.resIcons[i].setPosition(Math.round(x), y).setFontSize(lw < 165 ? 21 : 26);
+      this.tweens.killTweensOf(this.resIcons[i]);
+      this.resIcons[i].setPosition(Math.round(x), y).setDisplaySize(lw < 165 ? 23 : 28, lw < 165 ? 23 : 28);
+      this.resIcons[i].setData("hudScale", this.resIcons[i].scaleX);
       this.resVals[i].setPosition(Math.round(x + (lw < 165 ? 25 : 34)), y).setFontSize(lw < 165 ? 18 : 24);
     }
 
@@ -1608,11 +1629,11 @@ class GameScene extends Phaser.Scene {
     this.resourceChrome = this.add.graphics().setDepth(1);
 
     // resources: one icon + one number per row, positioned explicitly so spacing is exact
-    const RES_GLYPHS = ["🪵", "🪨", "💎", "🔑"];
+    const RES_TILES = [WOOD, ORE, TREASURE, KEY];
     this.resIcons = [];
     this.resVals = [];
-    for (const g of RES_GLYPHS) {
-      this.resIcons.push(this.add.text(0, 0, g, { fontFamily: EMOJI_FONT, fontSize: "26px" }).setOrigin(0, 0.5).setDepth(2));
+    for (const type of RES_TILES) {
+      this.resIcons.push(this.add.image(0, 0, TILE_KEYS[type]).setDisplaySize(26, 26).setOrigin(0, 0.5).setDepth(2));
       this.resVals.push(
         this.add.text(0, 0, "0", { fontFamily: "monospace", fontStyle: "bold", fontSize: "24px", color: "#dfe3ea" }).setOrigin(0, 0.5).setDepth(2),
       );
@@ -1861,6 +1882,14 @@ class GameScene extends Phaser.Scene {
     this.hero = this.inBox(
       this.add.sprite(SAFE_X, GROUND_Y, PLAYER_TEXTURE).setOrigin(0.5, HERO_ORIGIN).setScale(HERO_SCALE / PLAYER_DENSITY).play("hero-idle"),
     );
+    // Follow the real attack frame, including slowed tutorial swings and boss counters.
+    this.hero.on(Phaser.Animations.Events.ANIMATION_UPDATE,
+      (animation: Phaser.Animations.Animation, frame: Phaser.Animations.AnimationFrame) => {
+        if (frame.index !== 3 || !/^hero-attack[23]?$/.test(animation.key)) return;
+        const swing = animation.key === "hero-attack3" ? 2 : animation.key === "hero-attack2" ? 1 : 0;
+        swordUpgradeSlash(this, this.centerBox, this.hero, GROUND_Y,
+          this.run.swordBonus / SWORD_BONUS_PER_LEVEL, swing);
+      });
 
     this.enemyHpBg = this.inBox(this.add.rectangle(0, 0, HP_W, 10, 0x000000, 0.55).setOrigin(0.5).setVisible(false));
     this.enemyHpBar = this.inBox(this.add.rectangle(0, 0, HP_W, 10, 0xe05a5a).setOrigin(0, 0.5).setVisible(false));
@@ -2440,6 +2469,7 @@ class GameScene extends Phaser.Scene {
 
   /** Retire a member without advancing depth, paying loot or starting a new attack clock. */
   private retireAmbusher(sprite: Phaser.GameObjects.Sprite, rig: CreatureRig) {
+    this.enemyWear.get(sprite)?.destroy();
     this.tweens.killTweensOf(sprite);
     sprite.removeAllListeners("animationcomplete");
     sprite.setTintFill(0xffe2ad).play(`${rig.prefix}-death`);
@@ -2447,6 +2477,7 @@ class GameScene extends Phaser.Scene {
     sprite.once("animationcomplete", () => {
       this.tweens.add({ targets: sprite, alpha: 0, duration: 200, onComplete: () => sprite.destroy() });
     });
+    this.playFinisher(sprite);
   }
 
   private async settleAmbushActors() {
@@ -2478,7 +2509,7 @@ class GameScene extends Phaser.Scene {
 
   /** Finish both impacts before the next cascade can target the surviving member. */
   private async finishAmbushHit(spell: SpellOutcome | null, killed: boolean, meleeMs: number,
-    tint = 0xffa040, fromCells: { x: number; y: number }[] = []) {
+    tint?: number, fromCells: { x: number; y: number }[] = []) {
     this.ambushResolving = true;
     if (killed) this.heroLockX = true;
     await new Promise<void>(resolve => {
@@ -2525,6 +2556,9 @@ class GameScene extends Phaser.Scene {
       this.add.sprite(ENTER_X, gy, rig.idleTex).setOrigin(0.5, rig.origin).setScale(rig.scale).setFlipX(!!rig.faceLeft).play(`${this.orcAnim}-walk`),
     );
     this.orc = orc;
+    const wear = createEnemyWear(this, this.centerBox, orc, this.orcEnemy);
+    this.enemyWear.set(orc, wear);
+    wear.update(this.orcEnemy.hp);
     if (rig.hover) this.tweens.add({ targets: orc, y: gy - 9, duration: 1100, yoyo: true, repeat: -1, ease: "Sine.easeInOut" }); // a lazy float
     if (rig.bob) this.tweens.add({ targets: orc, scaleY: rig.scale * 1.035, duration: 900, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     // slimes squelch in; the flyer beats its wings; everything else thuds a footfall
@@ -2562,6 +2596,9 @@ class GameScene extends Phaser.Scene {
         const hpBg = this.inBox(this.add.rectangle(0, 0, 56, 7, 0x10191b, .85));
         const hpBar = this.inBox(this.add.rectangle(0, 0, 56, 7, 0xe05a5a).setOrigin(0, .5));
         this.rearFoe = { sprite, enemy: rear, rig: rearRig, hpBg, hpBar };
+        const rearWear = createEnemyWear(this, this.centerBox, sprite, rear);
+        this.enemyWear.set(sprite, rearWear);
+        rearWear.update(rear.hp);
       }
       // Both emerge from the undergrowth; a restored lone survivor just steps back in.
       const enter = (sprite: Phaser.GameObjects.Sprite, actorRig: CreatureRig, index: number) => {
@@ -2755,8 +2792,14 @@ class GameScene extends Phaser.Scene {
     this.bossBar = null;
   }
 
-  private updateEnemyBar() {
+  private refreshEnemyWear() {
+    if (this.orc) this.enemyWear.get(this.orc)?.update(this.orcEnemy?.hp ?? 0);
+    if (this.rearFoe) this.enemyWear.get(this.rearFoe.sprite)?.update(this.rearFoe.enemy.hp);
+  }
+
+  private updateEnemyBar(wear = true) {
     const e = this.orcEnemy?.ambush ? this.orcEnemy : this.run.enemy;
+    if (wear) this.refreshEnemyWear();
     const frac = e && !this.orcDying ? Math.max(0, e.hp / e.maxHp) : 0;
     this.enemyHpBar.scaleX = frac;
     if (this.rearFoe) this.rearFoe.hpBar.scaleX = Math.max(0, this.rearFoe.enemy.hp / this.rearFoe.enemy.maxHp);
@@ -2838,6 +2881,7 @@ class GameScene extends Phaser.Scene {
       if (power.consume.length) this.consumeEmpowered(power.consume);
       // Keep one tile from each deliberate large match. Its glow travels with gravity.
       const retained = new Set(power.create.map(p => `${p.cell.r},${p.cell.c}`));
+      const fades: Promise<void>[] = [];
       for (const earned of power.create) {
         const tile = this.tiles[earned.cell.r][earned.cell.c];
         if (!tile) continue;
@@ -2845,13 +2889,12 @@ class GameScene extends Phaser.Scene {
         this.empowered.charges.push({ id, type: earned.type, cell: { ...earned.cell }, multiplier: earned.multiplier });
         this.empowered.layouts = {};
         this.empoweredTiles.set(id, tile);
-        decorateEmpowered(this, tile, earned.type, earned.multiplier);
-        empoweredGather(this, this.puzzleBox, earned.cells.map(c => ({ x: this.xFor(c.c), y: this.yFor(c.r) })),
-          { x: this.xFor(earned.cell.c), y: this.yFor(earned.cell.r) }, earned.type, earned.multiplier);
+        decorateEmpowered(this, tile, earned.type, earned.multiplier, tileEffectsEnabled() ? EMPOWER_GATHER_MS : 0);
+        fades.push(empoweredGather(this, this.puzzleBox, earned.cells.map(c => ({ x: this.xFor(c.c), y: this.yFor(c.r) })),
+          tile, earned.type, earned.multiplier));
       }
       if (power.create.length) this.sfx("pickup", .35, 1.3);
       haptic(depth > 1 || cleared.size >= 4 ? "combo" : "match");
-      const fades: Promise<void>[] = [];
       // every match pays out visibly WHERE it happened — group the cleared cells
       const resCells: { x: number; y: number }[] = []; // resources/keys -> gold score
       const cmbCells: { x: number; y: number }[] = []; // swords/staves  -> gold combat score
@@ -2877,10 +2920,12 @@ class GameScene extends Phaser.Scene {
         this.grid[r][c] = EMPTY;
       });
       await Promise.all(fades);
+      if (!this.scene.isActive()) return;
 
       const scoreBefore = this.run.score;
       const sporesBefore = this.run.enemy?.spores ?? 0;
       const outcome = applyMatches(this.run, counts, power.bonus);
+      this.showMatchCompanions(counts);
       if (sporesBefore > 0 && (counts[STAFF] ?? 0) >= 3) this.notice("Spores cleared", "#c4efab");
       const centroid = (cells: { x: number; y: number }[]) => ({
         x: cells.reduce((s, p) => s + p.x, 0) / cells.length,
@@ -2907,7 +2952,8 @@ class GameScene extends Phaser.Scene {
       // keys bank per MATCH, not per tile — fly only as many chips as were kept
       if (resFly[KEY]) resFly[KEY] = resFly[KEY].slice(0, outcome.gained.keys);
       this.flyResources(resFly); // the goods themselves stream off the board into the rail
-      await this.onCombat(outcome, outcome.swords, swordCells, staffCells); // wait for ambush casualties before the next cascade
+      const exceptional = depth >= 3 || power.bonus.some(p => p.multiplier === 3 && (p.type === SWORD || p.type === STAFF));
+      await this.onCombat(outcome, outcome.swords, swordCells, staffCells, exceptional); // wait for ambush casualties before the next cascade
       // non-combat clear — a random tile-match sound (1 of TILE_SFX), slight pitch variation
       if (outcome.damage <= 0) this.sfx(`tile${1 + ((Math.random() * TILE_SFX) | 0)}`, 0.4, 0.97 + Math.random() * 0.06);
       if (zoneReward.gems) {
@@ -2926,12 +2972,33 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  private onCombat(outcome: MatchOutcome, swords: number, swordCells: { x: number; y: number }[] = [], staffCells: { x: number; y: number }[] = []) {
+  /** Only show assists whose existing match bonuses have actually been awarded. */
+  private canShowCompanions() {
+    return !this.run.over && !this.chestActive && !this.arenaActive && !this.rescueView && !this.forkView && !this.tutorial?.active;
+  }
+
+  private showMatchCompanions(counts: Record<number, number>) {
+    if (!this.canShowCompanions()) return;
+    const pets = this.run.companions ?? [];
+    if (pets.includes("hazel") && (counts[WOOD] ?? 0) >= PET.hazel.matchSize)
+      this.companionAssists?.show("hazel", "wood", PET.hazel.wood);
+    if (pets.includes("flint") && (counts[ORE] ?? 0) >= PET.flint.matchSize)
+      this.companionAssists?.show("flint", "ore", PET.flint.stone);
+    if (pets.includes("flurry") && (counts[SHIELD] ?? 0) >= PET.flurry.matchSize)
+      this.companionAssists?.show("flurry", "guard", PET.flurry.guard);
+  }
+
+  private onCombat(outcome: MatchOutcome, swords: number, swordCells: { x: number; y: number }[] = [], staffCells: { x: number; y: number }[] = [], exceptional = false) {
     if (outcome.damage <= 0 || !this.orc || this.orcDying) return;
+    if (exceptional && this.orcEnemy?.kind !== "boss") {
+      const kind = outcome.spell?.dmg ? "magic" : "sword";
+      if (this.orcEnemy && this.orcEnemy.hp <= 0) this.finishers.set(this.orc, kind);
+      if (this.rearFoe && this.rearFoe.enemy.hp <= 0) this.finishers.set(this.rearFoe.sprite, kind);
+    }
 
     const comboTempo = this.tutorialSwordSlow ? 1.55 : 1;
     this.tutorialSwordSlow = false;
-    this.updateEnemyBar();
+    this.updateEnemyBar(false); // let cracks appear when the animated strike/cast lands
 
     // Melee: the swing combo scales with the sword match (3 / 4 / 5+).
     // Spells are their own act now — the cast + fireball follow the swings.
@@ -2945,7 +3012,7 @@ class GameScene extends Phaser.Scene {
           : ["hero-attack"];
     if (hasMelee) {
       this.playComboSfx(combo, comboTempo);
-      this.showHits(outcome.hits, combo, outcome.swordMod, comboTempo);
+      this.showHits(outcome.hits, combo, outcome.swordMod, comboTempo, !outcome.spell);
       this.flyBlades(swordCells); // the matched tiles themselves take wing at the foe
       if (outcome.sunder) {
         // the peak blade fells it in one stroke — name the moment
@@ -3012,40 +3079,51 @@ class GameScene extends Phaser.Scene {
    * (number, hurt, burn, even the death) lands ON IMPACT. Returns impact time.
    * `killed` holds the corpse until the bolt arrives instead of dying early.
    */
-  private performCast(spell: SpellOutcome, killed: boolean, delayMs: number, tint = 0xffa040, fromCells: { x: number; y: number }[] = [], onImpact?: () => void): number {
+  private performCast(spell: SpellOutcome, killed: boolean, delayMs: number, tint?: number, fromCells: { x: number; y: number }[] = [], onImpact?: () => void): number {
+    // Explicit colors belong to consumables (lightning, flasks); ordinary casts use study progression.
+    const upgradeLevel = tint === undefined ? this.run.spellBonus / SPELL_BONUS_PER_LEVEL : undefined;
+    const color = tint ?? spellStyle(upgradeLevel!).accent;
     if (killed) this.orcDying = true; // freeze hurt/strike reactions; killOrc re-affirms at impact
     this.time.delayedCall(delayMs, () => {
       this.playCombo(["hero-spell"], killed ? undefined : this.heroBaseAnim());
-      this.sfx("spell", 0.55);
-      if (fromCells.length) this.gatherSpell(fromCells, tint); // the matched tiles feed the staff
-      this.time.delayedCall(CAST_LEAD_MS, () => this.launchBolt(spell, killed, tint, onImpact));
+      this.sfx("spell", 0.55, upgradeLevel === undefined ? 1 : 1 - spellStyle(upgradeLevel).grade * .025);
+      if (upgradeLevel !== undefined)
+        spellUpgradeCharge(this, this.centerBox, this.hero, GROUND_Y, upgradeLevel, CAST_LEAD_MS);
+      if (upgradeLevel !== undefined && spell.dmg > 0 && this.canShowCompanions() && this.run.companions?.includes("hush"))
+        this.companionAssists?.show("hush", "magic");
+      if (fromCells.length) this.gatherSpell(fromCells, color); // the matched tiles feed the staff
+      this.time.delayedCall(CAST_LEAD_MS, () => this.launchBolt(spell, killed, color, onImpact, upgradeLevel));
     });
     return delayMs + CAST_LEAD_MS + BOLT_FLIGHT_MS;
   }
 
   /** The projectile itself — sized by tier, trailing sparks, bursting on arrival. */
-  private launchBolt(spell: SpellOutcome, killed: boolean, tint: number, onImpact?: () => void) {
+  private launchBolt(spell: SpellOutcome, killed: boolean, tint: number, onImpact?: () => void, upgradeLevel?: number) {
     const sx = this.hero.x + 28;
     const sy = GROUND_Y - 44;
     const tx = (this.orc?.x ?? sx + 220) - 6;
     const ty = GROUND_Y - 34;
-    const scale = spell.tier >= 5 ? 2.0 : spell.tier === 4 ? 1.45 : 1.0;
-    const ball = this.inBox(this.add.image(sx, sy, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(tint).setScale(scale * 0.5).setDepth(46));
+    const look = upgradeLevel === undefined ? undefined : spellStyle(upgradeLevel);
+    const scale = look ? (spell.tier >= 5 ? 1.34 : spell.tier === 4 ? 1.17 : 1) * look.scale
+      : spell.tier >= 5 ? 2.0 : spell.tier === 4 ? 1.45 : 1.0;
+    const ball = this.inBox(look
+      ? upgradeFireball(this, sx, sy, upgradeLevel!).setScale(scale * .65)
+      : this.add.image(sx, sy, "bolt").setBlendMode(Phaser.BlendModes.ADD).setTint(tint).setScale(scale * 0.5).setDepth(46), false);
     this.tweens.add({ targets: ball, scale, duration: 110 });
     const trail = this.inBox(
       this.add
         .particles(0, 0, "spark", {
           speed: { min: 10, max: 50 },
           lifespan: { min: 130, max: 280 },
-          scale: { start: 0.8 * scale, end: 0 },
+          scale: { start: (look ? .35 : .8) * scale, end: 0 },
           blendMode: "ADD",
           tint,
-          frequency: 16,
+          frequency: look ? 36 : 16,
           follow: ball,
         })
         .setDepth(45),
     );
-    this.sfx(spell.tier >= 5 ? "fireball3" : spell.tier === 4 ? "fireball2" : "fireball1", 0.5, 1.12);
+    this.sfx(spell.tier >= 5 ? "fireball3" : spell.tier === 4 ? "fireball2" : "fireball1", 0.5, look?.soundRate ?? 1.12);
     this.tweens.add({
       targets: ball,
       x: tx,
@@ -3055,14 +3133,17 @@ class GameScene extends Phaser.Scene {
       onComplete: () => {
         trail.destroy();
         ball.destroy();
-        this.spellImpact(spell, killed, tint, tx, ty, onImpact);
+        this.spellImpact(spell, killed, tint, tx, ty, onImpact, upgradeLevel);
       },
     });
   }
 
   /** Impact: burst + shake scaled by tier, the damage number, burn, hurt or death. */
-  private spellImpact(spell: SpellOutcome, killed: boolean, tint: number, x: number, y: number, onImpact?: () => void) {
+  private spellImpact(spell: SpellOutcome, killed: boolean, tint: number, x: number, y: number, onImpact?: () => void, upgradeLevel?: number) {
+    this.refreshEnemyWear();
     const t = spell.tier;
+    const look = upgradeLevel === undefined ? undefined : spellStyle(upgradeLevel);
+    if (look) spellUpgradeImpact(this, this.centerBox, x, y, upgradeLevel!, t);
     const burst = this.inBox(
       this.add
         .particles(x, y, "spark", {
@@ -3075,12 +3156,12 @@ class GameScene extends Phaser.Scene {
         })
         .setDepth(46),
     );
-    burst.explode(t >= 5 ? 40 : t === 4 ? 24 : 12);
+    burst.explode(look ? 6 + look.grade * 2 + (t - 3) * 3 : t >= 5 ? 40 : t === 4 ? 24 : 12);
     this.time.delayedCall(700, () => burst.destroy());
     this.cameras.main.shake(t >= 5 ? 260 : t === 4 ? 160 : 90, t >= 5 ? 0.009 : t === 4 ? 0.006 : 0.004);
     buzz(t >= 5 ? 26 : 14);
     if (t >= 5) {
-      const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, 0xffd7a0, 0.28).setDepth(45));
+      const flash = this.inBox(this.add.rectangle(CXC, LANE_Y + LANE_H / 2, UI_W, LANE_H, look?.edge ?? 0xffd7a0, look ? .13 : .28).setDepth(45));
       this.tweens.add({ targets: flash, fillAlpha: 0, duration: 320, onComplete: () => flash.destroy() });
     }
     // nothing landed (Malgrim outside his arena drinks it) — say so, don't float "-0"
@@ -3159,6 +3240,7 @@ class GameScene extends Phaser.Scene {
    */
   private flyBlades(cells: { x: number; y: number }[]) {
     if (!this.orc || !cells.length) return;
+    const look = swordStyle(this.run.swordBonus / SWORD_BONUS_PER_LEVEL);
     const foeX = this.orc.x;
     cells.slice(0, 5).forEach((cell, i) => {
       this.time.delayedCall(i * 55, () => {
@@ -3166,9 +3248,9 @@ class GameScene extends Phaser.Scene {
         const tx = foeX + (Math.random() * 20 - 14);
         const ty = GROUND_Y - 34 - Math.random() * 18;
         const blade = this.inBox(
-          this.add.image(cell.x, cell.y, "blade-spect").setBlendMode(Phaser.BlendModes.ADD).setDepth(46).setAlpha(0).setScale(0.5),
+          this.add.image(cell.x, cell.y, "blade-spect").setBlendMode(Phaser.BlendModes.ADD).setTint(look.edge).setDepth(46).setAlpha(0).setScale(0.5),
         );
-        this.tweens.add({ targets: blade, alpha: 0.95, scale: 1, duration: 90 });
+        this.tweens.add({ targets: blade, alpha: 0.95, scale: look.scale, duration: 90 });
         const trail = this.inBox(
           this.add
             .particles(0, 0, "spark", {
@@ -3176,7 +3258,7 @@ class GameScene extends Phaser.Scene {
               lifespan: { min: 110, max: 240 },
               scale: { start: 0.55, end: 0 },
               blendMode: "ADD",
-              tint: 0xcfe8ff,
+              tint: look.accent,
               frequency: 22,
               follow: blade,
             })
@@ -3192,7 +3274,7 @@ class GameScene extends Phaser.Scene {
                 lifespan: { min: 120, max: 300 },
                 scale: { start: 0.8, end: 0 },
                 blendMode: "ADD",
-                tint: 0xe7f4ff,
+                tint: look.edge,
                 emitting: false,
               })
               .setDepth(46),
@@ -3244,8 +3326,9 @@ class GameScene extends Phaser.Scene {
               // the row answers: icon + count bounce as the goods thunk in
               for (const o of [icon, val]) {
                 this.tweens.killTweensOf(o);
-                o.setScale(1);
-                this.tweens.add({ targets: o, scale: this.wideLayout ? 1.3 : 1.08, duration: 90, yoyo: true, ease: "Quad.easeOut" });
+                const base = o === icon ? icon.getData("hudScale") ?? icon.scaleX : 1;
+                o.setScale(base);
+                this.tweens.add({ targets: o, scale: base * (this.wideLayout ? 1.3 : 1.08), duration: 90, yoyo: true, ease: "Quad.easeOut" });
               }
               if (i === 0) this.sfx(this.pick(["coin1", "coin3"]), 0.22, 1.15); // one soft thunk per group, not per chip
             },
@@ -3477,6 +3560,7 @@ class GameScene extends Phaser.Scene {
     const guardBeforePotion = this.run.block;
     drinkPotion(this.run);
     const potionGuard = this.run.block - guardBeforePotion;
+    if (this.canShowCompanions() && this.run.companions?.includes("rime")) this.companionAssists?.show("rime", "guard", PET.rime.guard);
     this.refreshHud();
 
     // green surge on the hero: rising glow + a heal chip + guard chip
@@ -3540,10 +3624,11 @@ class GameScene extends Phaser.Scene {
   /** Swings + impacts synced to the melee combo (casts handle their own audio). */
   private playComboSfx(combo: string[], tempo = 1) {
     const HITS = ["hit1", "hit2", "hit3"];
+    const look = swordStyle(this.run.swordBonus / SWORD_BONUS_PER_LEVEL);
     let t = 0;
     combo.forEach((key, i) => {
-      this.time.delayedCall(t, () => this.sfx(["swing1", "swing2", "swing3"][Math.min(i, 2)], 0.28));
-      this.time.delayedCall(t + 100 * tempo, () => this.sfx(this.pick(HITS), 0.5));
+      this.time.delayedCall(t, () => this.sfx(["swing1", "swing2", "swing3"][Math.min(i, 2)], 0.28, look.soundRate));
+      this.time.delayedCall(t + 100 * tempo, () => this.sfx(this.pick(HITS), 0.5, look.soundRate));
       t += (this.anims.get(key)?.duration ?? 300) * tempo;
     });
   }
@@ -3551,6 +3636,19 @@ class GameScene extends Phaser.Scene {
   /** Milliseconds until the next strike: base cadence × the foe's own tempo (Spurs override). */
   private strikeWait(): number {
     return this.spursActive ? Math.round(SPURS_STRIKE_MS * (this.run.enemy?.strikeMult ?? 1)) : attackInterval(this.run);
+  }
+
+  /** Presentation-only: consume the actor's finishing cue once, at its death impact. */
+  private playFinisher(sprite: Phaser.GameObjects.Sprite, delay = 0) {
+    const kind = this.finishers.get(sprite);
+    if (!kind) return;
+    this.finishers.delete(sprite);
+    const play = () => {
+      if (!sprite.active || this.overShown || this.runCompleteShown) return;
+      finishingBlow(this, this.centerBox, sprite, kind, GROUND_Y);
+      this.sfx(kind === "magic" ? "fireball3" : "hit3", .28, .88);
+    };
+    if (delay) this.time.delayedCall(delay, play); else play();
   }
 
   private killOrc(afterMs = 760) {
@@ -3571,6 +3669,8 @@ class GameScene extends Phaser.Scene {
       });
     }
     const petRewards = companionKillRewards(this.run.companions, this.run.killed, guardCost(this.run.killed));
+    if (this.canShowCompanions())
+      for (const reward of petRewards) this.companionAssists?.show(reward.id, reward.resource, reward.amount);
     const finds = petRewards.filter(reward => reward.resource !== "guard").map(reward => {
       const label = reward.resource === "ore" ? "stone" : reward.resource === "keys" && reward.amount === 1 ? "key" : reward.resource;
       return `${companionById(reward.id)!.name}: +${reward.amount} ${label}`;
@@ -3598,6 +3698,7 @@ class GameScene extends Phaser.Scene {
     const dying = this.orc;
     this.orc = null;
     if (dying) {
+      this.enemyWear.get(dying)?.destroy();
       // the kill lands as a BEAT: corpse flashes white-hot, the camera punches in a
       // hair and settles — a felt full-screen punctuation, no eye movement required
       dying.setTintFill(0xffffff);
@@ -3606,6 +3707,7 @@ class GameScene extends Phaser.Scene {
       this.punchCamera(wasBoss ? PUNCH_BOSS : PUNCH_KILL, wasBoss ? 90 : 60, wasBoss ? 240 : 140);
       this.tweens.killTweensOf(dying);
       dying.play(`${this.orcAnim}-death`);
+      this.playFinisher(dying, this.finishers.get(dying) === "sword" ? 100 : 0);
       if (this.orcRig?.fakeDeath) {
         // no death frames: it keels over — topple, drop, and fade where it fell
         this.tweens.add({
@@ -3679,6 +3781,7 @@ class GameScene extends Phaser.Scene {
   private showFork() {
     const fork = this.run.roadFork;
     if (!fork?.pending || this.forkView) return;
+    this.companionAssists?.clear();
     this.chestActive = true; this.phase = "chest";
     this.hero.play("hero-idle", true);
     this.clearSelection(); this.clearHint(); this.down = null; this.attackClock = 0;
@@ -3701,6 +3804,7 @@ class GameScene extends Phaser.Scene {
   private showRescue() {
     const id=this.rescue.pending;
     if(!id || !companionById(id) || this.rescueView)return;
+    this.companionAssists?.clear();
     this.chestActive=true;this.phase="chest";this.hero.play("hero-idle",true);
     this.clearSelection();this.clearHint();this.down=null;this.attackClock=0;
     this.writeCheckpoint(true);
@@ -3734,11 +3838,13 @@ class GameScene extends Phaser.Scene {
 
     // the caravan keeps everything: bank resources + quest stats, same as a fall
     const r = this.run.resources;
-    bankRun(loadMeta(), { wood: r.wood, ore: r.ore, treasure: r.treasure, kills: this.run.killed, chests: this.chestsOpened });
+    const meta = loadMeta();
+    const firstClear = !meta.clearedBiomes.includes(this.run.biome);
+    bankRun(meta, { wood: r.wood, ore: r.ore, treasure: r.treasure, kills: this.run.killed, chests: this.chestsOpened });
 
     this.sfx("combo6", 0.55);
     this.time.delayedCall(400, () => this.sfx("coin_pour", 0.5));
-    this.renderRunResults(true);
+    this.renderRunResults(true, firstClear);
   }
 
   /** The Cindermage falls: flash, quake, treasure bounty, and a chest rolls in next. */
@@ -3998,6 +4104,7 @@ class GameScene extends Phaser.Scene {
    * the shared state and hands off once the last cascade has settled.
    */
   private startBossArena() {
+    this.companionAssists?.clear();
     this.arenaActive = true;
     const gen = ++this.arenaGen;
     this.phase = "arena"; // stationary arena: no scroll, no strikes, no world pan
@@ -4196,9 +4303,28 @@ class GameScene extends Phaser.Scene {
     });
   }
 
-  /** The warden reels from a landed blow (or just flashes, if his pack has no hurt art). */
-  private bossReact() {
+  /** Refresh the flash on repeated hits without touching a replacement enemy. */
+  private flashGorrachHit(sprite: Phaser.GameObjects.Sprite) {
+    if (!sprite.scene || !sprite.active) return;
+    const previous = sprite.getData("gorrachHitFlash") as Phaser.Time.TimerEvent | undefined;
+    previous?.remove(false);
+    // Multiply the art by red so the face, armor and animation remain readable.
+    sprite.setTint(0xff4848);
+    const flash = this.time.delayedCall(240, () => {
+      if (!sprite.scene || sprite.getData("gorrachHitFlash") !== flash) return;
+      sprite.setData("gorrachHitFlash", null);
+      if (sprite === this.orc && this.orcDying) return;
+      sprite.clearTint();
+    });
+    sprite.setData("gorrachHitFlash", flash);
+  }
+
+  /** The warden reels from a landed blow (or flashes if his pack has no hurt art). */
+  private bossReact(arenaSprite?: Phaser.GameObjects.Sprite) {
     if (!this.orc || this.orcDying) return;
+    const struck = this.orc;
+    swordUpgradeImpact(this, this.centerBox, struck.x - 12, GROUND_Y - 42,
+      this.run.swordBonus / SWORD_BONUS_PER_LEVEL, 0);
     const k = this.boss.key;
     if (this.boss.arena === "rimes") this.aReg(this.inBox(iceBurst(this, this.orc.x, GROUND_Y - 50, 35), false));
     if (this.boss.hasHurt) {
@@ -4206,8 +4332,15 @@ class GameScene extends Phaser.Scene {
         if (this.orc && this.orcAnim === k && !this.orcDying) this.orc.play(`${k}-idle`);
       });
     } else {
-      this.orc.setTintFill(0xffffff);
-      this.time.delayedCall(90, () => this.orc?.clearTint());
+      if (this.boss.arena === "goring") {
+        this.flashGorrachHit(struck);
+        if (arenaSprite) this.flashGorrachHit(arenaSprite);
+      } else {
+        struck.setTintFill(0xffffff);
+        this.time.delayedCall(90, () => {
+          if (struck.scene && !(struck === this.orc && this.orcDying)) struck.clearTint();
+        });
+      }
       this.tweens.add({ targets: this.orc, x: this.orc.x + 14, duration: 90, yoyo: true, ease: "Quad.easeOut" });
     }
     this.cameras.main.shake(180, 0.006);
@@ -5359,7 +5492,7 @@ class GameScene extends Phaser.Scene {
         if (!live()) return;
         this.playCombo(["hero-attack2"], "hero-idle");
         tok.play("hero-attack2").once("animationcomplete", () => tok.scene && tok.play("hero-idle"));
-        this.bossReact();
+        this.bossReact(bull);
         this.gorrachImpact(gx, laneY(runLane) - 22, 0xffd88c);
         this.run.block++;
         this.refreshHud();
@@ -5427,7 +5560,7 @@ class GameScene extends Phaser.Scene {
       this.sfx(this.pick(["block1", "block2", "block3"]), 0.5);
       buzz(22);
       this.cameras.main.shake(150, 0.005);
-      this.bossReact();
+      this.bossReact(bull);
       you.play("hero-attack2").once("animationcomplete", () => you.scene && you.play("hero-idle"));
       this.gorrachImpact(R.cx, you.y - 45, 0xffdca0);
       this.tweens.add({ targets: bull, x: bull.x + 26, duration: 150, yoyo: true, ease: "Quad.easeOut" });
@@ -5660,7 +5793,7 @@ class GameScene extends Phaser.Scene {
       buzz(22);
       this.cameras.main.shake(160, 0.006);
       this.playCombo(["hero-attack2"], "hero-idle");
-      this.bossReact();
+      this.bossReact(bull);
       you.play("hero-attack2").once("animationcomplete", () => you.scene && you.play("hero-idle"));
       this.gorrachImpact(gold.x, by, 0xffdda0);
       this.tweens.add({ targets: bull, x: bull.x + 34, duration: 160, yoyo: true, ease: "Quad.easeOut" });
@@ -6564,6 +6697,7 @@ class GameScene extends Phaser.Scene {
 
   private reachChest() {
     if (this.run.over || !this.chest) return;
+    this.companionAssists?.clear();
     this.phase = "chest"; // pressure + strikes hold — a reward moment, not a fight
     this.hero.play("hero-idle", true);
     if (this.skeletonCharges <= 0 && this.run.resources.keys < CHEST_KEY_COST) {
@@ -7205,6 +7339,7 @@ class GameScene extends Phaser.Scene {
     }
     await Promise.all(fades);
     const outcome = applyMatches(this.run, counts, itemPowerBonuses(charged, counts));
+    this.showMatchCompanions(counts);
     this.notice(`+${outcome.gained.wood} 🪵  +${outcome.gained.ore} 🪨`, "#fff2b0");
     this.refreshHud();
     await this.collapse();
@@ -7283,10 +7418,16 @@ class GameScene extends Phaser.Scene {
         this.grid[r][c] = EMPTY;
       }
     await Promise.all(fades);
-    const outcome = applyMatches(this.run, counts, itemPowerBonuses(charged, counts));
+    const powers = itemPowerBonuses(charged, counts);
+    const outcome = applyMatches(this.run, counts, powers);
+    this.showMatchCompanions(counts);
     await this.tutorial?.onCascade(counts);
-    for (let i = 0; i < (counts[POTION] ?? 0); i++) drinkPotion(this.run);
-    if (outcome.damage > 0) await this.onCombat(outcome, outcome.swords);
+    const potions = counts[POTION] ?? 0;
+    for (let i = 0; i < potions; i++) drinkPotion(this.run);
+    if (potions > 0 && this.canShowCompanions() && this.run.companions?.includes("rime"))
+      this.companionAssists?.show("rime", "guard", PET.rime.guard * potions);
+    if (outcome.damage > 0) await this.onCombat(outcome, outcome.swords, [], [],
+      powers.some(p => p.multiplier === 3 && (p.type === SWORD || p.type === STAFF)));
     this.refreshHud();
     await this.collapse();
     await this.resolve();
@@ -7598,12 +7739,16 @@ class GameScene extends Phaser.Scene {
   }
 
   /** Float one damage number per swing, timed so it pops as each hit lands. */
-  private showHits(hits: number[], combo: string[], mod: DamageMod, tempo = 1) {
+  private showHits(hits: number[], combo: string[], mod: DamageMod, tempo = 1, wear = true) {
+    const target = this.orc, level = this.run.swordBonus / SWORD_BONUS_PER_LEVEL;
     let t = 0;
     combo.forEach((key, i) => {
       const dmg = hits[i] ?? 0;
       if (dmg > 0)
         this.time.delayedCall(t + 100 * tempo, () => {
+          if (wear) this.refreshEnemyWear();
+          if (target?.active)
+            swordUpgradeImpact(this, this.centerBox, target.x - 12, GROUND_Y - 42, level, i);
           this.floatDamage(dmg, i === 0, mod);
           if (i === 0) this.teachDefense(mod); // name the rule as the first blow lands
         });
@@ -7761,6 +7906,7 @@ class GameScene extends Phaser.Scene {
   }
 
   private showGameOver() {
+    this.companionAssists?.clear();
     this.overShown = true;
     this.fadeOutMusic(900); // the song dies with him
     this.orc?.stop();
@@ -7779,7 +7925,8 @@ class GameScene extends Phaser.Scene {
     this.time.delayedCall(850, () => this.renderRunResults(false));
   }
 
-  private renderRunResults(won: boolean) {
+  private renderRunResults(won: boolean, firstClear = false) {
+    this.companionAssists?.clear();
     this.clearSelection();
     this.clearHint();
     this.cancelTargeting();
@@ -7787,6 +7934,7 @@ class GameScene extends Phaser.Scene {
     const r = this.run.resources;
     showResults(this, {
       won, depth: this.run.killed, score: this.run.score,
+      firstClear, biome: this.run.biome,
       cascade: this.bestCascade,
       wood: r.wood, ore: r.ore, treasure: r.treasure,
       record: this.run.killed > this.meta.bestDepth,

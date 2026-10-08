@@ -17,3 +17,18 @@
 .mb-milestone-icon{flex:0 0 26px;text-align:center;color:#c2cad0;font-size:20px}.mb-milestone.is-earned .mb-milestone-icon{color:#f1d395}
 .mb-milestone strong{display:block;font-size:14px;line-height:1.3;color:#f0eee3}.mb-milestone small{display:block;margin-top:5px;font-size:13px;line-height:1.4;color:#c4cdd2}.mb-milestone.is-earned small{color:#cdddab}
 @media(max-width:430px){.mb-journey-milestones{grid-template-columns:1fr}.mb-journey-journal summary>span{float:none;display:block;margin-left:16px}.mb-journey-stop strong{font-size:14px}.mb-journey-stop small{font-size:11px}}
+.mb-journey-discoveries{display:grid;gap:10px;margin-top:20px}
+.mb-panel .mb-journey-discoveries>h3{font-size:17px;font-weight:650;color:#e8eee9;margin:0 0 2px}
+.mb-journey-discovery{--discovery-accent:#d8c798;border:1px solid #58646a;border-radius:12px;background:#29343b;overflow:hidden}
+.mb-journey-discovery[data-zone=forest]{--discovery-accent:#aed0af}.mb-journey-discovery[data-zone=snow]{--discovery-accent:#bbdced}.mb-journey-discovery[data-zone=dungeon]{--discovery-accent:#ead3a1}
+.mb-journey-discovery>summary{position:relative;list-style:none;min-height:52px;cursor:pointer;padding:12px 40px 12px 14px;touch-action:manipulation;color:var(--discovery-accent);font-size:16px}
+.mb-journey-discovery>summary::-webkit-details-marker{display:none}.mb-journey-discovery>summary::after{content:"+";position:absolute;right:16px;top:50%;transform:translateY(-50%);font-size:23px;line-height:1}.mb-journey-discovery[open]>summary::after{content:"−"}
+.mb-journey-discovery>summary strong{font-size:16px;font-weight:600;line-height:1.4}
+.mb-journey-discovery-zone{display:block;margin-bottom:3px;color:#bfcacc;font-size:13px;line-height:1.35}
+.mb-journey-discovery>summary:focus-visible{outline:2px solid var(--discovery-accent);outline-offset:-3px}
+.mb-journey-discovery-body{display:grid;gap:16px;padding:0 14px 16px;font-size:16px;line-height:1.5;color:#edf0e9}
+.mb-journey-discovery-setting{color:#c5d0d1;font-size:15px;line-height:1.5}
+.mb-journey-conversation{display:grid;gap:14px;margin:0;padding-left:12px;border-left:2px solid #5f6e73}
+.mb-journey-conversation dt{color:var(--discovery-accent);font-size:14px;line-height:1.4;font-weight:650;margin-bottom:3px}
+.mb-journey-conversation dd{margin:0;text-wrap:pretty}
+.mb-journey-discovery-resolution{color:var(--discovery-accent);font-size:16px;line-height:1.5}

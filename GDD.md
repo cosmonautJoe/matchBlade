@@ -1,5 +1,78 @@
 # matchBlade — Game Design Document
 
+## Balanced camp pet proportions — v0.0.124
+
+- Reduced Moss's camp artwork by 35%, correcting its larger shared drawing scale. Fox, squirrel and mole art is 10% smaller; hare and stoat art is 15% smaller. Smaller flying pets retain their readable size. These adjustments keep the same touch targets, feet anchors, movement and display-density rendering, and apply only in camp.
+- Verification: production build; visual/device playtesting remains with the user.
+
+## Smaller, sharper camp pets — v0.0.123
+
+- Reduced camp pet canvases from 68–90 to 48–64 CSS pixels and removed the added outline filters. Pet art now renders directly at the display's pixel density instead of enlarging a 44-pixel bitmap; positions align to device pixels, with no centering transform. Existing feet anchors, edge margins and movement remain intact.
+- Verification: production build; visual/device playtesting remains with the user.
+
+## Camp pet readability — v0.0.122
+
+- Camp pet artwork now has a 68-pixel minimum canvas size and scales with the caravan up to 90 pixels. A thin dark silhouette edge and warm upper rim help the original pixel art stand out against grass and wheels. Feet remain anchored to the ground and roof; movement margins follow the larger size to prevent clipping at the sides.
+- Existing movement, personalities and weather layering are retained. Combat assists, rescue portraits and collection art keep their existing sizes.
+- Verification: production build; visual/device playtesting remains with the user.
+
+## Companion assists, combat wear and campaign discoveries — v0.0.121
+
+- Companion bonuses now have brief appearances beside the hero using the existing pet artwork: ground pets deliver supplies or brace behind guard, while winged helpers swoop low over the road. Displays follow actual kill, match, potion and spell bonuses, including Moss's fresh-run starting guard and Rime's bomb-collected potions. One helper appears at a time with a short capped queue; repeated Hush casts have a four-second presentation cooldown. Encounters/overlays clear pending appearances. No extra rewards or guard are granted by the animation.
+- Lethal ×3 combat-tile clears and kills on the third or later cascade get a special finishing blow: a local steel/fire burst, a short backward shove and a 50 ms pause of the defeated actor's animation. Ordinary kills retain their existing presentation, boss phases are unchanged, and damage/reward/encounter timing remains intact. Individual forest ambushers can also receive the finish.
+- Regular creatures visibly wear down below 60% and 30% health. Scuffs and fractured armor/wards are clipped to the actual sprite silhouette and follow its animation, rotation and scale, with no replacement art or lasting tint/scale changes. Feedback appears at attack impact and cleans up when the actor retires.
+- Each first zone clear reveals a concrete clue in the missing-family journey through a brief tappable crew exchange. The final Delve clear reunites the family and gives a distinct ending while retaining camp and road replay. Repeated clears offer an optional recap; Journey records discoveries for genuinely cleared roads (debug travel alone reveals nothing), so saved games and refreshes retain access without new story flags. Camp chatter reflects the family rescue afterward.
+- Verification: production build and focused code review of actor lifecycles, reward triggers and first-clear gating; visual/device playtesting remains with the user.
+
+## Visible weapon upgrades — v0.0.120
+
+- Permanent sword and spell levels gain visual milestones at levels 1, 3, 6 and 9. Effects read the run's saved damage bonuses, so recovered runs keep their original upgrade appearance. Match size still determines combo length and spell tier; damage, timing, costs and boss rules are unchanged.
+- Sword swings gain tapered steel arcs timed to the original hero's attack frames, stronger directional impact splinters, and progressively brighter edges with a warm gold finish at the highest grade. Flying blades share the upgrade palette and scale; swing and hit sounds become slightly deeper. Boss counterattack animations also use the upgraded steel effects.
+- Normal spells use animated violet fire with flowing tails, bright cores and sparse trailing embers. Higher study grades increase fullness, add charge sparks and strengthen the local impact. Larger matches remain visibly stronger. Flame atlases are cached per grade; short-lived effects use scene time and follow their combat container through resizing. Consumable casts retain their explicit colors and existing projectile effects. The original hero artwork is retained.
+- Verification: production build; visual/device playtesting remains with the user.
+
+## Gorrach hit feedback — v0.0.119
+
+- Successful counterattacks, parries and shoves give Gorrach a 240 ms red flash in the upper combat lane and on his visible arena sprite. The tint retains the artwork's shading; repeated hits refresh it without clearing another enemy's tint or interrupting the death effect. Fight timing and damage are unchanged.
+- Verification: production build; visual playtesting remains with the user.
+
+## Earned-charge reveal and consistent resource UI — v0.0.118
+
+- Large deliberate matches send curved streams of light from the cleared cells into the retained tile. The ×2/×3 badge appears on arrival with a brief spring and halo; ×3 adds a gold finish. The gather takes 280 ms and overlaps tile shattering. The trailing halo follows the tile through gravity, and random ×2 rules and match rewards are unchanged.
+- Shared resource components reuse the actual game tile artwork for camp supplies, shop prices, upgrade requirements, quest rewards, results, road choices and pet rescues. The gameplay resource counters also use that art, with their bounce animation retaining the correct image scale. Resource detour buffs use the same icons.
+- Shop purchases and refresh actions separate their label from the price. Upgrades use structured costs instead of parsing emoji from button text, with aligned available/required material rows. Quest progress numbers and rewards align consistently. Camp phone headers give supplies a dedicated row; service buttons keep 48-pixel targets and wrap prices safely. Upgrade headings use sentence case; spell upgrades correctly name the spell level.
+- Verification: production build. Visual/device playtesting remains with the user.
+
+## Flowing held-fireball effect — v0.0.117
+
+- Replaced the fireball pickup's floating triangle flames with layered, curling flame ribbons around the existing icon. Translucent violet edges, pale hot centers, soft local light and sparse warm embers form one continuous fire effect; its square selection rim is quieter and the expanding box pulse is removed for this tile.
+- Smooth curves and gradients are baked once into a shared 40-frame, double-density atlas. Holding advances frames at 30 fps without regenerating textures. The effect follows the dragged artwork and shares its release/pause/destruction cleanup; other tile effects remain unchanged.
+- Verification: production build. Visual/device playtesting remains with the user.
+
+## Stronger pickup feedback and sharper steel — v0.0.116
+
+- Increased held-tile particle size, brightness and emission slightly, with a stronger colored edge and pickup pulse. Fireball flames are fuller, gem glints larger, and material accents easier to see on phones.
+- Sword pickup replaces the broad shine and floating sparkles with two quick, tapered steel cuts along the crossed blades and short white sparks that shoot outward. A slower repeating blade flash sustains the effect while held. Existing release cleanup, particle cap, ambient glisten and shattering remain unchanged.
+- Verification: production build; visual/device playtesting remains with the user.
+
+## Tile pickup effects — v0.0.115
+
+- Held tiles gain a material-colored edge and brief pickup pulse. Fireballs shed violet flames and warm embers; gems sweep with light and sparkle; swords catch a steel glint; shields pulse with blue energy; keys glimmer gold; wood sheds fine splinters; stone scatters grit; potions bubble.
+- Effects attach to the lifted artwork and follow the existing drag/swap preview. They fade on release, clean up on pause, scene exit, tile destruction or disabling tile effects, and respect the existing in-game effects switch. A single drawing surface per held tile and a capped particle list keep the effect local and lightweight; ambient glisten and tile shattering retain their existing behavior.
+- Verification: production build. Visual/device playtesting remains with the user.
+
+## Clear run results and panel typography — v0.0.114
+
+- Run results have a dedicated layout: aligned depth/score/cascade statistics, a three-resource receipt using the game's artwork, and one next-upgrade section with banked-versus-required resource bars. Quest rewards and newly unlocked roads remain visible; the return/travel actions stay outside the scrolling content.
+- Removed the repeated combat tutorial tip from results. Readable body text, smaller supporting labels and consistent spacing replace the oversized gold paragraphs and uneven resource list. Phone layouts retain three compact reward columns and stack the upgrade underneath; short screens scroll without shrinking text.
+- Fixed shared panel styles that stripped upgrade-card padding while the theme restored a filled background. Removed first-paragraph font inflation, improved heading/body line spacing, and preserved the shop's intentionally open card layout.
+- Verification: production build; visual/device playtesting remains with the user.
+
+## Restore original caravan artwork — v0.0.113
+
+- Removed all recently added milestone decorations: the roof pack, tool chest, pet basket, crystal lantern and road pennants. The caravan uses its original artwork with the established NPCs, pets, weather and chimney effects.
+- The Journey journal records crew recruitment and road completion; its text no longer promises physical additions to the cart. Verification: TypeScript check; visual testing remains with the user.
+
 ## Surprise ×2s and earned ×3s — v0.0.112
 
 - Restored the original random combat-tile ×2 alongside earned power: the first appears after two successful swaps; after consuming it, another becomes available in 6–8 successful swaps. One random charge can wait on the board at a time. Earned charges do not prevent it appearing; frozen, already charged and non-combat tiles are excluded from random selection.

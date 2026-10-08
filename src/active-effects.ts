@@ -4,6 +4,7 @@ import { itemById } from "./items";
 import "./active-effects.css";
 import { COMPANIONS } from "./companions";
 import { roadEnemiesLeft, roadOptions, ROAD_FORK_BONUS } from "./road-fork";
+import { resourceText } from "./ui-resources";
 
 export type ActiveEffect = { id: string; icon: string; name: string; status: string; detail: string };
 export function activeItemEffects(run: RunState, buffs: RunCheckpoint["buffs"], items: (string | null)[], timersPaused: boolean): ActiveEffect[] {
@@ -72,7 +73,7 @@ export function createActiveEffects() {
   detail.setAttribute("role", "region"); detail.setAttribute("aria-labelledby", "effect-detail-name");
   detail.innerHTML = '<header><span class="effect-detail-icon" aria-hidden="true"></span><h3 id="effect-detail-name"></h3><button type="button" aria-label="Close effect details">✕</button></header><p class="effect-detail-status"></p><p id="effect-detail-description"></p>';
   const title = detail.querySelector("h3")!, description = detail.querySelector("#effect-detail-description")!;
-  const detailIcon = detail.querySelector(".effect-detail-icon")!, detailStatus = detail.querySelector(".effect-detail-status")!;
+  const detailIcon = detail.querySelector<HTMLElement>(".effect-detail-icon")!, detailStatus = detail.querySelector(".effect-detail-status")!;
   const chips = new Map<string, { button: HTMLButtonElement; icon: HTMLSpanElement; value: HTMLSpanElement }>();
   let current = new Map<string, ActiveEffect>(), selected: string | null = null;
   for (const node of [root,detail])
@@ -103,7 +104,7 @@ export function createActiveEffects() {
     const effect=current.get(selected);
     if(!effect || root.hidden){close();return;}
     title.textContent=effect.name;description.textContent=effect.detail;
-    detailIcon.textContent=effect.icon;detailStatus.textContent=effect.status;
+    resourceText(detailIcon, effect.icon);detailStatus.textContent=effect.status;
     detail.hidden=false;placeDetail();
   };
   const toggle = (id: string) => {
@@ -150,7 +151,7 @@ export function createActiveEffects() {
           chip={button,icon,value};chips.set(effect.id,chip);
         }
         chip.button.setAttribute("aria-label",`${effect.name}: ${effect.status}. Show effect details`);
-        chip.icon.textContent=effect.icon;
+        resourceText(chip.icon, effect.icon);
         const timer = effect.status.match(/^\d+s/), charges = effect.status.match(/\d+/);
         chip.value.textContent = effect.id === "zone-cache" ? effect.status : timer ? timer[0] : charges ? `×${charges[0]}` : "✓";
         chip.button.classList.toggle("is-paused",effect.status.includes("paused"));

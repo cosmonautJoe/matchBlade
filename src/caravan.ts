@@ -4,16 +4,26 @@ import { campGoal } from "./run-advice";
 import { createCampDialogue } from "./camp-dialogue";
 import { PLAYER_SOURCE, preparePlayerSheet, drawPlayerFrame, playerIdleFrame } from "./player-art";
 import "./caravan.css";
-import { COMPANIONS } from "./companions";
+import { COMPANIONS, type CompanionId } from "./companions";
 import { drawCompanion } from "./companion-view";
 import { drawCaravanWeather } from "./caravan-weather";
 import { petCampPose } from "./companion-motion";
 import { showCompanionCollection } from "./companion-collection";
 import { createCampAtmosphere } from "./camp-atmosphere";
 import { createCaravanSmoke } from "./caravan-smoke";
-import { caravanMilestones, drawCaravanMilestones } from "./caravan-progress";
+import { caravanMilestones } from "./caravan-progress";
+import { resourceAmounts } from "./ui-resources";
 
 type Service = "shop" | "forge" | "magic" | "quests";
+
+// Balance camp silhouettes without shrinking touch targets or combat portraits.
+// Moss's shared artwork skips the .65 reduction applied to the other pets.
+const CAMP_PET_ART_SCALE: Record<CompanionId, number> = {
+  moss: .65,
+  bramble: .9, hazel: .9, flint: .9,
+  flurry: .85, rime: .85,
+  pip: 1, hush: 1, echo: 1,
+};
 type Actions = Record<Service | "start" | "menu", () => void> & { travel?: () => void; routes?: () => void; previewZone?: () => void; canTalk?: () => boolean; introEnded?: () => void };
 type Environment = {
   label: string;
@@ -198,7 +208,7 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     travel.textContent = `Travel to ${BIOME_LABELS[nextBiome(meta) ?? ""]} →`;
     root.classList.toggle("has-mage", meta.wizardHired);
     root.classList.toggle("has-forge", meta.blacksmithHired);
-    root.querySelector(".caravan-resources")!.textContent = `🪵 ${meta.wood}  🪨 ${meta.ore}  💎 ${meta.treasure}`;
+    root.querySelector(".caravan-resources")!.replaceChildren(resourceAmounts({ wood: meta.wood, ore: meta.ore, treasure: meta.treasure }, true));
     const focus=campQuestFocus(meta);
     const progressNews=meta.progressNotice.quests.length+meta.progressNotice.achievements.length;
     const summary = root.querySelector<HTMLButtonElement>(".caravan-quest-summary")!;
@@ -292,19 +302,24 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     }
     if(imageReady(hero))drawPlayerFrame(startArt,preparePlayerSheet(hero),buttonTime?48+Math.floor(buttonTime*12)%8:playerIdleFrame(0),-7,-15,108,86);
     const petEnv=viewport.getBoundingClientRect(), petCart=vehicle.getBoundingClientRect();
-    const petLayout={width:scenery.width,height:scenery.height,cart:{x:petCart.left-petEnv.left,y:petCart.top-petEnv.top,width:petCart.width,expanded:grown}};
-    // Give companions more presence while following the wagon's live resize/zoom scale.
-    const petScale=petCart.width/art.width*1.35, petSize=44*petScale, petTargetSize=Math.max(44,petSize);
+    // Keep pets modest beside the crew and draw at the display's actual density.
+    const petDpr=Math.max(1,window.devicePixelRatio||1);
+    const petPixels=Math.round(Math.max(48,Math.min(64,44*petCart.width/art.width*1.25))*petDpr);
+    const petSize=petPixels/petDpr;
+    const petLayout={width:scenery.width,height:scenery.height,petInset:petSize/2+2,cart:{x:petCart.left-petEnv.left,y:petCart.top-petEnv.top,width:petCart.width,expanded:grown}};
     viewport.style.setProperty("--camp-pet-size",`${petSize}px`);
     for(const {def,button,ctx} of companions) {
-      button.hidden=dialogue.active;ctx.clearRect(0,0,44,44);ctx.imageSmoothingEnabled=false;
+      button.hidden=dialogue.active;
+      if(ctx.canvas.width!==petPixels)ctx.canvas.width=ctx.canvas.height=petPixels;
+      ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,petPixels,petPixels);
+      ctx.setTransform(petPixels/44,0,0,petPixels/44,0,0);ctx.imageSmoothingEnabled=false;
       // Pets follow camp's explicit Play/Pause control, like the NPCs.
       const petTime=time;
       const pose=petCampPose(def.id,petTime,petLayout);
       // The feet sit at y=38 on the 44px artwork; keep that anchor on the ground/roof.
-      button.style.left=`${pose.x-petTargetSize/2}px`;
-      button.style.top=`${pose.y-16*petScale-petTargetSize/2}px`;button.style.bottom="auto";
-      drawCompanion(ctx,def.id,22,38,1.35,petTime,pose);
+      button.style.left=`${Math.round((petEnv.left+pose.x-petSize/2)*petDpr)/petDpr-petEnv.left}px`;
+      button.style.top=`${Math.round((petEnv.top+pose.y-petSize*38/44)*petDpr)/petDpr-petEnv.top}px`;button.style.bottom="auto";
+      drawCompanion(ctx,def.id,22,38,1.35*CAMP_PET_ART_SCALE[def.id],petTime,pose);
     }
     if (noticeUntil && now > noticeUntil) { announcement.textContent = ""; announcement.classList.remove("is-progress"); noticeUntil = 0; }
     const w = scenery.width, h = scenery.height;
@@ -389,7 +404,6 @@ export function createCaravan(meta: MetaState, environment: Environment, actions
     if(imageReady(im)) {
       a.drawImage(im,rect.x,rect.y,rect.w,rect.h);
       drawCaravanWeather(a,meta.biome,grown);
-      drawCaravanMilestones(a,meta,grown,time);
     }
     if (grown) {
       if(meta.peddlerArrived) sprite(0,151,287,67,14);

@@ -18,7 +18,7 @@ export const CAMP_INTRO: readonly CampLine[] = [
   ["quests", "Then you've got a place here. Catch your breath. We'll be ready when you are."],
 ];
 
-type Conversation = { id: string; lines: readonly CampLine[]; biome?: string; companion?: string };
+type Conversation = { id: string; lines: readonly CampLine[]; biome?: string; companion?: string; ending?: boolean };
 export const CAMP_CHAT: readonly Conversation[] = [
   { id: "bramble-sticks", companion: "bramble", lines: [["quests", "Bramble brought more sticks."], ["player", "And one of my gloves."], ["quests", "At least you've got it back."]] },
   { id: "pip-spoon", companion: "pip", lines: [["shop", "Pip. That's a spoon. We need that."], ["quests", "Try trading a bottle cap."], ["shop", "I'm negotiating with a bird now."]] },
@@ -43,7 +43,10 @@ export const CAMP_CHAT: readonly Conversation[] = [
   { id: "watch", lines: [["player", "I can take first watch."], ["quests", "You took it yesterday. Get some sleep. I'll wake you if we need you."]] },
   { id: "quiet", lines: [["quests", "You don't have to fill the silence, you know."], ["player", "Thanks."], ["quests", "Any time."]] },
   { id: "pace", lines: [["player", "How far until the next stop?"], ["quests", "Half a day, with a clear road. A full day if that wheel gets worse."]] },
-  { id: "son", lines: [["player", "My son would be asking what's in every box."], ["quests", "I'd give him the inventory. Keep him busy for a while."], ["player", "He'd probably correct it."]] },
+  { id: "son", ending: false, lines: [["player", "My son would be asking what's in every box."], ["quests", "I'd give him the inventory. Keep him busy for a while."], ["player", "He'd probably correct it."]] },
+  { id: "family-inventory", ending: true, lines: [["quests", "Your son checked the inventory."], ["player", "How many mistakes?"], ["quests", "Three. He's hired."]] },
+  { id: "family-rest", ending: true, lines: [["player", "They're both asleep. First proper rest in days."], ["quests", "You should join them. We've got things covered."]] },
+  { id: "family-road", ending: true, lines: [["player", "I'll check the road ahead. Make sure it's still safe."], ["quests", "Take your time. Everyone's here when you get back."]] },
   { id: "merchant-count", lines: [["shop", "Two bottles, three maps... Who put a potato in here?"]] },
   { id: "merchant-sign", lines: [["shop", "I should make a sign. Something that says 'please don't squeeze the supplies.'"]] },
   { id: "merchant-tea", lines: [["shop", "Tea is free. The cup comes back to me."]] },
@@ -81,6 +84,7 @@ export function availableCampChat(meta: MetaState) {
   if (meta.blacksmithHired) present.add("forge");
   if (meta.wizardHired) present.add("magic");
   return CAMP_CHAT.filter(chat => (!chat.biome || chat.biome === meta.biome) &&
+    (chat.ending === undefined || chat.ending === meta.clearedBiomes.includes("dungeon")) &&
     (!chat.companion || meta.companions.some(id => id === chat.companion)) && chat.lines.every(([who]) => present.has(who)));
 }
 

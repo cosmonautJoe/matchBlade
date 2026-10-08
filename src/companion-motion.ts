@@ -26,10 +26,11 @@ function routine(time: number, home: Point, stops: Stop[]): PetPose {
 }
 
 export function petCampPose(id: CompanionId, time: number, layout: {
-  width: number; height: number; cart: {x: number; y: number; width: number; expanded: boolean};
+  width: number; height: number; petInset?: number; cart: {x: number; y: number; width: number; expanded: boolean};
 }): PetPose {
   const {width:w,height:h,cart}=layout, scale=cart.width/480;
-  const clamp=(x:number)=>Math.max(22,Math.min(w-22,x));
+  const inset=Math.min(w/2,layout.petInset??22);
+  const clamp=(x:number)=>Math.max(inset,Math.min(w-inset,x));
   const ground=(x:number):Point=>({x:clamp(w*x),y:h*.91});
   const perch=(x:number,y:number):Point=>({x:clamp(cart.x+x*scale),y:Math.max(34,cart.y+y*scale)});
   const roof=(localX:number):Point=>{

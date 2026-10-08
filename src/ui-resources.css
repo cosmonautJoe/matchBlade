@@ -1,0 +1,39 @@
+.mb-resource-icon { display:inline-block; width:24px; height:24px; flex:0 0 24px; object-fit:contain; vertical-align:middle; }
+.mb-resources { display:inline-flex; align-items:center; flex-wrap:wrap; gap:8px 12px; font-variant-numeric:tabular-nums; }
+.mb-resource-value { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; font-weight:650; line-height:1.3; }
+.mb-materials { display:grid; gap:8px; padding:12px 0 0; margin:2px 0 0; border-top:1px solid #65727a55; }
+.mb-material-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; font-size:16px; }
+.mb-material-row dt { display:flex; align-items:center; gap:8px; color:var(--mb-muted,#c4cdd2); }
+.mb-material-row dd { margin:0; color:var(--mb-text,#f3f3ee); font-variant-numeric:tabular-nums; }
+.mb-material-row.is-ready dd { color:var(--mb-gold,#f1d395); }
+.mb-panel .mb-panel-wallet { margin-top:10px; font-size:16px; }
+.mb-panel .mb-action--priced { display:flex; align-items:center; justify-content:space-between; gap:8px 16px; flex-wrap:wrap; text-align:left; }
+.mb-panel .mb-action-label { min-width:0; }
+.mb-action--priced .mb-resources { margin-left:auto; gap:8px; }
+.mb-action--priced .mb-resource-icon { width:22px; height:22px; flex-basis:22px; }
+.mb-panel .mb-card-reward { display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; font-size:15px; color:var(--mb-muted); }
+.mb-card-reward .mb-resources { margin-left:auto; color:var(--mb-gold); }
+.mb-panel .mb-progress-label { display:flex; justify-content:space-between; gap:12px; color:var(--mb-muted); font-size:15px; font-variant-numeric:tabular-nums; }
+.mb-progress-label strong { color:var(--mb-text); font-weight:650; }
+.mb-panel--npc .mb-footer-actions .mb-action { min-height:48px; padding:10px 14px; font-size:16px; }
+.mb-panel--npc .mb-footer-actions .mb-action--priced { flex:1 1 190px; }
+.mb-panel--npc.mb-panel--upgrade .mb-footer-actions { gap:10px; }
+.mb-panel--npc.mb-panel--shop .mb-panel-footer { grid-template-columns:minmax(0,1fr); }
+.mb-panel--npc.mb-panel--shop .mb-footer-actions { width:100%; }
+.caravan-header .caravan-resources { display:flex; align-items:center; gap:12px; font-size:16px; }
+.caravan-resources>.mb-resources { flex-wrap:nowrap; }
+.caravan-resources .mb-resource-icon { width:24px; height:24px; flex-basis:24px; }
+.active-effect .mb-resource-icon { width:18px; height:18px; }
+.effect-detail-icon .mb-resource-icon { width:28px; height:28px; }
+.fork-options .mb-resources { color:inherit; }
+.rescue-options button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; border-radius:13px; padding:12px; }
+.rescue-options small .mb-resources { margin-right:6px; }
+@media(max-width:520px) {
+  .caravan-hub .caravan-header { display:grid; grid-template-columns:minmax(0,1fr) 40px 40px; gap:6px 8px; }
+  .caravan-header>.caravan-resources { grid-column:1/-1; grid-row:2; margin:0; }
+  .caravan-resources>.mb-resources { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); width:100%; gap:8px; }
+  .caravan-resources .mb-resource-value { justify-content:space-between; padding:5px 9px; border:1px solid #526069; border-radius:8px; background:#303b43; }
+  .caravan-header .caravan-motion { grid-column:2; grid-row:1; }
+  .caravan-header .caravan-menu { grid-column:3; grid-row:1; }
+  .mb-panel--npc.mb-panel--upgrade .mb-footer-actions .mb-action { flex:1 1 150px; }
+}
