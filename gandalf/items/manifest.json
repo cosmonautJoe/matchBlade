@@ -1,0 +1,185 @@
+{
+  "license": "Purchased GandalfHardcore art, licensed for in-game use. Original sheets remain private.",
+  "items": {
+    "whetstone": {
+      "name": "Sharpening Stone",
+      "file": "gandalf/items/whetstone.png",
+      "texture": "g-item-whetstone",
+      "source": "16x16 Pixel Art Item Icons/16x16/item99.png",
+      "width": 16,
+      "height": 16,
+      "description": "Pale sharpening stone"
+    },
+    "stormcall": {
+      "name": "Lightning Scroll",
+      "file": "gandalf/items/stormcall.png",
+      "texture": "g-item-stormcall",
+      "source": "16x16 Pixel Art Item Icons/16x16/item79.png",
+      "width": 16,
+      "height": 16,
+      "description": "Inscribed parchment scroll"
+    },
+    "warhorn": {
+      "name": "Rally Horn",
+      "file": "gandalf/items/warhorn.png",
+      "texture": "g-item-warhorn",
+      "source": "GandalfHardcore Icons/16x16 Icon35.png",
+      "width": 16,
+      "height": 16,
+      "description": "Golden rally / forward momentum sigil"
+    },
+    "cinderflask": {
+      "name": "Fire Bomb",
+      "file": "gandalf/items/cinderflask.png",
+      "texture": "g-item-cinderflask",
+      "source": "16x16 Pixel Art Item Icons/16x16/item297.png",
+      "width": 16,
+      "height": 16,
+      "description": "Round red fire flask"
+    },
+    "waystone": {
+      "name": "Time Stop",
+      "file": "gandalf/items/waystone.png",
+      "texture": "g-item-waystone",
+      "source": "GandalfHardcore Icons/16x16 Icon93.png",
+      "width": 16,
+      "height": 16,
+      "description": "Blue stasis rings"
+    },
+    "bulwark": {
+      "name": "Shield Potion",
+      "file": "gandalf/items/bulwark.png",
+      "texture": "g-item-bulwark",
+      "source": "16x16 Pixel Art Item Icons/16x16/item300.png",
+      "width": 16,
+      "height": 16,
+      "description": "Blue shield potion"
+    },
+    "hearth": {
+      "name": "Revive",
+      "file": "gandalf/items/hearth.png",
+      "texture": "g-item-hearth",
+      "source": "16x16 Pixel Art Item Icons/16x16/item139.png",
+      "width": 16,
+      "height": 16,
+      "description": "Red life crystal"
+    },
+    "spurs": {
+      "name": "Slow Trap",
+      "file": "gandalf/items/spurs.png",
+      "texture": "g-item-spurs",
+      "source": "16x16 Pixel Art Item Icons/16x16/item29.png",
+      "width": 16,
+      "height": 16,
+      "description": "Coiled snare rope"
+    },
+    "sapper": {
+      "name": "Tile Bomb",
+      "file": "gandalf/items/sapper.png",
+      "texture": "g-item-sapper",
+      "source": "GandalfHardcore Icons/16x16 Icon23.png",
+      "width": 16,
+      "height": 16,
+      "description": "Radial detonation sigil"
+    },
+    "prism": {
+      "name": "Sword Converter",
+      "file": "gandalf/items/prism.png",
+      "texture": "g-item-prism",
+      "source": "16x16 Pixel Art Item Icons/16x16/item276.png",
+      "width": 16,
+      "height": 16,
+      "description": "Enchanted sword"
+    },
+    "dice": {
+      "name": "Shuffle",
+      "file": "gandalf/items/dice.png",
+      "texture": "g-item-dice",
+      "source": "GandalfHardcore Icons/16x16 Icon90.png",
+      "width": 16,
+      "height": 16,
+      "description": "Violet swirling shuffle sigil"
+    },
+    "lodestone": {
+      "name": "Resource Magnet",
+      "file": "gandalf/items/lodestone.png",
+      "texture": "g-item-lodestone",
+      "source": "GandalfHardcore Icons/16x16 Icon96.png",
+      "width": 16,
+      "height": 16,
+      "description": "Inward pull sigil"
+    },
+    "shears": {
+      "name": "Ember Flask",
+      "file": "gandalf/items/shears.png",
+      "texture": "g-item-shears",
+      "source": "16x16 Pixel Art Item Icons/16x16/item295.png",
+      "width": 16,
+      "height": 16,
+      "description": "Slender red ember flask"
+    },
+    "thawflask": {
+      "name": "Thaw Flask",
+      "file": "gandalf/items/thawflask.png",
+      "texture": "g-item-thawflask",
+      "source": "16x16 Pixel Art Item Icons/16x16/item262.png",
+      "width": 16,
+      "height": 16,
+      "description": "Warm golden thaw flask"
+    },
+    "lockpick": {
+      "name": "Lockpick",
+      "file": "gandalf/items/lockpick.png",
+      "texture": "g-item-lockpick",
+      "source": "16x16 Pixel Art Item Icons/16x16/item84.png",
+      "width": 16,
+      "height": 16,
+      "description": "Fine metal pick"
+    },
+    "skeleton": {
+      "name": "Spare Key",
+      "file": "gandalf/items/skeleton.png",
+      "texture": "g-item-skeleton",
+      "source": "16x16 Pixel Art Item Icons/16x16/item108.png",
+      "width": 16,
+      "height": 16,
+      "description": "Gold spare key"
+    },
+    "pan": {
+      "name": "Bonus Loot",
+      "file": "gandalf/items/pan.png",
+      "texture": "g-item-pan",
+      "source": "16x16 Pixel Art Item Icons/16x16/item107.png",
+      "width": 16,
+      "height": 16,
+      "description": "Full supply satchel"
+    },
+    "ledger": {
+      "name": "Double Resources",
+      "file": "gandalf/items/ledger.png",
+      "texture": "g-item-ledger",
+      "source": "16x16 Pixel Art Item Icons/16x16/item40.png",
+      "width": 16,
+      "height": 16,
+      "description": "Golden resource ledger"
+    },
+    "wardsalve": {
+      "name": "Boss Armor",
+      "file": "gandalf/items/wardsalve.png",
+      "texture": "g-item-wardsalve",
+      "source": "16x16 Pixel Art Item Icons/16x16/item354.png",
+      "width": 16,
+      "height": 16,
+      "description": "Steel breastplate"
+    },
+    "wardbell": {
+      "name": "Safety Bell",
+      "file": "gandalf/items/wardbell.png",
+      "texture": "g-item-wardbell",
+      "source": "GandalfHardcore Icons/16x16 Icon29.png",
+      "width": 16,
+      "height": 16,
+      "description": "Golden protection ward"
+    }
+  }
+}

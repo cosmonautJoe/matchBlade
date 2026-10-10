@@ -1,0 +1,20 @@
+{
+  "artist": "GandalfHardcore",
+  "purpose": "Selected owned runtime art for matchBlade, not an asset-pack redistribution.",
+  "source": "GandalfHardcore Pet companion/GandalfHardcore fox.png",
+  "file": "bramble.png",
+  "cell": [
+    32,
+    32
+  ],
+  "feet": 32,
+  "idle": {
+    "row": 0,
+    "frames": 5
+  },
+  "run": {
+    "row": 1,
+    "frames": 6
+  },
+  "pixelPolicy": "Original colors, cell layout and foot anchor; empty sixth idle cell is not played."
+}

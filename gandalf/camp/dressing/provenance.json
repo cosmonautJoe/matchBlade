@@ -1,0 +1,296 @@
+{
+  "artist": "GandalfHardcore",
+  "purpose": "Selected owned runtime art for matchBlade's camp; not a reusable source-asset distribution.",
+  "license": "../LICENSE-platformer.txt",
+  "pixel_policy": "Exact source crops; mirrored fill samples retain original pixel colors. Transparent contours change alpha only for flat earth RGB 34,31,25.",
+  "exports": [
+    {
+      "file": "rock-texture.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Other Tiles1.png",
+      "crop": [
+        32,
+        32,
+        48,
+        48
+      ],
+      "operation": "mirror-tile",
+      "size": [
+        32,
+        32
+      ],
+      "usage": "Opaque seamless 32px texture. Blend at low opacity over natural bank faces."
+    },
+    {
+      "file": "earth-texture.png",
+      "source": "GandalfHardcore FREE Platformer Assets/BG Dirt1.png",
+      "crop": [
+        8,
+        24,
+        24,
+        40
+      ],
+      "operation": "mirror-tile",
+      "size": [
+        32,
+        32
+      ],
+      "usage": "Opaque seamless 32px soil texture. Blend subtly over earth or the camp road."
+    },
+    {
+      "file": "slope-grass.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Other Tiles1.png",
+      "crop": [
+        0,
+        0,
+        96,
+        96
+      ],
+      "operation": "remove-flat-earth",
+      "size": [
+        96,
+        96
+      ],
+      "usage": "Authored grass and rock contour descends right from y0 to y64. Flip for a left-facing bank; flat earth is transparent."
+    },
+    {
+      "file": "slope-dry.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Other Tiles1.png",
+      "crop": [
+        96,
+        0,
+        192,
+        96
+      ],
+      "operation": "remove-flat-earth",
+      "size": [
+        96,
+        96
+      ],
+      "usage": "Authored grass and rock contour descends right from y0 to y64. Flip for a left-facing bank; flat earth is transparent."
+    },
+    {
+      "file": "slope-snow.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Other Tiles1.png",
+      "crop": [
+        192,
+        0,
+        288,
+        96
+      ],
+      "operation": "remove-flat-earth",
+      "size": [
+        96,
+        96
+      ],
+      "usage": "Authored grass and rock contour descends right from y0 to y64. Flip for a left-facing bank; flat earth is transparent."
+    },
+    {
+      "file": "cliff-rim.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Floor Tiles1.png",
+      "crop": [
+        0,
+        16,
+        16,
+        80
+      ],
+      "operation": "remove-flat-earth",
+      "size": [
+        16,
+        64
+      ],
+      "usage": "Native 16x64 vertical rocky bank rim facing left. Flat earth is transparent; flip horizontally for a right-facing rim."
+    },
+    {
+      "file": "rock-knot.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Floor Tiles1.png",
+      "crop": [
+        128,
+        112,
+        144,
+        144
+      ],
+      "operation": "remove-flat-earth",
+      "size": [
+        16,
+        32
+      ],
+      "usage": "Native 16x32 brighter rock outcrop for varied bank edges. Flat earth is transparent."
+    },
+    {
+      "file": "wood-beam.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Other Tiles1.png",
+      "crop": [
+        0,
+        192,
+        160,
+        198
+      ],
+      "operation": "crop",
+      "size": [
+        160,
+        6
+      ],
+      "usage": "Five connected 32px timber sections. Repeat/crop horizontally; rotate for posts and braces."
+    },
+    {
+      "file": "wood-step.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Other Tiles1.png",
+      "crop": [
+        32,
+        203,
+        64,
+        209
+      ],
+      "operation": "crop",
+      "size": [
+        32,
+        6
+      ],
+      "usage": "A complete authored 32x6 stair tread, with grain and dark outline."
+    },
+    {
+      "file": "turf.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Floor Tiles1.png",
+      "crop": [
+        16,
+        0,
+        80,
+        20
+      ],
+      "operation": "remove-flat-earth",
+      "size": [
+        64,
+        20
+      ],
+      "usage": "A 64px leafy turf lip. Flat earth under the hanging grass is transparent."
+    },
+    {
+      "file": "loose-stones.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        32,
+        208,
+        96,
+        224
+      ],
+      "operation": "crop",
+      "size": [
+        64,
+        16
+      ],
+      "usage": "Low uneven stone cluster; place along the road or bank feet."
+    },
+    {
+      "file": "small-rock.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        32,
+        160,
+        64,
+        192
+      ],
+      "operation": "crop",
+      "size": [
+        32,
+        32
+      ],
+      "usage": "Small warm-gray roadside rock; transparent 32px cell."
+    },
+    {
+      "file": "forge-workbench.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        256,
+        72,
+        304,
+        96
+      ],
+      "operation": "crop",
+      "size": [
+        48,
+        24
+      ],
+      "usage": "Native timber workbench for the blacksmith, 48x24 pixels. Place its bottom edge on the forge platform in front of the smith; no repainting or added tools."
+    },
+    {
+      "file": "herb-purple.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Garden Decorations.png",
+      "crop": [
+        0,
+        0,
+        32,
+        32
+      ],
+      "operation": "crop",
+      "size": [
+        32,
+        32
+      ],
+      "usage": "Potted purple herb by the alchemist or market; native 32px cell."
+    },
+    {
+      "file": "herb-green.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Garden Decorations.png",
+      "crop": [
+        32,
+        0,
+        64,
+        32
+      ],
+      "operation": "crop",
+      "size": [
+        32,
+        32
+      ],
+      "usage": "Potted leafy herb by the alchemist or market; native 32px cell."
+    },
+    {
+      "file": "lantern.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        106,
+        112,
+        118,
+        128
+      ],
+      "operation": "crop",
+      "size": [
+        12,
+        16
+      ],
+      "usage": "Small brass lantern for a stair landing or bridge post; 12x16 pixels."
+    },
+    {
+      "file": "tall-grass.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Tall Grass.png",
+      "crop": [
+        0,
+        0,
+        96,
+        32
+      ],
+      "operation": "crop",
+      "size": [
+        96,
+        32
+      ],
+      "usage": "Wide grass clump to settle bank bases and outer foreground edges."
+    },
+    {
+      "file": "torch.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Torch.png",
+      "crop": [
+        0,
+        32,
+        192,
+        64
+      ],
+      "operation": "crop",
+      "size": [
+        192,
+        32
+      ],
+      "usage": "Six 32x32 frames of a lit standing torch. Draw one frame at a time."
+    }
+  ]
+}

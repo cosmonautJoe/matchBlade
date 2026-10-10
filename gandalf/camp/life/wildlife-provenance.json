@@ -1,0 +1,56 @@
+{
+  "artist": "GandalfHardcore",
+  "purpose": "Selected purchased art for ambient wildlife in matchBlade camp.",
+  "pixelPolicy": "Unmodified pixels, fixed crops, nearest-neighbor runtime sampling.",
+  "bees": {
+    "source": "GandalfHardcore Pixel Art Medieval Fantasy Assets/Small Bees sheet 96x48.png",
+    "sourceCell": [
+      96,
+      48
+    ],
+    "sourceColumns": 5,
+    "crop": [
+      2,
+      30,
+      22,
+      46
+    ],
+    "file": "bees.png",
+    "cell": [
+      20,
+      16
+    ],
+    "columns": 10,
+    "frames": 40,
+    "frameDurationMs": 70,
+    "beeCount": [
+      2,
+      3
+    ],
+    "timingSource": "Aseprite file/Small Bees.ase"
+  },
+  "birds": [
+    {
+      "source": "GandalfHardcore FREE Platformer Assets/birds1.png",
+      "file": "birds-1.png",
+      "crop": [
+        0,
+        0,
+        12,
+        8
+      ],
+      "birds": 3
+    },
+    {
+      "source": "GandalfHardcore FREE Platformer Assets/birds2.png",
+      "file": "birds-2.png",
+      "crop": [
+        0,
+        0,
+        12,
+        11
+      ],
+      "birds": 3
+    }
+  ]
+}

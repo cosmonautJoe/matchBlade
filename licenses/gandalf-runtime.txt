@@ -1,0 +1,25 @@
+GandalfHardcore purchased collection - matchBlade runtime selection
+Imported October 2026 from the owner's purchased files in assets/gandalf.
+
+Artwork copyright GandalfHardcore. Used under the licenses supplied with the
+purchased packs. Commercial game use and modifications are permitted. Source
+packs and Aseprite projects are not distributed in this game.
+
+Selected packs:
+- Knighty Knight and Knight Run/Portrait extension
+- Pixel Art Enemies, Skeleton, Zombies, Spider and Slime
+- Desert Asset Pack (Mummy, Scarab, terrain and backgrounds)
+- FREE Platformer Assets (seasonal backgrounds, ground and camp props)
+- Pixel Art Medieval Fantasy Assets (castle masonry and scenery)
+- Pixel Art Carriage, male/female NPC collections, Village Houses tiles
+- Chests and Projectiles/effects
+- 16x16 Pixel Art Item Icons, Icons (run items and ability sigils)
+- Pet companion (Bramble fox idle/run)
+- Farm Animals (white chicken idle/walk/eating); Medieval Fantasy bees/fountain/pool and FREE Platformer birds/torches
+
+Runtime sheets are selected exports/crops/compositions, not a redistributable
+asset library. Source READ ME files remain with the owner's original archives;
+selected runtime folders include provenance and license information.
+
+Other retained art, including MoonRoar's blacksmith/alchemist and existing
+bosses, retains its separate attribution in this directory and project credits.

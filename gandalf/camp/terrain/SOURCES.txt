@@ -1,0 +1,12 @@
+Selected GandalfHardcore runtime terrain exports for matchBlade's hillside camp.
+These are the exact crops approved in the terraced-camp revision 02 study.
+Original source packs remain under ignored assets/gandalf; do not distribute them as a pack.
+
+masonry.png: purchased GandalfHardcore Pixel Art Medieval Fantasy Assets/Castle Tiles.png,
+  crop x128 y32 w32 h28. Used only for short foundation trims.
+rock-mound.png: GandalfHardcore FREE Platformer Assets/Decor.png, x4 y280 w88 h40.
+shrub.png: same Decor.png, x3 y424 w57 h24.
+fern.png: same Decor.png, x98 y432 w28 h16.
+
+Existing camp and tree/grass runtime art retain their existing license/provenance files.
+Wooden bridge, stairs, earth bank silhouettes, and route geometry are authored in the renderer.

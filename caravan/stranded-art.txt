@@ -1,0 +1,9 @@
+matchBlade stranded caravan artwork
+
+Output: public/caravan/stranded.png
+Edit target: public/caravan/starter.png
+Method: built-in image_gen tool, transparent_background=true.
+Original artwork retained; damaged version used only for the opening repair state.
+
+Prompt:
+Edit target: the attached existing matchBlade starter caravan sprite. Create ONE damaged/stranded version for the game's opening, retaining this exact caravan's identity and chunky pixel-art style. It must become the original when repaired. Preserve the same side-on view, size, framing, 1536x1024 canvas/aspect, roof silhouette, two interior stations, map and counter positions, anvil on the right, wood colors, lanterns and hard pixel edges. Do NOT add characters or a background. Actual transparent background and no surrounding color/glow haze. Damage: LEFT wheel has a conspicuous broken lower-left rim and snapped spokes, several broken wood pieces immediately beside/below that wheel, a timber prop under the left chassis, left body sitting only slightly lower (small 2 degree lean), one modest jagged tear in the left cream canopy flap, a couple of displaced small wooden boards and a bundled supply sack at ground level. Keep right wheel intact, interior counters usable and NPC standing spaces empty and in the same positions. Damage must read clearly at small mobile game size, intentional warm pixel art with simple shapes and restrained detail, not a destroyed ruin. Do not extend the asset beyond the original sprite's approximate margins. No text, interface, labels, badges, people, creatures, landscape or huge debris piles. Keep the original crisp sprite aesthetic, not painterly.

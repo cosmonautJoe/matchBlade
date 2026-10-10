@@ -1,0 +1,24 @@
+{
+  "delve-statue": {
+    "source": "GandalfHardcore Pixel Art Medieval Fantasy Assets\\Rock Statue.png",
+    "width": 64,
+    "height": 80,
+    "frames": 1
+  },
+  "wayside-shrine": {
+    "source": "GandalfHardcore FREE Platformer Assets\\Angel Statue.png",
+    "width": 64,
+    "height": 64,
+    "frames": 1
+  },
+  "wayside-spring": {
+    "sources": [
+      "GandalfHardcore Pixel Art Medieval Fantasy Assets/Fountain face.png",
+      "GandalfHardcore Pixel Art Medieval Fantasy Assets/garden pool sheet.png"
+    ],
+    "width": 96,
+    "height": 96,
+    "frames": 20,
+    "frameMs": 100
+  }
+}

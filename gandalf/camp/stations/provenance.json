@@ -1,0 +1,47 @@
+{
+  "artist": "GandalfHardcore",
+  "pixelPolicy": "Exact source crops, no repainting or resizing.",
+  "purpose": "Small supplies within the existing camp workstation footprints.",
+  "exports": [
+    {
+      "file": "market-basket.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        282,
+        32,
+        303,
+        46
+      ]
+    },
+    {
+      "file": "market-potion.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Alchemy Decor.png",
+      "crop": [
+        136,
+        43,
+        151,
+        54
+      ]
+    },
+    {
+      "file": "hanging-herbs.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Alchemy Decor.png",
+      "crop": [
+        0,
+        0,
+        64,
+        24
+      ]
+    },
+    {
+      "file": "alchemy-bench.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Alchemy Decor.png",
+      "crop": [
+        78,
+        24,
+        120,
+        64
+      ]
+    }
+  ]
+}

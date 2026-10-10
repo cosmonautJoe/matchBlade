@@ -1,0 +1,21 @@
+{
+  "artist": "GandalfHardcore",
+  "pack": "GandalfHardcore Pixel Art Game UI",
+  "purpose": "Selected runtime UI art for matchBlade; not a reusable asset distribution.",
+  "license": "LICENSE.txt",
+  "exports": {
+    "panel-frame.png": {
+      "source": "64x64 frame.png",
+      "operation": "nearest-neighbour resize to 32x32",
+      "slice": 8
+    },
+    "slot-frame.png": {
+      "source": "Single frames/64x64 Button1.png",
+      "slice": 4
+    },
+    "button-frame.png": {
+      "source": "Single frames/16x32 Button1.png",
+      "slice": 4
+    }
+  }
+}

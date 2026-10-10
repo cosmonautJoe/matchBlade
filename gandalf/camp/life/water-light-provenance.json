@@ -1,0 +1,34 @@
+{
+  "artist": "GandalfHardcore",
+  "purpose": "Selected purchased artwork for matchBlade, not an asset library.",
+  "torch": {
+    "source": "GandalfHardcore FREE Platformer Assets\\Torch.png",
+    "crop": [
+      0,
+      32,
+      192,
+      64
+    ],
+    "file": "wall-torch.png",
+    "cell": [
+      32,
+      32
+    ],
+    "frames": 6,
+    "frameMs": 100
+  },
+  "spring": {
+    "sources": [
+      "GandalfHardcore Pixel Art Medieval Fantasy Assets/Fountain face.png",
+      "GandalfHardcore Pixel Art Medieval Fantasy Assets/garden pool sheet.png"
+    ],
+    "file": "wall-spring.png",
+    "cell": [
+      64,
+      80
+    ],
+    "columns": 10,
+    "frames": 20,
+    "frameMs": 100
+  }
+}

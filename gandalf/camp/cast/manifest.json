@@ -1,0 +1,646 @@
+{
+  "artist": "GandalfHardcore",
+  "purpose": "Selected owned runtime NPCs for matchBlade; not a reusable asset distribution.",
+  "pixelPolicy": "Original source pixels in fixed 64x64 cells. Aseprite durations retained; PNG clips use declared timing defaults. No scaling or per-frame trimming.",
+  "actors": {
+    "smith": {
+      "source": "Male Pixel Art characters/Male Pixel Art characters.ase",
+      "sourceLayer": "Blacksmith",
+      "sourceTags": [
+        {
+          "name": "Idle",
+          "from": 1,
+          "to": 5,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Walk",
+          "from": 6,
+          "to": 13,
+          "direction": "forward",
+          "color": "#000000ff"
+        }
+      ],
+      "sourceCell": [
+        64,
+        0,
+        64,
+        64
+      ],
+      "width": 64,
+      "height": 64,
+      "foot": 64,
+      "idleBodyHeight": 43,
+      "clips": {
+        "idle": {
+          "file": "gandalf/camp/cast/smith-idle.png",
+          "frames": 5,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "bounds": [
+            [
+              15,
+              21,
+              44,
+              64
+            ],
+            [
+              14,
+              22,
+              45,
+              64
+            ],
+            [
+              14,
+              23,
+              45,
+              64
+            ],
+            [
+              15,
+              23,
+              44,
+              64
+            ],
+            [
+              15,
+              22,
+              44,
+              64
+            ]
+          ]
+        },
+        "walk": {
+          "file": "gandalf/camp/cast/smith-walk.png",
+          "frames": 8,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13
+          ],
+          "bounds": [
+            [
+              16,
+              21,
+              44,
+              64
+            ],
+            [
+              15,
+              20,
+              44,
+              64
+            ],
+            [
+              14,
+              19,
+              45,
+              64
+            ],
+            [
+              13,
+              20,
+              46,
+              64
+            ],
+            [
+              14,
+              21,
+              45,
+              64
+            ],
+            [
+              15,
+              20,
+              44,
+              64
+            ],
+            [
+              16,
+              19,
+              43,
+              64
+            ],
+            [
+              16,
+              20,
+              43,
+              64
+            ]
+          ]
+        }
+      },
+      "note": "Authored apron-wearing blacksmith with hammer. Source has idle and walk, no hammer-strike animation."
+    },
+    "wizard": {
+      "source": "GandalfHardcore Wizard/Wizard character.ase",
+      "sourceLayer": null,
+      "sourceTags": [
+        {
+          "name": "Idle",
+          "from": 0,
+          "to": 4,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Walk",
+          "from": 5,
+          "to": 10,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Walk Attack",
+          "from": 11,
+          "to": 16,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Jump",
+          "from": 17,
+          "to": 24,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Simple Attack",
+          "from": 25,
+          "to": 36,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Block",
+          "from": 37,
+          "to": 41,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Block hit",
+          "from": 42,
+          "to": 46,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Resting",
+          "from": 47,
+          "to": 51,
+          "direction": "forward",
+          "color": "#000000ff"
+        },
+        {
+          "name": "Death",
+          "from": 52,
+          "to": 64,
+          "direction": "forward",
+          "color": "#000000ff"
+        }
+      ],
+      "sourceCell": [
+        0,
+        0,
+        64,
+        64
+      ],
+      "width": 64,
+      "height": 64,
+      "foot": 64,
+      "idleBodyHeight": 42,
+      "clips": {
+        "idle": {
+          "file": "gandalf/camp/cast/wizard-idle.png",
+          "frames": 5,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "bounds": [
+            [
+              18,
+              22,
+              47,
+              64
+            ],
+            [
+              18,
+              23,
+              48,
+              64
+            ],
+            [
+              18,
+              24,
+              48,
+              64
+            ],
+            [
+              18,
+              24,
+              47,
+              64
+            ],
+            [
+              18,
+              23,
+              47,
+              64
+            ]
+          ]
+        },
+        "walk": {
+          "file": "gandalf/camp/cast/wizard-walk.png",
+          "frames": 6,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "bounds": [
+            [
+              18,
+              22,
+              47,
+              64
+            ],
+            [
+              18,
+              21,
+              46,
+              64
+            ],
+            [
+              18,
+              20,
+              46,
+              64
+            ],
+            [
+              18,
+              22,
+              45,
+              64
+            ],
+            [
+              18,
+              21,
+              46,
+              64
+            ],
+            [
+              18,
+              20,
+              47,
+              64
+            ]
+          ]
+        },
+        "cast": {
+          "file": "gandalf/camp/cast/wizard-cast.png",
+          "frames": 12,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36
+          ],
+          "bounds": [
+            [
+              18,
+              22,
+              47,
+              64
+            ],
+            [
+              17,
+              22,
+              47,
+              64
+            ],
+            [
+              16,
+              18,
+              46,
+              64
+            ],
+            [
+              17,
+              12,
+              39,
+              64
+            ],
+            [
+              20,
+              22,
+              63,
+              64
+            ],
+            [
+              20,
+              22,
+              63,
+              64
+            ],
+            [
+              19,
+              22,
+              62,
+              64
+            ],
+            [
+              19,
+              22,
+              62,
+              64
+            ],
+            [
+              17,
+              22,
+              39,
+              64
+            ],
+            [
+              16,
+              22,
+              39,
+              64
+            ],
+            [
+              19,
+              22,
+              62,
+              64
+            ],
+            [
+              19,
+              22,
+              62,
+              64
+            ]
+          ]
+        },
+        "rest": {
+          "file": "gandalf/camp/cast/wizard-rest.png",
+          "frames": 5,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            47,
+            48,
+            49,
+            50,
+            51
+          ],
+          "bounds": [
+            [
+              19,
+              17,
+              49,
+              64
+            ],
+            [
+              18,
+              16,
+              49,
+              64
+            ],
+            [
+              18,
+              15,
+              48,
+              64
+            ],
+            [
+              19,
+              15,
+              48,
+              64
+            ],
+            [
+              19,
+              18,
+              49,
+              64
+            ]
+          ]
+        }
+      },
+      "note": "Blue-robed wizard; source character and authored magic layers are composited without repainting. Cast can play once when the station activates."
+    },
+    "hunter": {
+      "source": "GandalfHardcore characters pack/Scribe.png",
+      "sourceLayer": null,
+      "sourceTags": [],
+      "sourceCell": [
+        0,
+        0,
+        64,
+        64
+      ],
+      "width": 64,
+      "height": 64,
+      "foot": 64,
+      "idleBodyHeight": 46,
+      "clips": {
+        "idle": {
+          "file": "gandalf/camp/cast/hunter-idle.png",
+          "frames": 5,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "bounds": [
+            [
+              19,
+              18,
+              43,
+              64
+            ],
+            [
+              19,
+              18,
+              43,
+              64
+            ],
+            [
+              19,
+              19,
+              43,
+              64
+            ],
+            [
+              19,
+              19,
+              43,
+              64
+            ],
+            [
+              19,
+              18,
+              42,
+              64
+            ]
+          ]
+        }
+      },
+      "note": "User-selected Scribe quest giver retained under the legacy hunter key. Exact first-row idle cells 0-4 from the native PNG, facing left, with the fixed 64px feet anchor. Source license is GandalfHardcore characters pack/READ ME.txt."
+    },
+    "merchant": {
+      "source": "GandalfHardcore characters pack/Aseprite Files/Black Market Dealer.ase",
+      "sourceLayer": null,
+      "sourceTags": [],
+      "sourceCell": [
+        0,
+        0,
+        64,
+        64
+      ],
+      "width": 64,
+      "height": 64,
+      "foot": 64,
+      "idleBodyHeight": 44,
+      "clips": {
+        "idle": {
+          "file": "gandalf/camp/cast/merchant-idle.png",
+          "frames": 5,
+          "durations": [
+            80,
+            80,
+            80,
+            80,
+            80
+          ],
+          "sourceFrames": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "bounds": [
+            [
+              16,
+              20,
+              49,
+              64
+            ],
+            [
+              16,
+              21,
+              49,
+              64
+            ],
+            [
+              16,
+              21,
+              49,
+              64
+            ],
+            [
+              16,
+              20,
+              49,
+              64
+            ],
+            [
+              16,
+              20,
+              49,
+              64
+            ]
+          ]
+        }
+      },
+      "note": "Authored dealer with a satchel and small wares displayed inside an open gray-brown coat. The source faces left and uses five untagged idle frames; the renderer can mirror the complete frame to face right. Source license is GandalfHardcore characters pack/READ ME.txt."
+    }
+  }
+}

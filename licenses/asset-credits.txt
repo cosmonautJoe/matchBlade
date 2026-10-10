@@ -1,0 +1,15 @@
+Additional character art
+
+Blacksmith (Yanes) and Alchemist (Lavel), MoonRoar Asset Series
+Studios SoulAres
+https://soulares.itch.io/
+https://soulares.itch.io/moonroar-free-blacksmith
+https://soulares.itch.io/free-npc-alchemist
+Acquired 2026-10-08. See moonroar-smith.pdf and moonroar-alchemist.pdf.
+These assets are included as part of matchBlade, not licensed for extraction
+or redistribution as standalone assets.
+
+Slime, rat, bat and mimic: Monsters Creatures Fantasy 2
+LuizMelo
+https://luizmelo.itch.io/monsters-creatures-fantasy-2
+CC0. Acquired 2026-10-08. See creatures-fantasy-2.json for provenance.

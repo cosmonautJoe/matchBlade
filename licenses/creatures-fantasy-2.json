@@ -1,0 +1,16 @@
+{
+  "title": "Monsters Creatures Fantasy 2",
+  "creator": "LuizMelo",
+  "source": "https://luizmelo.itch.io/monsters-creatures-fantasy-2",
+  "acquired": "2026-10-08",
+  "priceUsd": 0,
+  "license": "CC0 (Creative Commons Zero), as stated on the creator storefront; commercial use permitted, credit optional.",
+  "licenseFileInArchive": false,
+  "characters": [
+    "Mimic",
+    "Rat",
+    "Slime",
+    "Bat"
+  ],
+  "status": "Downloaded and extracted original source assets; available for future integration."
+}

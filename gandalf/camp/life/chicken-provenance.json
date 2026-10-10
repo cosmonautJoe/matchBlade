@@ -1,0 +1,52 @@
+{
+  "artist": "GandalfHardcore",
+  "purpose": "Selected owned runtime art for matchBlade, not an asset pack redistribution.",
+  "source": "GandalfHardcore Farm Animals/White Chicken sheet.png",
+  "animationReference": "GandalfHardcore Farm Animals/GandalfHardcore Farm Animals2.ase",
+  "file": "chicken.png",
+  "cell": [
+    32,
+    32
+  ],
+  "columns": 18,
+  "foot": 32,
+  "clips": {
+    "idle": {
+      "from": 0,
+      "to": 7,
+      "durations": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100
+      ]
+    },
+    "walk": {
+      "from": 8,
+      "to": 13,
+      "durations": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100
+      ]
+    },
+    "eating": {
+      "from": 14,
+      "to": 17,
+      "durations": [
+        100,
+        100,
+        100,
+        100
+      ]
+    }
+  },
+  "pixelPolicy": "Original source PNG. Fixed canvas and foot anchor; no per-frame trimming or redraw."
+}

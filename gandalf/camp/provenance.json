@@ -1,0 +1,518 @@
+{
+  "artist": "GandalfHardcore",
+  "purpose": "Selected purchased runtime art for matchBlade camp. Source packs remain ignored. Not a reusable asset distribution.",
+  "exports": [
+    {
+      "file": "carriage-walk.png",
+      "source": "GandalfHardcore Pixel Art Carriage/GandalfHardcore Carriage sheet.png",
+      "cells": [
+        [
+          0,
+          0,
+          272,
+          96
+        ],
+        [
+          272,
+          0,
+          544,
+          96
+        ],
+        [
+          544,
+          0,
+          816,
+          96
+        ],
+        [
+          816,
+          0,
+          1088,
+          96
+        ],
+        [
+          1088,
+          0,
+          1360,
+          96
+        ],
+        [
+          1360,
+          0,
+          1632,
+          96
+        ]
+      ],
+      "size": [
+        1632,
+        96
+      ]
+    },
+    {
+      "file": "carriage-eat.png",
+      "source": "GandalfHardcore Pixel Art Carriage/GandalfHardcore Carriage sheet.png",
+      "cells": [
+        [
+          0,
+          192,
+          272,
+          288
+        ],
+        [
+          272,
+          192,
+          544,
+          288
+        ],
+        [
+          544,
+          192,
+          816,
+          288
+        ],
+        [
+          816,
+          192,
+          1088,
+          288
+        ],
+        [
+          1088,
+          192,
+          1360,
+          288
+        ],
+        [
+          1360,
+          192,
+          1632,
+          288
+        ],
+        [
+          1632,
+          192,
+          1904,
+          288
+        ],
+        [
+          1904,
+          192,
+          2176,
+          288
+        ]
+      ],
+      "size": [
+        2176,
+        96
+      ]
+    },
+    {
+      "file": "carriage-idle.png",
+      "source": "GandalfHardcore Pixel Art Carriage/GandalfHardcore Carriage sheet.png",
+      "cells": [
+        [
+          0,
+          288,
+          272,
+          384
+        ],
+        [
+          272,
+          288,
+          544,
+          384
+        ],
+        [
+          544,
+          288,
+          816,
+          384
+        ],
+        [
+          816,
+          288,
+          1088,
+          384
+        ],
+        [
+          1088,
+          288,
+          1360,
+          384
+        ],
+        [
+          1360,
+          288,
+          1632,
+          384
+        ],
+        [
+          1632,
+          288,
+          1904,
+          384
+        ],
+        [
+          1904,
+          288,
+          2176,
+          384
+        ]
+      ],
+      "size": [
+        2176,
+        96
+      ]
+    },
+    {
+      "file": "coachwoman.png",
+      "source": "GandalfHardcore Pixel Art Carriage/GandalfHardcore Coachwoman sheet.png",
+      "cells": [
+        [
+          0,
+          0,
+          64,
+          64
+        ],
+        [
+          64,
+          0,
+          128,
+          64
+        ],
+        [
+          128,
+          0,
+          192,
+          64
+        ],
+        [
+          192,
+          0,
+          256,
+          64
+        ],
+        [
+          256,
+          0,
+          320,
+          64
+        ]
+      ],
+      "size": [
+        320,
+        64
+      ]
+    },
+    {
+      "file": "guide.png",
+      "source": "Female Pixel Art characters/Female Pixel Art characters.png",
+      "cells": [
+        [
+          256,
+          64,
+          320,
+          128
+        ],
+        [
+          256,
+          128,
+          320,
+          192
+        ],
+        [
+          256,
+          192,
+          320,
+          256
+        ],
+        [
+          256,
+          256,
+          320,
+          320
+        ],
+        [
+          256,
+          320,
+          320,
+          384
+        ]
+      ],
+      "size": [
+        320,
+        64
+      ]
+    },
+    {
+      "file": "merchant.png",
+      "source": "Female Pixel Art characters/Female Pixel Art characters.png",
+      "cells": [
+        [
+          448,
+          64,
+          512,
+          128
+        ],
+        [
+          448,
+          128,
+          512,
+          192
+        ],
+        [
+          448,
+          192,
+          512,
+          256
+        ],
+        [
+          448,
+          256,
+          512,
+          320
+        ],
+        [
+          448,
+          320,
+          512,
+          384
+        ]
+      ],
+      "size": [
+        320,
+        64
+      ]
+    },
+    {
+      "file": "small-tent.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Small Tent.png",
+      "crop": null,
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "file": "large-tent.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Large Tent.png",
+      "crop": null,
+      "size": [
+        96,
+        128
+      ]
+    },
+    {
+      "file": "market-stall.png",
+      "source": "GandalfHardcore Pixel Art Village Houses tiles/market stall1.png",
+      "crop": null,
+      "size": [
+        96,
+        80
+      ]
+    },
+    {
+      "file": "furnace.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Furnace and Sawmill.png",
+      "cells": [
+        [
+          0,
+          0,
+          64,
+          64
+        ],
+        [
+          64,
+          0,
+          128,
+          64
+        ],
+        [
+          128,
+          0,
+          192,
+          64
+        ],
+        [
+          192,
+          0,
+          256,
+          64
+        ],
+        [
+          256,
+          0,
+          320,
+          64
+        ],
+        [
+          320,
+          0,
+          384,
+          64
+        ]
+      ],
+      "size": [
+        384,
+        64
+      ]
+    },
+    {
+      "file": "cooking.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Cooking area.png",
+      "cells": [
+        [
+          0,
+          0,
+          64,
+          64
+        ],
+        [
+          64,
+          0,
+          128,
+          64
+        ],
+        [
+          128,
+          0,
+          192,
+          64
+        ],
+        [
+          192,
+          0,
+          256,
+          64
+        ],
+        [
+          256,
+          0,
+          320,
+          64
+        ],
+        [
+          320,
+          0,
+          384,
+          64
+        ],
+        [
+          384,
+          0,
+          448,
+          64
+        ],
+        [
+          448,
+          0,
+          512,
+          64
+        ],
+        [
+          512,
+          0,
+          576,
+          64
+        ],
+        [
+          576,
+          0,
+          640,
+          64
+        ],
+        [
+          640,
+          0,
+          704,
+          64
+        ],
+        [
+          704,
+          0,
+          768,
+          64
+        ]
+      ],
+      "size": [
+        768,
+        64
+      ]
+    },
+    {
+      "file": "work-canopy.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        0,
+        49,
+        98,
+        130
+      ],
+      "size": [
+        98,
+        81
+      ]
+    },
+    {
+      "file": "crates.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        0,
+        0,
+        66,
+        33
+      ],
+      "size": [
+        66,
+        33
+      ]
+    },
+    {
+      "file": "barrels.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        70,
+        0,
+        128,
+        33
+      ],
+      "size": [
+        58,
+        33
+      ]
+    },
+    {
+      "file": "logs.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Decor.png",
+      "crop": [
+        195,
+        72,
+        255,
+        101
+      ],
+      "size": [
+        60,
+        29
+      ]
+    },
+    {
+      "file": "alchemy.png",
+      "source": "GandalfHardcore FREE Platformer Assets/Alchemy Decor.png",
+      "crop": [
+        30,
+        18,
+        122,
+        64
+      ],
+      "size": [
+        92,
+        46
+      ]
+    },
+    {
+      "file": "carriage-broken.png",
+      "source": "GandalfHardcore Pixel Art Carriage/GandalfHardcore Carriage sheet.png",
+      "operation": "Idle strip with near wheel cleared and timber brace added; reversible runtime repair crossfade."
+    }
+  ]
+}

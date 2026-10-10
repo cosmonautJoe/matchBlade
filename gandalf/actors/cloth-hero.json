@@ -1,0 +1,467 @@
+{
+  "license": "Purchased GandalfHardcore assets, used in-game under creator license; source packs remain private.",
+  "source": "GandalfHardcore Character Asset Pack",
+  "sourceLayers": [
+    "Character skin colors/Male Skin1.png",
+    "Male Clothing/Pants.png",
+    "Male Clothing/Boots.png",
+    "Male Clothing/Green Shirt v2.png",
+    "Male Hair/Male Hair1.png",
+    "Male Hand/Male Sword.png"
+  ],
+  "sourceCellSize": [
+    80,
+    64
+  ],
+  "sourceCells": [
+    {
+      "animation": "idle",
+      "row": 0,
+      "column": 0
+    },
+    {
+      "animation": "idle",
+      "row": 0,
+      "column": 1
+    },
+    {
+      "animation": "idle",
+      "row": 0,
+      "column": 2
+    },
+    {
+      "animation": "idle",
+      "row": 0,
+      "column": 3
+    },
+    {
+      "animation": "idle",
+      "row": 0,
+      "column": 4
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 0
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 1
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 2
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 3
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 4
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 5
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 6
+    },
+    {
+      "animation": "walk",
+      "row": 1,
+      "column": 7
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 0
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 1
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 2
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 3
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 4
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 5
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 6
+    },
+    {
+      "animation": "run",
+      "row": 2,
+      "column": 7
+    },
+    {
+      "animation": "jump",
+      "row": 3,
+      "column": 0
+    },
+    {
+      "animation": "jump",
+      "row": 3,
+      "column": 1
+    },
+    {
+      "animation": "jump",
+      "row": 3,
+      "column": 2
+    },
+    {
+      "animation": "jump",
+      "row": 3,
+      "column": 3
+    },
+    {
+      "animation": "fall",
+      "row": 4,
+      "column": 0
+    },
+    {
+      "animation": "fall",
+      "row": 4,
+      "column": 1
+    },
+    {
+      "animation": "fall",
+      "row": 4,
+      "column": 2
+    },
+    {
+      "animation": "fall",
+      "row": 4,
+      "column": 3
+    },
+    {
+      "animation": "slash",
+      "row": 5,
+      "column": 0
+    },
+    {
+      "animation": "slash",
+      "row": 5,
+      "column": 1
+    },
+    {
+      "animation": "slash",
+      "row": 5,
+      "column": 2
+    },
+    {
+      "animation": "slash",
+      "row": 5,
+      "column": 3
+    },
+    {
+      "animation": "slash",
+      "row": 5,
+      "column": 4
+    },
+    {
+      "animation": "slash",
+      "row": 5,
+      "column": 5
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 0
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 1
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 2
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 3
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 4
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 5
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 6
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 7
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 8
+    },
+    {
+      "animation": "death",
+      "row": 6,
+      "column": 9
+    }
+  ],
+  "file": "gandalf/actors/cloth-hero.png",
+  "texture": "player-cloth-swordsman",
+  "portraitFile": "gandalf/actors/cloth-hero-portrait.png",
+  "portraitTexture": "player-cloth-swordsman-portrait",
+  "iconFile": "gandalf/actors/cloth-hero-icon.png",
+  "iconTexture": "player-cloth-swordsman-icon",
+  "width": 80,
+  "height": 64,
+  "columns": 8,
+  "frameCount": 45,
+  "foot": 64,
+  "origin": 1.0,
+  "idleBodyHeight": 46,
+  "density": 1.7692307692307692,
+  "facing": "right",
+  "mirroredFromSource": true,
+  "impactFrames": {
+    "hero-attack": 5,
+    "hero-attack2": 5,
+    "hero-attack3": 5
+  },
+  "sourceAnimations": {
+    "idle": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "walk": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "run": [
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "jump": [
+      21,
+      22,
+      23,
+      24
+    ],
+    "fall": [
+      25,
+      26,
+      27,
+      28
+    ],
+    "slash": [
+      29,
+      30,
+      31,
+      32,
+      33,
+      34
+    ],
+    "death": [
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44
+    ]
+  },
+  "clips": {
+    "hero-idle": {
+      "frames": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "durations": [
+        120,
+        120,
+        120,
+        120,
+        120
+      ]
+    },
+    "hero-walk": {
+      "frames": [
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ],
+      "durations": [
+        80,
+        80,
+        80,
+        80,
+        80,
+        80,
+        80,
+        80
+      ]
+    },
+    "hero-attack": {
+      "frames": [
+        29,
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "durations": [
+        55,
+        65,
+        65,
+        55,
+        80,
+        90
+      ]
+    },
+    "hero-attack2": {
+      "frames": [
+        29,
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "durations": [
+        55,
+        65,
+        65,
+        55,
+        80,
+        90
+      ]
+    },
+    "hero-attack3": {
+      "frames": [
+        29,
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "durations": [
+        55,
+        65,
+        65,
+        55,
+        80,
+        90
+      ]
+    },
+    "hero-spell": {
+      "frames": [
+        29,
+        30,
+        31,
+        30,
+        29
+      ],
+      "durations": [
+        70,
+        90,
+        240,
+        60,
+        80
+      ]
+    },
+    "hero-death": {
+      "frames": [
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44
+      ],
+      "durations": [
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100,
+        100
+      ]
+    }
+  },
+  "notes": [
+    "All frames retain the full native 80x64 canvas and fixed center/floor; only the UI icon and portrait are cropped.",
+    "The PNG pack has no authored timing metadata. Durations are application timings in milliseconds.",
+    "All three attack keys use the same authored six-frame sword slash; contact is source slash column 4, animation frame 5 (one-based).",
+    "No authored hurt or cast clip. Spell reuses raised-sword anticipation while existing runtime charge/bolt effects play."
+  ]
+}
